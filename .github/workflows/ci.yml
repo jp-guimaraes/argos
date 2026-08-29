@@ -43,6 +43,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
-  # Privileged/loop-device integration tests (backlog E9) run in their own job,
-  # separate from the unprivileged suite above, once E9 lands. Not added yet --
-  # there is nothing for it to run.
+  loop-device-tests:
+    name: loop-device integration tests (root)
+    # Backlog E9: exercises argos-helper against a real file-backed loop
+    # device. Needs root (for losetup / /dev/loop-control) and the losetup
+    # binary, which is why it's a separate job from the unprivileged `test`
+    # job above -- GitHub-hosted Ubuntu runners have passwordless sudo and
+    # losetup preinstalled, but this would fail on a minimal/locked-down
+    # self-hosted runner, so it's kept isolated and easy to disable.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
+            --features test-overrides --test loop_device_write \
+            -- --ignored --nocapture

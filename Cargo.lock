@@ -115,6 +115,7 @@ dependencies = [
  "argos-platform",
  "argos-platform-linux",
  "argos-platform-macos",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

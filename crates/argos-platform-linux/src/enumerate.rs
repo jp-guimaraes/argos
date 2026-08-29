@@ -160,6 +160,14 @@ fn read_block_device(name: &str, mount_entries: &[MountEntry]) -> Result<Option<
     let platform_id = format!("/dev/{name}");
     let is_system_disk = mounts::disk_holds_a_critical_mount(mount_entries, &platform_id);
 
+    #[allow(unused_mut)]
+    let mut os_reports_removable = os_reports_removable;
+    #[cfg(feature = "test-overrides")]
+    if std::env::var("ARGOS_TEST_FORCE_REMOVABLE").as_deref() == Ok(platform_id.as_str()) {
+        os_reports_removable = true;
+        bus = Bus::Usb;
+    }
+
     Ok(Some(Device {
         platform_id,
         display_name,

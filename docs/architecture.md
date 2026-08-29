@@ -142,7 +142,7 @@ an already-written device without writing again.
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
 | macOS disk enumeration (`diskutil -plist`) | Not implemented |
-| Privileged helper (`argos-helper`) | Implemented; not yet exercised end-to-end against a real device (needs the loop-device integration tests from E9) |
+| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify covered by a loop-device integration test (E9), gated on root -- not run in this development sandbox, which has no passwordless sudo |
 | `argos list` / `argos write` | Implemented |
 | `argos verify` (standalone) | Argument parsing only |
 | Packaging/distribution | Not started |

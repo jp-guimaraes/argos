@@ -1,8 +1,66 @@
-//! Exposes the `argos-helper` <-> `argos` IPC contract as a library, so
-//! `argos-cli` can build a [`protocol::WritePlan`] and parse [`protocol::Event`]
-//! lines without duplicating their definition. Depending on this crate's
-//! library target does **not** pull in anything privileged: the `argos-helper`
-//! binary (`main.rs`) is the only thing here that ever runs as root, and Cargo
-//! links a dependent only against the library target.
+//! Exposes the `argos-helper` <-> `argos` IPC contract, device re-validation,
+//! and the actual write/verify orchestration as a library. Depending on this
+//! crate's library target does **not** pull in anything privileged: `main.rs`
+//! (the `argos-helper` binary) is the only thing here that ever runs as root,
+//! and Cargo links a dependent only against the library target.
+//!
+//! Splitting [`execute`] out of `main.rs` also means the loop-device
+//! integration tests (backlog E9) can call it directly against a real device
+//! node, without spawning the compiled binary and piping JSON through stdin.
 
+pub mod platform_select;
 pub mod protocol;
+
+use argos_core::error::{ArgosError, Result};
+use argos_core::progress::{CancelToken, ProgressSink};
+use argos_core::write::dd_mode;
+use argos_core::{preflight, verify};
+use argos_platform::PlatformOps;
+use protocol::WritePlan;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+
+/// Re-validates the target device, then writes `plan.image_path` to
+/// `plan.device_path` and (unless `plan.verify` is false) reads it back to
+/// confirm it matches. This is everything `argos-helper` does; `main.rs` only
+/// adds stdin/stdout JSON framing around it.
+pub fn execute(plan: &WritePlan, progress: &dyn ProgressSink) -> Result<String> {
+    let platform = platform_select::current_platform();
+
+    let refreshed = platform.refresh(&plan.device_path, plan.expected_serial.as_deref())?;
+    protocol::validate_refreshed_device(plan, refreshed.as_ref())?;
+
+    preflight::check_capacity(
+        &plan.device_path,
+        plan.expected_size_bytes,
+        &plan.image_path,
+        plan.image_size_bytes,
+    )?;
+
+    let mut image = File::open(&plan.image_path)?;
+    let mut device = OpenOptions::new().write(true).open(&plan.device_path)?;
+
+    // No cancellation source is wired up yet -- see main.rs's module doc comment.
+    let cancel = CancelToken::new();
+    let written_hash = dd_mode::write_stream(
+        &mut image,
+        &mut device,
+        plan.image_size_bytes,
+        progress,
+        &cancel,
+    )?;
+    device.flush().map_err(ArgosError::Io)?;
+    drop(device);
+
+    if plan.verify {
+        let mut device_for_read = File::open(&plan.device_path)?;
+        verify::verify_written_image(
+            &mut device_for_read,
+            plan.image_size_bytes,
+            &written_hash,
+            progress,
+        )?;
+    }
+
+    Ok(written_hash)
+}

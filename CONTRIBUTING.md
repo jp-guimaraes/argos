@@ -13,6 +13,11 @@ also documents the design decisions behind the current crate layout.
 - Before sending a change: `cargo fmt --all` and
   `cargo clippy --workspace --all-targets -- -D warnings` (this is exactly what
   CI runs).
+- The write-path integration tests exercise a real file-backed loop device and
+  need root:
+  `sudo -E cargo test -p argos-privileged --features test-overrides --test loop_device_write -- --ignored --nocapture`.
+  They are `#[ignore]`d and skip themselves cleanly without root, so the
+  regular `cargo test --workspace` above never needs it.
 
 ## Workspace layout
 

@@ -12,6 +12,11 @@ authors.workspace = true
 name = "argos-helper"
 path = "src/main.rs"
 
+[features]
+# Passes through to argos-platform-linux's escape hatch for the loop-device
+# integration tests (backlog E9). Never enabled in a production build.
+test-overrides = ["argos-platform-linux/test-overrides"]
+
 [dependencies]
 argos-core = { workspace = true }
 argos-platform = { workspace = true }
@@ -26,3 +31,4 @@ argos-platform-macos = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+libc = "0.2"
