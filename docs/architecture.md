@@ -180,8 +180,8 @@ an already-written device without writing again.
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
-| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against both a real file-backed Linux loop device and a real macOS `hdiutil`-attached disk image, including the TOCTOU re-validation guard on each |
-| `argos list` / `argos write` | Implemented |
+| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real physical Linux USB drive, and a real macOS `hdiutil`-attached disk image, including the TOCTOU re-validation guard in each case |
+| `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on Linux (device correctly detected, confirmation flow, `pkexec` elevation, write, and post-write verification all passed; the written bytes were independently re-hashed outside Argos and matched). Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. |
 | `argos verify` (standalone) | Argument parsing only |
 | Packaging/distribution | Not started |
 
