@@ -1,57 +1,17 @@
-//! macOS implementation of [`argos_platform::PlatformOps`].
+//! macOS implementation of [`argos_platform::PlatformOps`] (backlog epic E3).
 //!
-//! **Not implemented yet.** The design (parse `diskutil list -plist` /
-//! `diskutil info -plist`, exclude `Internal == true` disks, walk up to the
-//! parent whole disk on Apple Silicon so an internal APFS volume can't be
-//! mistaken for part of an external disk) is written up in the project backlog,
-//! epic E3. This crate exists now so [`argos-cli`] can already depend on the
-//! trait and pick a backend by `#[cfg(target_os = ...)]` without a later
-//! restructuring; every method below returns
-//! [`argos_core::error::ArgosError::NotImplemented`] until E3 lands.
+//! Enumerates disks via `diskutil list -plist` / `diskutil info -plist`
+//! (parsed in [`diskutil`]), unmounts/ejects via `diskutil unmountDisk`/
+//! `diskutil eject`, and resolves a path's backing device via `df` --
+//! `argos-core`'s "no shelling out except unmount/eject helpers" rule names
+//! `diskutil` as the one exception on this platform, since it's also the
+//! only supported way to read disk topology without linking against a
+//! private/IOKit-adjacent API. See `enumerate.rs` for how the pieces fit
+//! together, and its module doc for why an internal disk is still returned
+//! from [`MacOsPlatform::list_removable_disks`] (marked unsafe to write via
+//! its own signals) rather than filtered out entirely.
 
-use argos_core::device::Device;
-use argos_core::error::{ArgosError, Result};
-use argos_platform::PlatformOps;
-use std::path::Path;
+mod diskutil;
+mod enumerate;
 
-pub struct MacOsPlatform;
-
-impl MacOsPlatform {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for MacOsPlatform {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PlatformOps for MacOsPlatform {
-    fn list_removable_disks(&self) -> Result<Vec<Device>> {
-        Err(ArgosError::NotImplemented("macOS disk enumeration (E3)"))
-    }
-
-    fn refresh(
-        &self,
-        _platform_id: &str,
-        _expected_serial: Option<&str>,
-    ) -> Result<Option<Device>> {
-        Err(ArgosError::NotImplemented("macOS disk enumeration (E3)"))
-    }
-
-    fn unmount(&self, _device: &Device) -> Result<()> {
-        Err(ArgosError::NotImplemented("macOS unmount (E3)"))
-    }
-
-    fn eject(&self, _device: &Device) -> Result<()> {
-        Err(ArgosError::NotImplemented("macOS eject (E3)"))
-    }
-
-    fn backing_device_of(&self, _path: &Path) -> Result<Option<String>> {
-        Err(ArgosError::NotImplemented(
-            "macOS backing-device lookup (E3)",
-        ))
-    }
-}
+pub use enumerate::MacOsPlatform;
