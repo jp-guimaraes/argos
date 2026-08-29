@@ -15,7 +15,10 @@ path = "src/main.rs"
 [dependencies]
 argos-core = { workspace = true }
 argos-platform = { workspace = true }
+argos-privileged = { workspace = true }
 clap = { workspace = true }
+indicatif = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 argos-platform-linux = { workspace = true }

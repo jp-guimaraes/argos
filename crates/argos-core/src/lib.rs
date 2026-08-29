@@ -13,6 +13,8 @@ pub mod error;
 pub mod image;
 pub mod preflight;
 pub mod progress;
+pub mod verify;
+pub mod write;
 
 pub use device::{Bus, Device};
 pub use error::{ArgosError, Result};

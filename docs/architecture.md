@@ -101,33 +101,50 @@ entirely.
 
 ### `argos-privileged`
 
-Not implemented yet. This will be `argos-helper`, a separate binary that runs
-as root and does nothing except: read a validated, serialized write plan from
-stdin, re-resolve the target device by serial + size (protecting against the
-device having changed between user confirmation and privileged execution),
-copy bytes, read them back, report progress as JSON lines, and exit. CI should
-enforce that this crate's dependencies stay minimal, since it is the only code
-in the project that runs with elevated privileges.
+This is `argos-helper`, the one binary that runs as root. It reads a single
+[`protocol::WritePlan`](../crates/argos-privileged/src/protocol.rs) as JSON on
+stdin, re-resolves the target device by serial + size through the platform
+backend (`protocol::validate_refreshed_device` is the TOCTOU guard: it refuses
+the write if the device changed, disappeared, or now looks like a system disk,
+regardless of what the plan claims), then runs the DD-mode write and (unless
+`--no-verify` was passed) the post-write verification, reporting progress and
+the outcome as one JSON `Event` per stdout line. It parses no ISO and talks to
+no D-Bus/plist/UDisks2 API. The crate is split into a library (`protocol`,
+reused by `argos-cli` to build plans and parse events) and the `argos-helper`
+binary that is the only thing here meant to actually run privileged.
+
+**Known gap**: cancellation is not wired end-to-end yet -- nothing outside the
+helper process can currently trigger the `CancelToken` passed to the write
+loop, so a running write cannot yet be interrupted cleanly from the CLI side.
 
 ### `argos-cli`
 
-`argos list` is implemented: it lists every physical disk visible to the
-current platform backend and marks whether each is safe to write to. `argos
-write` and `argos verify` are wired up (argument parsing, exit codes) but their
-command bodies return `NotImplemented` until the write engine (E5), privilege
-separation (E7), and verification (E6) land.
+`argos list` lists every physical disk visible to the current platform backend
+and marks whether each is safe to write to.
+
+`argos write` runs the full flow: refresh the target device, apply the
+non-negotiable safety gate (a system disk is refused unconditionally; a
+non-removable disk needs `--i-know-what-im-doing`), classify the ISO (refusing
+anything that isn't a hybrid image), run the capacity and source/target
+collision preflight checks, require the user to retype the exact device path
+to confirm, then hand a `WritePlan` to `argos-helper` via `pkexec` (preferred
+on Linux) or `sudo`, rendering its progress as an `indicatif` bar.
+
+`argos verify` is wired up (argument parsing, exit codes) but its command body
+still returns `NotImplemented` -- it will reuse `argos_core::verify` against
+an already-written device without writing again.
 
 ## Status
 
 | Area | Status |
 |---|---|
 | Domain model, errors, progress/cancellation, ISO classification, checksum, preflight checks | Implemented, unit-tested |
+| DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
 | macOS disk enumeration (`diskutil -plist`) | Not implemented |
-| DD-mode write engine | Not implemented |
-| Post-write verification | Not implemented |
-| Privileged helper (`argos-helper`) | Not implemented |
-| `argos write` / `argos verify` | Argument parsing only |
+| Privileged helper (`argos-helper`) | Implemented; not yet exercised end-to-end against a real device (needs the loop-device integration tests from E9) |
+| `argos list` / `argos write` | Implemented |
+| `argos verify` (standalone) | Argument parsing only |
 | Packaging/distribution | Not started |
 
 ## Prior art consulted
