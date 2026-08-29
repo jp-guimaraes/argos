@@ -1,6 +1,6 @@
 [package]
 name = "argos-platform-macos"
-description = "macOS backend for PlatformOps (planned: diskutil -plist enumeration). Not yet implemented -- see backlog epic E3."
+description = "macOS backend for PlatformOps: disk enumeration via diskutil -plist, mount/system-disk detection via diskutil info + APFS container resolution."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,6 @@ authors.workspace = true
 [dependencies]
 argos-core = { workspace = true }
 argos-platform = { workspace = true }
+# Pinned below 1.8 deliberately: plist 1.8+ raises its MSRV past this
+# workspace's rust-version (1.75).
+plist = "1.7"

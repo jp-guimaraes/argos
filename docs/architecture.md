@@ -35,7 +35,7 @@ crates/
   argos-core/             # pure domain logic -- no direct disk/OS I/O
   argos-platform/         # the PlatformOps trait every backend implements
   argos-platform-linux/   # real implementation: sysfs + the udev database + /proc/mounts
-  argos-platform-macos/   # stub -- see "Status" below
+  argos-platform-macos/   # real implementation: diskutil -plist + df
   argos-platform-windows/ # deliberate stub, proves the trait has no Unix bias, out of v1 scope
   argos-privileged/       # argos-helper: the one binary meant to run as root
   argos-cli/              # the `argos` binary
@@ -90,14 +90,46 @@ This is a second, independent signal on top of the bus/removable check in
 `Device::is_safe_to_write` -- a disk must clear both to be offered for
 writing.
 
-### `argos-platform-macos`, `argos-platform-windows`
+### `argos-platform-macos`
 
-Both currently return `ArgosError::NotImplemented` from every method. They
-exist so `argos-cli` already depends on the trait and picks a backend via
-`#[cfg(target_os = ...)]`, instead of that restructuring happening later.
-`argos-platform-windows` additionally has no public constructor -- it cannot
-be instantiated, only type-checked, since Windows-as-host is out of v1 scope
-entirely.
+Enumerates disks via `diskutil list -plist` (top-level `WholeDisks`) plus one
+`diskutil info -plist <id>` per disk, parsed defensively in `diskutil.rs` (a
+missing/renamed key degrades to a documented default rather than panicking or
+failing the listing -- covers the "diskutil's plist schema changes between
+macOS versions" risk called out in the backlog). Synthesized APFS-container
+pseudo-disks (`VirtualOrPhysical == "Virtual"`) are excluded outright, the
+same way `argos-platform-linux` drops loop/dm/md/zram entries -- they aren't a
+real, independently writable block device. An internal physical disk is
+still *returned*, though: system-disk detection cross-references `diskutil
+info -plist /`, walking through its APFS container to the physical store
+backing it (the Apple Silicon case the backlog flags -- the boot volume's
+`ParentWholeDisk` is a virtual container, not the real internal SSD, until
+that walk happens) to flag the true system disk, while `RemovableMedia` and
+`BusProtocol` (only `"USB"` maps to `Bus::Usb`) independently keep any
+internal disk from passing `Device::is_safe_to_write` even if that
+cross-reference ever fails. `unmount`/`eject` shell out to `diskutil
+unmountDisk`/`diskutil eject`; `backing_device_of` shells out to `df -P`,
+since (unlike `diskutil info`) it accepts an arbitrary file path rather than
+just a device identifier or a volume's own mount point.
+
+Verified so far: unit tests on the parsing/decision logic (fixtures for an
+internal whole disk and an APFS container captured verbatim from a real
+Apple Silicon Mac; the external-USB fixture is synthetic -- modeled on
+Apple's documented schema, not captured from real hardware), plus a manual,
+read-only run of `list_removable_disks`/`backing_device_of` against that same
+Mac's real `diskutil`, which correctly enumerated only the physical internal
+disk (filtering out its three APFS-container pseudo-disks), flagged it as the
+system disk via the container walk-up, and resolved a real file's backing
+device. **Not yet verified**: the actual external-USB path (no USB drive was
+available to plug in), nor `unmount`/`eject` against a real disk.
+
+### `argos-platform-windows`
+
+Returns `ArgosError::NotImplemented` from every method and has no public
+constructor -- it exists only so `argos-cli` already depends on the trait and
+picks a backend via `#[cfg(target_os = ...)]`, and so the trait itself is
+proven not to have crept in a Unix bias. It cannot be instantiated, only
+type-checked, since Windows-as-host is out of v1 scope entirely.
 
 ### `argos-privileged`
 
@@ -141,7 +173,7 @@ an already-written device without writing again.
 | Domain model, errors, progress/cancellation, ISO classification, checksum, preflight checks | Implemented, unit-tested |
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
-| macOS disk enumeration (`diskutil -plist`) | Not implemented |
+| macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified (read-only) against a real Mac's internal/APFS disks, external-USB path still unverified |
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify against a real (file-backed) loop device passes, including the TOCTOU re-validation guard |
 | `argos list` / `argos write` | Implemented |
 | `argos verify` (standalone) | Argument parsing only |
