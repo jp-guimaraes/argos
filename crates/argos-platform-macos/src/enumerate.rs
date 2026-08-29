@@ -52,7 +52,8 @@ impl argos_platform::PlatformOps for MacOsPlatform {
                 // the whole listing.
                 continue;
             };
-            if info.virtual_or_physical.as_deref() == Some("Virtual") {
+            let is_virtual = info.virtual_or_physical.as_deref() == Some("Virtual");
+            if is_virtual && !test_force_removable_matches(&info) {
                 continue;
             }
             devices.push(device_from_info(&info, system_whole_disk.as_deref()));
@@ -194,14 +195,42 @@ fn device_from_info(info: &DiskInfo, system_whole_disk: Option<&str>) -> Device 
         .or_else(|| info.volume_name.clone())
         .unwrap_or_else(|| info.device_identifier.clone());
 
+    let mut bus = bus_from_protocol(info.bus_protocol.as_deref());
+    let mut os_reports_removable = info.removable_media;
+    if test_force_removable_matches(info) {
+        bus = Bus::Usb;
+        os_reports_removable = true;
+    }
+
     Device {
         platform_id,
         display_name,
         size_bytes: info.size_bytes,
-        bus: bus_from_protocol(info.bus_protocol.as_deref()),
-        os_reports_removable: info.removable_media,
+        bus,
+        os_reports_removable,
         is_system_disk: system_whole_disk == Some(info.device_identifier.as_str()),
         serial: info.serial_number.clone(),
+    }
+}
+
+/// True when the `test-overrides` feature is enabled *and*
+/// `ARGOS_TEST_FORCE_REMOVABLE` names this disk's device node. Always `false`
+/// when the feature is off, so this can never fire in a production build --
+/// see the feature's doc comment in `Cargo.toml`.
+fn test_force_removable_matches(info: &DiskInfo) -> bool {
+    #[cfg(feature = "test-overrides")]
+    {
+        let platform_id = if info.device_node.is_empty() {
+            format!("/dev/{}", info.device_identifier)
+        } else {
+            info.device_node.clone()
+        };
+        std::env::var("ARGOS_TEST_FORCE_REMOVABLE").as_deref() == Ok(platform_id.as_str())
+    }
+    #[cfg(not(feature = "test-overrides"))]
+    {
+        let _ = info;
+        false
     }
 }
 
@@ -263,5 +292,47 @@ mod tests {
         let device = device_from_info(&info, None);
         assert_eq!(device.platform_id, "/dev/disk4");
         assert_eq!(device.display_name, "disk4");
+    }
+
+    // Single test covering every ARGOS_TEST_FORCE_REMOVABLE-dependent
+    // behavior, rather than several -- this crate's tests run in parallel by
+    // default, and this is the one process-global piece of state any of them
+    // touch, so one test owns the full set/assert/unset sequence instead of
+    // risking two tests racing on the same env var.
+    #[test]
+    #[cfg(feature = "test-overrides")]
+    fn test_force_removable_overrides_bus_removable_and_the_virtual_filter() {
+        let device_node = "/dev/disk97-test-override";
+        let virtual_disk = DiskInfo {
+            device_identifier: "disk97".into(),
+            device_node: device_node.into(),
+            virtual_or_physical: Some("Virtual".into()),
+            bus_protocol: Some("Disk Image".into()),
+            removable_media: false,
+            ..Default::default()
+        };
+
+        // Not matched yet: looks exactly like a real, non-removable disk
+        // image -- unsafe to write, and not a match for the override.
+        assert!(!test_force_removable_matches(&virtual_disk));
+        let device = device_from_info(&virtual_disk, None);
+        assert_eq!(device.bus, Bus::Unknown);
+        assert!(!device.os_reports_removable);
+
+        std::env::set_var("ARGOS_TEST_FORCE_REMOVABLE", device_node);
+        assert!(test_force_removable_matches(&virtual_disk));
+        let device = device_from_info(&virtual_disk, None);
+        assert_eq!(device.bus, Bus::Usb);
+        assert!(device.os_reports_removable);
+
+        // A disk the override doesn't name is never affected.
+        let other = DiskInfo {
+            device_identifier: "disk98".into(),
+            device_node: "/dev/disk98".into(),
+            ..Default::default()
+        };
+        assert!(!test_force_removable_matches(&other));
+
+        std::env::remove_var("ARGOS_TEST_FORCE_REMOVABLE");
     }
 }

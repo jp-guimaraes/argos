@@ -13,9 +13,15 @@ name = "argos-helper"
 path = "src/main.rs"
 
 [features]
-# Passes through to argos-platform-linux's escape hatch for the loop-device
-# integration tests (backlog E9). Never enabled in a production build.
-test-overrides = ["argos-platform-linux/test-overrides"]
+# Passes through to argos-platform-linux's and argos-platform-macos's escape
+# hatch (both named ARGOS_TEST_FORCE_REMOVABLE) for the loop-device and
+# hdiutil-image integration tests (backlog E9). Each reference is a no-op on
+# the other target, since the corresponding platform crate isn't part of the
+# dependency graph there. Never enabled in a production build.
+test-overrides = [
+    "argos-platform-linux/test-overrides",
+    "argos-platform-macos/test-overrides",
+]
 
 [dependencies]
 argos-core = { workspace = true }

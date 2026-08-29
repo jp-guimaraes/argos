@@ -180,7 +180,7 @@ an already-written device without writing again.
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
-| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify against a real (file-backed) loop device passes, including the TOCTOU re-validation guard |
+| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against both a real file-backed Linux loop device and a real macOS `hdiutil`-attached disk image, including the TOCTOU re-validation guard on each |
 | `argos list` / `argos write` | Implemented |
 | `argos verify` (standalone) | Argument parsing only |
 | Packaging/distribution | Not started |

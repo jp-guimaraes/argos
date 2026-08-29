@@ -8,6 +8,17 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Enables ARGOS_TEST_FORCE_REMOVABLE, mirroring argos-platform-linux's escape
+# hatch of the same name: makes a specific device (by platform_id, e.g.
+# `/dev/disk4`) look like a removable USB disk regardless of what `diskutil`
+# actually reports, and exempts it from the APFS-container/"Virtual" filter.
+# Exists only so the hdiutil-image integration tests (backlog E9) can attach
+# a throwaway disk image and exercise the real write path without physical
+# USB hardware. Never enabled in a production build -- it is not a default
+# feature, and nothing in this crate turns it on except a test.
+test-overrides = []
+
 [dependencies]
 argos-core = { workspace = true }
 argos-platform = { workspace = true }

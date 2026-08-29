@@ -59,3 +59,22 @@ jobs:
           sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
             --features test-overrides --test loop_device_write \
             -- --ignored --nocapture
+
+  hdiutil-image-tests:
+    name: hdiutil-image integration tests (macOS)
+    # Backlog E9's macOS counterpart to loop-device-tests above: exercises
+    # argos-helper against a real disk image attached via `hdiutil attach
+    # -nomount`. Unlike losetup, attaching a raw disk image is a normal,
+    # unprivileged macOS operation (DiskArbitration, not a root-only ioctl),
+    # so this needs no sudo and no passwordless-sudo assumption -- it's still
+    # a separate job (rather than folded into `test` above) only to keep
+    # E9's Linux/macOS halves structurally parallel and independently
+    # skippable, and because it still needs the `test-overrides` feature the
+    # regular `test` job doesn't build with.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          cargo test -p argos-privileged --features test-overrides \
+            --test hdiutil_image_write -- --ignored --nocapture
