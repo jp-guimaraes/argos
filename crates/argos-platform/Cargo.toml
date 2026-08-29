@@ -1,0 +1,12 @@
+[package]
+name = "argos-platform"
+description = "The PlatformOps contract every OS backend (argos-platform-linux, -macos, -windows) implements. Contains no implementation itself."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+argos-core = { workspace = true }

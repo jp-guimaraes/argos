@@ -1,0 +1,8 @@
+[package]
+name = "xtask"
+description = "Developer-only tasks (test fixture generation, release helpers). Not part of the published crates."
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]

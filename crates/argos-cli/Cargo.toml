@@ -1,0 +1,27 @@
+[package]
+name = "argos-cli"
+description = "The `argos` command-line tool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "argos"
+path = "src/main.rs"
+
+[dependencies]
+argos-core = { workspace = true }
+argos-platform = { workspace = true }
+argos-privileged = { workspace = true }
+clap = { workspace = true }
+indicatif = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+argos-platform-linux = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+argos-platform-macos = { workspace = true }

@@ -1,0 +1,22 @@
+[package]
+name = "argos-platform-linux"
+description = "Linux backend for PlatformOps: disk enumeration via sysfs + the udev database, mount/system-disk detection via /proc/mounts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# Enables ARGOS_TEST_FORCE_REMOVABLE, an env-var escape hatch that makes a
+# specific device look like a removable USB disk regardless of what sysfs/udev
+# actually report. Exists only so the loop-device integration tests (backlog
+# E9) can exercise the real write path against a throwaway file-backed device
+# without real USB hardware. Never enabled in a production build -- it is not
+# a default feature, and nothing in this crate turns it on except a test.
+test-overrides = []
+
+[dependencies]
+argos-core = { workspace = true }
+argos-platform = { workspace = true }
