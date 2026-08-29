@@ -1,0 +1,16 @@
+[package]
+name = "argos-privileged"
+description = "argos-helper: the minimal, privilege-separated binary that does the actual disk write. Not implemented yet -- see backlog epic E7."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "argos-helper"
+path = "src/main.rs"
+
+[dependencies]
+argos-core = { workspace = true }

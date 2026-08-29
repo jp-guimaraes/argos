@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/argos-core",
+    "crates/argos-platform",
+    "crates/argos-platform-linux",
+    "crates/argos-platform-macos",
+    "crates/argos-platform-windows",
+    "crates/argos-privileged",
+    "crates/argos-cli",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/OWNER/argos" # TODO: update once the GitHub repo exists
+authors = ["Argos contributors"]
+
+[workspace.dependencies]
+argos-core = { path = "crates/argos-core" }
+argos-platform = { path = "crates/argos-platform" }
+argos-platform-linux = { path = "crates/argos-platform-linux" }
+argos-platform-macos = { path = "crates/argos-platform-macos" }
+argos-platform-windows = { path = "crates/argos-platform-windows" }
+
+thiserror = "2"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+
+[profile.release]
+lto = true
+codegen-units = 1

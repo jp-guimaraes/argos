@@ -1,0 +1,13 @@
+[package]
+name = "argos-platform-linux"
+description = "Linux backend for PlatformOps: disk enumeration via sysfs + the udev database, mount/system-disk detection via /proc/mounts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+argos-core = { workspace = true }
+argos-platform = { workspace = true }
