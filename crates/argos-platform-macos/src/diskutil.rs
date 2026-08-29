@@ -226,12 +226,12 @@ mod tests {
 </plist>
 "#;
 
-    // Synthetic: modeled on Apple's documented `diskutil info -plist`
-    // schema and the fields real external USB sticks are known to report,
-    // but not captured from physical hardware -- no USB drive was available
-    // in the environment this backend was written in. Flagged for
-    // confirmation against a real drive before this epic is considered
-    // fully verified (see backlog E3's "Status" note).
+    // Captured verbatim from `diskutil info -plist disk4` on the same
+    // machine, with a real USB stick (a SanDisk 3.2Gen1 flash drive)
+    // plugged in -- confirming the schema this module assumed before a
+    // drive was available to test against (backlog E3's "Status" note).
+    // `SerialNumber` is genuinely absent here, confirming that field's
+    // `Option` handling isn't just a defensive guess.
     const EXTERNAL_USB_WHOLE_DISK: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -244,8 +244,10 @@ mod tests {
 	<string>/dev/disk4</string>
 	<key>Internal</key>
 	<false/>
+	<key>IORegistryEntryName</key>
+	<string>USB SanDisk 3.2Gen1 Media</string>
 	<key>MediaName</key>
-	<string>Generic Flash Disk Media</string>
+	<string>SanDisk 3.2Gen1</string>
 	<key>ParentWholeDisk</key>
 	<string>disk4</string>
 	<key>Removable</key>
@@ -253,7 +255,7 @@ mod tests {
 	<key>RemovableMedia</key>
 	<true/>
 	<key>Size</key>
-	<integer>16008609792</integer>
+	<integer>30784094208</integer>
 	<key>VirtualOrPhysical</key>
 	<string>Physical</string>
 	<key>WholeDisk</key>

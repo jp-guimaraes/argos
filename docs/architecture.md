@@ -112,16 +112,22 @@ unmountDisk`/`diskutil eject`; `backing_device_of` shells out to `df -P`,
 since (unlike `diskutil info`) it accepts an arbitrary file path rather than
 just a device identifier or a volume's own mount point.
 
-Verified so far: unit tests on the parsing/decision logic (fixtures for an
-internal whole disk and an APFS container captured verbatim from a real
-Apple Silicon Mac; the external-USB fixture is synthetic -- modeled on
-Apple's documented schema, not captured from real hardware), plus a manual,
-read-only run of `list_removable_disks`/`backing_device_of` against that same
-Mac's real `diskutil`, which correctly enumerated only the physical internal
-disk (filtering out its three APFS-container pseudo-disks), flagged it as the
-system disk via the container walk-up, and resolved a real file's backing
-device. **Not yet verified**: the actual external-USB path (no USB drive was
-available to plug in), nor `unmount`/`eject` against a real disk.
+Verified end-to-end on a real Apple Silicon Mac, both internal and external:
+unit tests on the parsing/decision logic (fixtures captured verbatim from
+this machine's `diskutil` output, including a real external USB stick --
+the previously-synthetic external fixture has since been confirmed against
+real hardware), plus manual runs of the full `PlatformOps` surface against
+this machine's real disks. `list_removable_disks` correctly enumerated the
+internal disk (filtered of its three APFS-container pseudo-disks, flagged as
+the system disk via the container walk-up, `is_safe_to_write() == false`)
+alongside a plugged-in USB stick (`bus == Usb`, `is_safe_to_write() ==
+true`); `refresh` re-resolved the USB stick by platform id; `backing_device_of`
+resolved a real file's backing device; `unmount` cleanly unmounted both of
+the USB stick's partitions (`diskutil unmountDisk`); `eject` logically
+removed it from the OS (`diskutil eject`), confirmed by it disappearing from
+`diskutil list`. The one thing this hasn't exercised is the actual DD-mode
+write (`argos-helper`) against a real USB disk end-to-end -- that's separate
+from E3's enumeration scope.
 
 ### `argos-platform-windows`
 
@@ -173,7 +179,7 @@ an already-written device without writing again.
 | Domain model, errors, progress/cancellation, ISO classification, checksum, preflight checks | Implemented, unit-tested |
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
-| macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified (read-only) against a real Mac's internal/APFS disks, external-USB path still unverified |
+| macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify against a real (file-backed) loop device passes, including the TOCTOU re-validation guard |
 | `argos list` / `argos write` | Implemented |
 | `argos verify` (standalone) | Argument parsing only |
