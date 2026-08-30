@@ -16,7 +16,7 @@ wide range of Linux distributions and, ideally, on macOS as well.
 
 ## Status
 
-Argos is under active, early development. The current scope (v1) targets:
+Argos has reached v1.0. The v1 scope:
 
 - **Images**: Linux ISOs only (including isohybrid images), written
   byte-for-byte in "DD mode". Windows image support is a planned future phase.
@@ -26,8 +26,9 @@ Argos is under active, early development. The current scope (v1) targets:
   without reworking the core logic.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and a
-per-area status table, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to
-build and test the project.
+per-area status table, [`CHANGELOG.md`](CHANGELOG.md) for what shipped in
+each release, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to build and
+test the project.
 
 ## Installation
 
@@ -41,8 +42,8 @@ binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on
 first launch until you approve it once in System Settings -> Privacy &
 Security.
 
-No release has been tagged yet while v1.0 is still being finished; the
-tarballs above will start appearing once one is.
+See [Releases](https://github.com/jp-guimaraes/argos/releases) for the
+current tarballs.
 
 ### Via `cargo install`
 
