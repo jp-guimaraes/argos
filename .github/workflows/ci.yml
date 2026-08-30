@@ -60,6 +60,21 @@ jobs:
             --features test-overrides --test loop_device_write \
             -- --ignored --nocapture
 
+  dm-resolution-tests:
+    name: device-mapper resolution integration tests (root)
+    # Backlog E2: exercises the LVM/RAID/dm-crypt resolver against a real
+    # dmsetup + loop-device stack. Same root/losetup prerequisites as
+    # loop-device-tests above (plus dmsetup, preinstalled on GitHub-hosted
+    # Ubuntu runners), kept as its own job to isolate failures by backlog
+    # area rather than because it needs anything loop-device-tests doesn't.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          sudo -E env "PATH=$PATH" cargo test -p argos-platform-linux \
+            --test dm_resolution -- --ignored --nocapture
+
   hdiutil-image-tests:
     name: hdiutil-image integration tests (macOS)
     # Backlog E9's macOS counterpart to loop-device-tests above: exercises

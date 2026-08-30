@@ -34,7 +34,7 @@ for the full backlog (epics E0-E11) that this was planned from.
 crates/
   argos-core/             # pure domain logic -- no direct disk/OS I/O
   argos-platform/         # the PlatformOps trait every backend implements
-  argos-platform-linux/   # real implementation: sysfs + the udev database + /proc/mounts
+  argos-platform-linux/   # real implementation: sysfs + udev database + /proc/mounts + UDisks2 cross-check
   argos-platform-macos/   # real implementation: diskutil -plist + df
   argos-platform-windows/ # deliberate stub, proves the trait has no Unix bias, out of v1 scope
   argos-privileged/       # argos-helper: the one binary meant to run as root
@@ -78,17 +78,45 @@ The Linux backend enumerates disks by reading `/sys/block/*` directly (size,
 removable flag, vendor/model) and cross-referencing the udev database at
 `/run/udev/data/b<major>:<minor>` for a more reliable bus classification and
 serial number, when udev has recorded the device. Reading the udev database as
-flat text files -- rather than linking `libudev` via bindgen, or talking to
-UDisks2 over D-Bus -- is a deliberate v1 simplification: no extra system
-libraries needed to build, at the cost of not matching what a desktop file
-manager shows pixel-for-pixel. The UDisks2/D-Bus backend remains a documented
-upgrade path.
+flat text files -- rather than linking `libudev` via bindgen -- is a
+deliberate v1 simplification: no extra system libraries needed to build.
+
+That sysfs/udev verdict is then cross-checked against UDisks2 over D-Bus
+(`udisks2.rs`, using `zbus`'s blocking API), when `udisksd` is reachable: this
+is the "two sources, cross-referenced" defense in depth from the original
+design notes, matching what desktop file managers show. The cross-check can
+only push the result to be *more* conservative, never less -- if UDisks2
+disagrees that a device is a removable USB disk, `os_reports_removable` is
+cleared regardless of what sysfs/udev concluded on their own. When UDisks2
+isn't running (headless servers, containers, minimal installs) or the D-Bus
+call fails for any reason, `Udisks2Snapshot::fetch()` returns `None` and
+enumeration falls back to sysfs/udev alone, unchanged from before this
+existed. One non-obvious wrinkle found while wiring this up against this
+machine's real `udisksd`: a single UDisks2 `Drive` object backs *several*
+`Block` objects (the whole disk plus each of its partitions, all pointing at
+the same `Drive`), so building the device-path lookup has to key on the block
+device that lacks a `Partition` interface, not on the drive object path
+itself (an earlier attempt collapsed a disk's own entry to whichever
+partition happened to be processed last).
 
 System-disk detection parses `/proc/mounts` and flags a disk as a system disk
 if any of its partitions is mounted at `/`, `/boot`, `/boot/efi`, or `/home`.
 This is a second, independent signal on top of the bus/removable check in
 `Device::is_safe_to_write` -- a disk must clear both to be offered for
-writing.
+writing. Mount sources are resolved through any device-mapper stack in
+between (`dm.rs`) before that check: LVM, software RAID, dm-crypt, and
+multipath are all just `dm-N` block devices from the kernel's perspective,
+and `/proc/mounts` only ever shows the top of that stack (e.g.
+`/dev/mapper/vg-home`), never the physical partition underneath. Without this
+resolution, a disk holding an LVM physical volume for `/home` -- a common
+desktop Linux layout -- would never be recognized as a system disk, and an
+ISO stored on such a filesystem would never trip the source/target collision
+check either. The recursive walk itself is pure and unit-tested with fake
+multi-level stacks (LVM, dm-crypt-under-LVM, striped volumes); reading the
+real `/sys/block/*/slaves` relationship and resolving a `/dev/mapper/*`
+symlink to its `dm-N` target are validated against a real `dmsetup` +
+loop-device stack in `tests/dm_resolution.rs` (root-gated, mirroring
+`argos-privileged`'s loop-device tests).
 
 ### `argos-platform-macos`
 
@@ -205,7 +233,7 @@ tagged `Plan` (`Write`/`Verify`) rather than always a `WritePlan`.
 |---|---|
 | Domain model, errors, progress/cancellation, ISO classification, checksum, preflight checks | Implemented, unit-tested |
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
-| Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
+| Linux disk enumeration | Implemented (sysfs + udev database, cross-checked against UDisks2/D-Bus when reachable) and LVM/RAID/dm-crypt-aware system-disk detection; pure parsing/resolution logic unit-tested, and the D-Bus and device-mapper glue each confirmed against this machine's real `udisksd` and a real `dmsetup` stack |
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI** (BIOS/legacy not tested yet). macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
