@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    Unmounting,
     Checksumming,
     Writing,
     Verifying,
