@@ -1,2 +1,6 @@
 /target
 **/*.rs.bk
+
+# Manually downloaded test ISOs (backlog E9 / real-hardware verification) --
+# never meant to be committed.
+/.testdata/
