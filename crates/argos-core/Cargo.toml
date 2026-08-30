@@ -12,6 +12,12 @@ authors.workspace = true
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
+# `newtua-cdfs` under the local name `cdfs`: same ISO9660/ECMA-119 reading API
+# as the canonical `cdfs` crate, but without its hard dependency on `fuser`
+# (FUSE bindings) and a `clap`-based mount binary that argos-core never uses.
+# See docs/architecture.md's phase-2 guiding decisions for why the fork was
+# chosen over the canonical crate.
+cdfs = { package = "newtua-cdfs", version = "0.2.4-newtua.1" }
 
 [dev-dependencies]
 tempfile = "3"
