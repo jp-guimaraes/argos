@@ -16,13 +16,11 @@ use argos_privileged::protocol::{Plan, WritePlan};
 use std::io::Write;
 use std::path::PathBuf;
 
-// Fields are unused until the run() body below is implemented (E4-E8); keeping
-// the real shape now avoids an API break once it is.
-#[allow(dead_code)]
 pub struct Args {
     pub iso: PathBuf,
     pub device: String,
     pub no_verify: bool,
+    pub no_eject: bool,
     pub i_know_what_im_doing: bool,
 }
 
@@ -69,7 +67,29 @@ pub fn run(args: Args) -> Result<()> {
 
     let written_hash = helper::run_plan(&Plan::Write(plan))?;
     println!("Done. SHA-256: {written_hash}");
+
+    if !args.no_eject {
+        eject_best_effort(&platform, &device);
+    }
+
     Ok(())
+}
+
+/// Ejects the just-written device. Never fails the command over this: the
+/// write itself already succeeded (that's what matters and what the exit
+/// code reflects), and both current `PlatformOps` backends already treat the
+/// underlying `eject`/`diskutil eject` call as best-effort internally --
+/// this only adds the same posture at the one call site that skipped it
+/// until now, plus a message either way so the user isn't left guessing
+/// whether it's safe to unplug.
+fn eject_best_effort(platform: &impl PlatformOps, device: &Device) {
+    match platform.eject(device) {
+        Ok(()) => println!("Ejected {}. Safe to unplug.", device.platform_id),
+        Err(err) => eprintln!(
+            "warning: could not eject {}: {err} (the write itself succeeded -- eject it manually before unplugging)",
+            device.platform_id
+        ),
+    }
 }
 
 /// The non-negotiable part of the safety gate: a system disk is refused

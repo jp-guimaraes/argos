@@ -29,6 +29,9 @@ enum Command {
         /// Skip the post-write read-back verification.
         #[arg(long)]
         no_verify: bool,
+        /// Don't eject the device after a successful write.
+        #[arg(long)]
+        no_eject: bool,
         /// Allow writing to a disk the OS doesn't report as removable.
         /// Still refuses disks Argos detects as holding a system mount.
         #[arg(long)]
@@ -53,11 +56,13 @@ fn main() {
             iso,
             device,
             no_verify,
+            no_eject,
             i_know_what_im_doing,
         } => commands::write::run(commands::write::Args {
             iso,
             device,
             no_verify,
+            no_eject,
             i_know_what_im_doing,
         }),
         Command::Verify { device, iso } => {
