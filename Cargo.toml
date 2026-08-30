@@ -20,12 +20,19 @@ repository = "https://github.com/jp-guimaraes/argos"
 authors = ["Argos contributors"]
 
 [workspace.dependencies]
-argos-core = { path = "crates/argos-core" }
-argos-platform = { path = "crates/argos-platform" }
-argos-platform-linux = { path = "crates/argos-platform-linux" }
-argos-platform-macos = { path = "crates/argos-platform-macos" }
+# `version` is required here (not just `path`) for every crate this workspace
+# publishes to crates.io -- a published crate can't depend on a bare local
+# path, since that path won't exist on whoever installs it; cargo strips
+# `path` at publish time and resolves the dependency from the registry using
+# `version` instead. argos-platform-windows is intentionally left without one
+# below: it's a stub nothing published here depends on, so it stays
+# unpublished for now.
+argos-core = { path = "crates/argos-core", version = "0.1.0" }
+argos-platform = { path = "crates/argos-platform", version = "0.1.0" }
+argos-platform-linux = { path = "crates/argos-platform-linux", version = "0.1.0" }
+argos-platform-macos = { path = "crates/argos-platform-macos", version = "0.1.0" }
 argos-platform-windows = { path = "crates/argos-platform-windows" }
-argos-privileged = { path = "crates/argos-privileged" }
+argos-privileged = { path = "crates/argos-privileged", version = "0.1.0" }
 
 thiserror = "2"
 sha2 = "0.10"
