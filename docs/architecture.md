@@ -125,9 +125,18 @@ true`); `refresh` re-resolved the USB stick by platform id; `backing_device_of`
 resolved a real file's backing device; `unmount` cleanly unmounted both of
 the USB stick's partitions (`diskutil unmountDisk`); `eject` logically
 removed it from the OS (`diskutil eject`), confirmed by it disappearing from
-`diskutil list`. The one thing this hasn't exercised is the actual DD-mode
-write (`argos-helper`) against a real USB disk end-to-end -- that's separate
-from E3's enumeration scope.
+`diskutil list`.
+
+The DD-mode write itself (`argos-helper`, separate from E3's enumeration
+scope) has since been verified too: `argos write` against a real physical
+USB drive, using the real Alpine Linux 3.24.1 (`virt` flavor) ISO. The write
+completed, `argos-helper`'s own post-write verification passed, and the
+written bytes were independently re-read straight off `/dev/diskN` with
+`sudo dd | shasum -a 256` (outside Argos entirely) and matched Alpine's
+published SHA-256 exactly. macOS additionally popped its own "disk not
+readable" dialog afterward (Disk Arbitration not recognizing the freshly
+Linux-formatted disk) -- expected and harmless, same as any raw `dd`-written
+Linux USB on macOS; dismissed with Ignore, never Initialize.
 
 ### `argos-platform-windows`
 
@@ -180,8 +189,8 @@ an already-written device without writing again.
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
-| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real physical Linux USB drive, and a real macOS `hdiutil`-attached disk image, including the TOCTOU re-validation guard in each case |
-| `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on Linux, first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly. The resulting drive was confirmed to boot for real on **UEFI**; a BIOS/legacy boot has not been tested yet. Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
+| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
+| `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI** (BIOS/legacy not tested yet). macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly -- boot not tested (no spare machine to boot it on from this environment). Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Argument parsing only |
 | Packaging/distribution | Not started |
 
