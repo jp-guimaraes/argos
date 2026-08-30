@@ -10,6 +10,7 @@
 //! already-resolved identifiers and sizes, keeping `argos-core` free of OS calls.
 
 use crate::error::{ArgosError, Result};
+use crate::partition::WindowsPartitionPlan;
 use std::path::Path;
 
 /// Fails if the target device is smaller than the image that would be written to it.
@@ -25,6 +26,30 @@ pub fn check_capacity(
             image_path.to_path_buf(),
             device_size_bytes,
             image_size_bytes,
+        ));
+    }
+    Ok(())
+}
+
+/// The `check_capacity` equivalent for a Windows installer write (W2+): a
+/// two-partition GPT layout needs more room than the raw ISO byte count --
+/// the UEFI:NTFS boot partition, the NTFS partition's overhead margin, and
+/// the GPT structures themselves all add up on top of it. Compares the
+/// device against [`WindowsPartitionPlan::total_bytes_required`] instead of
+/// the ISO's own size.
+pub fn check_windows_capacity(
+    device_label: &str,
+    device_size_bytes: u64,
+    image_path: &Path,
+    plan: &WindowsPartitionPlan,
+) -> Result<()> {
+    let required_bytes = plan.total_bytes_required();
+    if device_size_bytes < required_bytes {
+        return Err(ArgosError::DeviceTooSmall(
+            device_label.to_string(),
+            image_path.to_path_buf(),
+            device_size_bytes,
+            required_bytes,
         ));
     }
     Ok(())
@@ -79,5 +104,25 @@ mod tests {
             "/dev/sdz",
         )
         .is_ok());
+    }
+
+    #[test]
+    fn accepts_a_device_exactly_as_large_as_the_windows_plan_requires() {
+        let plan = WindowsPartitionPlan::new(1_474_560, 4_000_000_000);
+        let required = plan.total_bytes_required();
+        assert!(
+            check_windows_capacity("/dev/sdz", required, Path::new("Win11.iso"), &plan).is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_a_device_smaller_than_the_windows_plan_requires() {
+        let plan = WindowsPartitionPlan::new(1_474_560, 4_000_000_000);
+        let required = plan.total_bytes_required();
+        let err = check_windows_capacity("/dev/sdz", required - 1, Path::new("Win11.iso"), &plan)
+            .unwrap_err();
+        assert!(
+            matches!(err, ArgosError::DeviceTooSmall(_, _, actual, needed) if actual == required - 1 && needed == required)
+        );
     }
 }

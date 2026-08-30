@@ -11,6 +11,7 @@
 pub mod device;
 pub mod error;
 pub mod image;
+pub mod partition;
 pub mod preflight;
 pub mod progress;
 pub mod verify;
