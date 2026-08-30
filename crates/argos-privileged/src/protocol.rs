@@ -1,11 +1,12 @@
 //! The IPC contract between the unprivileged `argos` process and this helper.
 //!
-//! `argos` sends a single [`WritePlan`] as one line of JSON on stdin, already
+//! `argos` sends a single [`Plan`] as one line of JSON on stdin, already
 //! fully resolved and confirmed by the user; this helper reads it, re-validates
 //! it against the device's *current* state (never trusts the plan blindly --
-//! see [`validate_refreshed_device`]), and then does the write. Progress and
-//! the final outcome are reported as [`Event`] JSON lines on stdout, one per
-//! line, so the parent can parse them incrementally without buffering.
+//! see [`validate_refreshed_device`]), and then does the write or the
+//! standalone verify. Progress and the final outcome are reported as
+//! [`Event`] JSON lines on stdout, one per line, so the parent can parse them
+//! incrementally without buffering.
 //!
 //! Using `serde`/`serde_json` here (rather than a hand-rolled format) is a
 //! deliberate, scoped exception to "keep this crate's dependency tree tiny":
@@ -18,6 +19,18 @@ use argos_core::error::ArgosError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// The one value `argos` ever sends `argos-helper` on stdin. Tagged so a
+/// single JSON blob unambiguously carries which operation to run -- `argos
+/// write` needs the privileged write path, `argos verify` needs only the
+/// read-back half of it, and both need the same elevation this process
+/// already requires to open a raw device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Plan {
+    Write(WritePlan),
+    Verify(VerifyPlan),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WritePlan {
     pub device_path: String,
@@ -28,12 +41,29 @@ pub struct WritePlan {
     pub verify: bool,
 }
 
+/// Unlike [`WritePlan`], carries no `expected_serial`/`expected_size_bytes`:
+/// verify is read-only, so there's no destructive TOCTOU window to guard
+/// against the way there is for a write, and no reason to refuse a device
+/// just because it changed since some earlier confirmation -- there was
+/// never a confirmation step for `argos verify` to begin with. The helper
+/// still independently re-resolves `device_path` before opening it (see
+/// [`argos_privileged::execute_verify`](../fn.execute_verify.html)), the same
+/// "never trust the caller blindly" posture as the write path, just without
+/// the extra refusal fields that only make sense before a write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyPlan {
+    pub device_path: String,
+    pub iso_path: PathBuf,
+    pub iso_size_bytes: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     Phase { phase: String },
     Progress { bytes_done: u64, bytes_total: u64 },
     Done { written_hash: String },
+    VerifyOk { hash: String },
     Error { message: String, exit_code: i32 },
 }
 
@@ -133,5 +163,32 @@ mod tests {
         device.serial = Some("DIFFERENT".into());
         let err = validate_refreshed_device(&plan(), Some(&device)).unwrap_err();
         assert!(matches!(err, ArgosError::DeviceNotFound(_)));
+    }
+
+    // The `Plan` enum is what actually crosses the privilege boundary as
+    // JSON text -- a serialization mistake here (a typo'd tag, a field that
+    // silently stops round-tripping) would only surface at runtime, against
+    // a real elevated helper process, which is exactly the kind of failure
+    // this test exists to catch cheaply instead.
+    #[test]
+    fn write_plan_round_trips_through_json_as_a_tagged_plan() {
+        let original = Plan::Write(plan());
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains(r#""kind":"write""#));
+        let parsed: Plan = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Plan::Write(p) if p.device_path == "/dev/sdz"));
+    }
+
+    #[test]
+    fn verify_plan_round_trips_through_json_as_a_tagged_plan() {
+        let original = Plan::Verify(VerifyPlan {
+            device_path: "/dev/sdz".into(),
+            iso_path: "/tmp/ubuntu.iso".into(),
+            iso_size_bytes: 4_000_000_000,
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains(r#""kind":"verify""#));
+        let parsed: Plan = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Plan::Verify(p) if p.iso_size_bytes == 4_000_000_000));
     }
 }

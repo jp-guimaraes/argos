@@ -12,11 +12,12 @@ pub mod platform_select;
 pub mod protocol;
 
 use argos_core::error::{ArgosError, Result};
-use argos_core::progress::{CancelToken, ProgressSink};
+use argos_core::image::checksum::sha256_stream;
+use argos_core::progress::{CancelToken, Phase, ProgressSink};
 use argos_core::write::dd_mode;
 use argos_core::{preflight, verify};
 use argos_platform::PlatformOps;
-use protocol::WritePlan;
+use protocol::{VerifyPlan, WritePlan};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
@@ -63,4 +64,32 @@ pub fn execute(plan: &WritePlan, progress: &dyn ProgressSink) -> Result<String> 
     }
 
     Ok(written_hash)
+}
+
+/// Re-runs verification against a device without writing again: hashes
+/// `plan.iso_path` (the `Checksumming` phase -- unlike [`execute`], nothing
+/// upstream of this call has already produced that hash, since there was no
+/// write), then reads `plan.iso_size_bytes` back off `plan.device_path` and
+/// compares (the `Verifying` phase, inside
+/// [`verify::verify_written_image`]). Returns the matched hash on success.
+///
+/// Independently re-resolves `plan.device_path` first, the same
+/// never-trust-the-caller posture [`execute`] uses -- see
+/// [`protocol::VerifyPlan`]'s doc comment for why this doesn't reuse
+/// [`protocol::validate_refreshed_device`]'s fuller TOCTOU refusal: a
+/// read-only operation has no destructive window to guard.
+pub fn execute_verify(plan: &VerifyPlan, progress: &dyn ProgressSink) -> Result<String> {
+    let platform = platform_select::current_platform();
+    platform
+        .refresh(&plan.device_path, None)?
+        .ok_or_else(|| ArgosError::DeviceNotFound(plan.device_path.clone()))?;
+
+    progress.on_phase(Phase::Checksumming);
+    let mut iso = File::open(&plan.iso_path)?;
+    let expected_hash = sha256_stream(&mut iso, |_| {}).map_err(ArgosError::Io)?;
+
+    let mut device = File::open(&plan.device_path)?;
+    verify::verify_written_image(&mut device, plan.iso_size_bytes, &expected_hash, progress)?;
+
+    Ok(expected_hash)
 }
