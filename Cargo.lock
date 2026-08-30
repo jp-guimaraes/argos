@@ -62,6 +62,7 @@ dependencies = [
  "argos-platform-macos",
  "argos-privileged",
  "clap",
+ "console",
  "indicatif",
  "serde_json",
 ]
