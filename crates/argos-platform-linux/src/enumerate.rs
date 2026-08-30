@@ -2,8 +2,10 @@
 //! together with real filesystem reads under `/sys/block` and `/proc/mounts` to
 //! produce the [`Device`] list the rest of Argos consumes.
 
+use crate::dm;
 use crate::mounts::{self, MountEntry};
 use crate::sysfs;
+use crate::udisks2::Udisks2Snapshot;
 use argos_core::device::{Bus, Device};
 use argos_core::error::{ArgosError, Result};
 use std::fs;
@@ -26,6 +28,12 @@ impl Default for LinuxPlatform {
 impl argos_platform::PlatformOps for LinuxPlatform {
     fn list_removable_disks(&self) -> Result<Vec<Device>> {
         let mount_entries = read_proc_mounts()?;
+        // Fetched once per call, not once per device: a single D-Bus round
+        // trip either way, and it's fine for the same snapshot to be
+        // (very slightly) stale across the handful of devices this loop
+        // processes. `None` here just means "cross-check unavailable" --
+        // see read_block_device.
+        let udisks2_snapshot = Udisks2Snapshot::fetch();
         let mut devices = Vec::new();
 
         let sys_block = Path::new("/sys/block");
@@ -41,7 +49,9 @@ impl argos_platform::PlatformOps for LinuxPlatform {
             if sysfs::is_excluded_block_device_name(&name) {
                 continue;
             }
-            if let Some(device) = read_block_device(&name, &mount_entries)? {
+            if let Some(device) =
+                read_block_device(&name, &mount_entries, udisks2_snapshot.as_ref())?
+            {
                 devices.push(device);
             }
         }
@@ -56,17 +66,19 @@ impl argos_platform::PlatformOps for LinuxPlatform {
             None => return Ok(None),
         };
         let mount_entries = read_proc_mounts()?;
-        let device = read_block_device(name, &mount_entries)?;
+        let udisks2_snapshot = Udisks2Snapshot::fetch();
+        let device = read_block_device(name, &mount_entries, udisks2_snapshot.as_ref())?;
         Ok(device.filter(|d| expected_serial.is_none() || d.serial.as_deref() == expected_serial))
     }
 
     fn unmount(&self, device: &Device) -> Result<()> {
         let mount_entries = read_proc_mounts()?;
         let whole_disk = device.platform_id.clone();
-        for mount in mount_entries
-            .iter()
-            .filter(|m| mounts::whole_disk_of(&m.source) == whole_disk)
-        {
+        for mount in mount_entries.iter().filter(|m| {
+            dm::resolve_mount_source(&m.source)
+                .iter()
+                .any(|d| d == &whole_disk)
+        }) {
             let status = std::process::Command::new("umount")
                 .arg(&mount.source)
                 .status()
@@ -96,6 +108,7 @@ impl argos_platform::PlatformOps for LinuxPlatform {
         Ok(mounts::whole_disk_containing_path(
             &mount_entries,
             &canonical,
+            &dm::resolve_mount_source,
         ))
     }
 }
@@ -105,10 +118,15 @@ fn read_proc_mounts() -> Result<Vec<MountEntry>> {
     Ok(mounts::parse_proc_mounts(&contents))
 }
 
-/// Reads everything sysfs (and, when available, the udev database) know about
-/// `/sys/block/<name>`, returning `None` for devices that aren't real disks
-/// (zero size -- e.g. an empty card-reader slot).
-fn read_block_device(name: &str, mount_entries: &[MountEntry]) -> Result<Option<Device>> {
+/// Reads everything sysfs (and, when available, the udev database and a
+/// UDisks2 snapshot) know about `/sys/block/<name>`, returning `None` for
+/// devices that aren't real disks (zero size -- e.g. an empty card-reader
+/// slot).
+fn read_block_device(
+    name: &str,
+    mount_entries: &[MountEntry],
+    udisks2_snapshot: Option<&Udisks2Snapshot>,
+) -> Result<Option<Device>> {
     let sys_path = PathBuf::from("/sys/block").join(name);
 
     let size_sectors: u64 = read_trimmed(&sys_path.join("size"))
@@ -158,10 +176,26 @@ fn read_block_device(name: &str, mount_entries: &[MountEntry]) -> Result<Option<
     };
 
     let platform_id = format!("/dev/{name}");
-    let is_system_disk = mounts::disk_holds_a_critical_mount(mount_entries, &platform_id);
+    let is_system_disk =
+        mounts::disk_holds_a_critical_mount(mount_entries, &platform_id, &dm::resolve_mount_source);
 
     #[allow(unused_mut)]
     let mut os_reports_removable = os_reports_removable;
+
+    // Cross-check against UDisks2, when reachable: defense in depth means
+    // this can only push the verdict towards *more* conservative, never
+    // towards allowing something sysfs/udev alone wouldn't have. A `None`
+    // snapshot (no D-Bus/udisksd) or no entry for this device leaves the
+    // sysfs/udev-derived signals completely untouched.
+    if let Some(info) = udisks2_snapshot.and_then(|s| s.get(&platform_id)) {
+        if !info.looks_removable_usb() {
+            os_reports_removable = false;
+            if bus == Bus::Usb {
+                bus = Bus::Unknown;
+            }
+        }
+    }
+
     #[cfg(feature = "test-overrides")]
     if std::env::var("ARGOS_TEST_FORCE_REMOVABLE").as_deref() == Ok(platform_id.as_str()) {
         os_reports_removable = true;
