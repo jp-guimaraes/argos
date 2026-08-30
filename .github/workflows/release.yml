@@ -1,0 +1,78 @@
+name: Release binaries
+
+# Backlog E10 (#11): builds argos + argos-helper for every host this project
+# supports and attaches them to a GitHub Release. Triggered by pushing a
+# `vX.Y.Z` tag -- nothing here runs on an ordinary push or PR. Uses the
+# GitHub CLI (already on every runner, authenticated via GITHUB_TOKEN)
+# rather than a third-party release action, matching the project's general
+# preference for one fewer thing to trust.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            # macos-latest runners are Apple Silicon; this target cross-
+            # compiles cleanly on them with no extra toolchain setup (Xcode's
+            # clang already supports both Apple Silicon and Intel Mach-O),
+            # confirmed by actually building it this way during development.
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }} -p argos-cli -p argos-privileged
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          stage="argos-${TAG}-${TARGET}"
+          mkdir "$stage"
+          cp "target/${TARGET}/release/argos" "$stage/"
+          cp "target/${TARGET}/release/argos-helper" "$stage/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$stage/"
+          tar czf "${stage}.tar.gz" "$stage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: argos-${{ matrix.target }}
+          path: argos-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the GitHub Release and attach every target's tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/*.tar.gz \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
