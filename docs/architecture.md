@@ -192,9 +192,12 @@ collision preflight checks, require the user to retype the exact device path
 to confirm, then hand a `WritePlan` to `argos-helper` via `pkexec` (preferred
 on Linux) or `sudo`, rendering its progress as an `indicatif` bar.
 
-`argos verify` is wired up (argument parsing, exit codes) but its command body
-still returns `NotImplemented` -- it will reuse `argos_core::verify` against
-an already-written device without writing again.
+`argos verify` re-runs post-write verification against a device without
+writing again, hashing the ISO (the `Checksumming` phase) and comparing it
+against a fresh read of the device (`argos_core::verify`), via the same
+`argos-helper` elevation path `argos write` uses -- reading a raw device
+needs the same privilege writing does. The `argos`<->`argos-helper` IPC is a
+tagged `Plan` (`Write`/`Verify`) rather than always a `WritePlan`.
 
 ## Status
 
@@ -206,7 +209,7 @@ an already-written device without writing again.
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI** (BIOS/legacy not tested yet). macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
-| `argos verify` (standalone) | Argument parsing only |
+| `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
 | Packaging/distribution | Not started |
 
 ## Prior art consulted
