@@ -41,8 +41,23 @@ binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on
 first launch until you approve it once in System Settings -> Privacy &
 Security.
 
-No release has been tagged yet while v1.0 is still being finished. Until
-then, build from source:
+No release has been tagged yet while v1.0 is still being finished; the
+tarballs above will start appearing once one is.
+
+### Via `cargo install`
+
+```sh
+cargo install argos-cli argos-privileged
+```
+
+Installs both `argos` (from the `argos-cli` crate) and `argos-helper` (from
+the separate, privilege-separated `argos-privileged` crate -- see
+[`docs/architecture.md`](docs/architecture.md)) into `cargo`'s install
+directory (`~/.cargo/bin` by default), which is what puts them next to each
+other. Passing only `argos-cli` installs `argos` without the helper binary it
+needs at runtime -- always install both together.
+
+### From source
 
 ```sh
 git clone https://github.com/jp-guimaraes/argos.git
