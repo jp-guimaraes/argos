@@ -138,6 +138,21 @@ readable" dialog afterward (Disk Arbitration not recognizing the freshly
 Linux-formatted disk) -- expected and harmless, same as any raw `dd`-written
 Linux USB on macOS; dismissed with Ignore, never Initialize.
 
+That Alpine `virt` drive booted on the test UEFI machine (a Microsoft
+Surface) but hung part way through the kernel's own hardware
+initialization, past the point Argos or the bootloader are involved --
+consistent with `virt`'s minimal driver set meeting Surface's
+non-standard firmware/controllers, not with a bad write (the byte-exact
+re-hash above already rules that out). A second write to the same drive,
+this time a real, official Ubuntu 22.04.5 LTS Desktop ISO
+(checksum-verified against Canonical's published `SHA256SUMS` before
+writing; `argos-helper`'s own post-write verification passing was this
+run's write-correctness check, rather than a second external re-hash),
+booted successfully on that same Surface -- full live GNOME session, not
+just a bootloader handoff. Confirms the DD-mode write path end-to-end on
+macOS with real, popular-distro media, matching what Linux already
+confirmed with the same ISO family.
+
 ### `argos-platform-windows`
 
 Returns `ArgosError::NotImplemented` from every method and has no public
@@ -190,7 +205,7 @@ an already-written device without writing again.
 | Linux disk enumeration | Implemented (sysfs + udev database), tested for the pure parsing logic |
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
-| `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI** (BIOS/legacy not tested yet). macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly -- boot not tested (no spare machine to boot it on from this environment). Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
+| `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI** (BIOS/legacy not tested yet). macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. Known small gap: `argos write` does not yet call `PlatformOps::eject` after a successful write. Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Argument parsing only |
 | Packaging/distribution | Not started |
 
