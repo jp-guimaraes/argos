@@ -20,14 +20,36 @@ Argos is under active, early development. The current scope (v1) targets:
 
 - **Images**: Linux ISOs only (including isohybrid images), written
   byte-for-byte in "DD mode". Windows image support is a planned future phase.
-- **Hosts**: Linux (implemented) and macOS (planned). Windows-as-host is out
-  of scope for now.
+- **Hosts**: Linux and macOS, both implemented. Windows-as-host is out of
+  scope for now.
 - **Interface**: a CLI (`argos`), architected so a GUI can be added later
   without reworking the core logic.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and a
 per-area status table, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to
 build and test the project.
+
+## Installation
+
+Pre-built binaries for Linux (`x86_64-unknown-linux-gnu`) and macOS
+(`aarch64-apple-darwin`, `x86_64-apple-darwin`) are attached to each
+[GitHub Release](https://github.com/jp-guimaraes/argos/releases) -- download
+the tarball for your platform, extract it, and put `argos` and
+`argos-helper` somewhere on your `PATH` (both binaries must stay in the same
+directory; `argos` looks for `argos-helper` next to itself first). Neither
+binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on
+first launch until you approve it once in System Settings -> Privacy &
+Security.
+
+No release has been tagged yet while v1.0 is still being finished. Until
+then, build from source:
+
+```sh
+git clone https://github.com/jp-guimaraes/argos.git
+cd argos
+cargo build --release -p argos-cli -p argos-privileged
+# binaries land in target/release/argos and target/release/argos-helper
+```
 
 ## Inspiration
 
