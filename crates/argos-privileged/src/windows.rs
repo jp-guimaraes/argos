@@ -38,6 +38,14 @@ use std::path::Path;
 /// `assets/PROVENANCE.md` for what's in it and where it came from.
 const UEFI_NTFS_IMAGE: &[u8] = include_bytes!("../assets/uefi-ntfs.img");
 
+/// The vendored boot image's size, for building the same `WindowsPartitionPlan`
+/// this module does -- exposed so `argos-cli` (backlog #27, W5) can show the
+/// two-partition layout in its confirmation prompt before elevating, without
+/// this crate's embedded asset needing to be duplicated or guessed at.
+pub fn uefi_ntfs_image_size_bytes() -> u64 {
+    UEFI_NTFS_IMAGE.len() as u64
+}
+
 /// What [`execute_write_windows_image`] returns on success: not a single
 /// hash the way [`crate::execute`]'s DD-mode write returns one, since there
 /// is no one meaningful whole-device hash for a two-partition layout. W4
