@@ -51,4 +51,8 @@ impl PlatformOps for WindowsPlatform {
     fn unmount_path(&self, _mount_path: &Path) -> Result<()> {
         Err(ArgosError::NotImplemented("Windows host support (phase 2)"))
     }
+
+    fn partition_device_path(&self, _device: &Device, _partition_number: u32) -> String {
+        unreachable!("no public constructor -- see this module's doc comment")
+    }
 }

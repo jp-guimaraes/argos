@@ -46,8 +46,8 @@ pub enum ArgosError {
         actual: String,
     },
 
-    #[error("writing or verifying a Windows installer image requires a Linux host with ntfs-3g installed, for now")]
-    WindowsImageRequiresLinux,
+    #[error("writing or verifying a Windows installer image requires a Linux or macOS host with ntfs-3g installed (on macOS, via Homebrew + macFUSE), for now")]
+    WindowsImageHostNotSupported,
 
     #[error("operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use")]
     Cancelled,
@@ -78,7 +78,7 @@ impl ArgosError {
             ArgosError::NotWindowsInstallerIso(_) => 21,
             ArgosError::WindowsPartitionLayoutMismatch(_) => 22,
             ArgosError::WindowsFileMismatch { .. } => 23,
-            ArgosError::WindowsImageRequiresLinux => 24,
+            ArgosError::WindowsImageHostNotSupported => 24,
         }
     }
 }

@@ -63,8 +63,8 @@ fn run_dd_verify(args: &Args) -> Result<()> {
 /// The Windows-write counterpart to [`run_dd_verify`] above (backlog #27,
 /// W5): same shape, against `Plan::VerifyWindowsImage` instead.
 fn run_windows_verify(args: &Args) -> Result<()> {
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::WindowsImageRequiresLinux);
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return Err(ArgosError::WindowsImageHostNotSupported);
     }
 
     let plan = VerifyWindowsPlan {

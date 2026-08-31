@@ -117,7 +117,7 @@ impl argos_platform::PlatformOps for LinuxPlatform {
     }
 
     fn mount_ntfs_partition(&self, device: &Device, partition_number: u32) -> Result<PathBuf> {
-        let partition_path = mounts::partition_device_path(&device.platform_id, partition_number);
+        let partition_path = self.partition_device_path(device, partition_number);
         let mountpoint = tempfile::Builder::new()
             .prefix("argos-windows-write-")
             .tempdir()
@@ -151,6 +151,10 @@ impl argos_platform::PlatformOps for LinuxPlatform {
             ))));
         }
         Ok(())
+    }
+
+    fn partition_device_path(&self, device: &Device, partition_number: u32) -> String {
+        mounts::partition_device_path(&device.platform_id, partition_number)
     }
 }
 

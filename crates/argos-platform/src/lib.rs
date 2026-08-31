@@ -56,4 +56,14 @@ pub trait PlatformOps {
 
     /// Unmounts a path previously returned by [`mount_ntfs_partition`].
     fn unmount_path(&self, mount_path: &Path) -> Result<()>;
+
+    /// Resolves partition `partition_number`'s (1-indexed, matching GPT
+    /// partition numbers) device path on `device`'s whole disk (backlog #34,
+    /// WM1) -- the platform-specific partition-path convention (`/dev/sdb` +
+    /// 1 -> `/dev/sdb1`, `/dev/disk4` + 1 -> `/dev/disk4s1`). Needed by
+    /// `argos-privileged::windows` to open the boot and Windows partitions
+    /// directly (for the boot-partition `dd` and `mkfs.ntfs`, both of which
+    /// happen outside [`mount_ntfs_partition`]) without that crate hardcoding
+    /// any one platform's naming scheme itself.
+    fn partition_device_path(&self, device: &Device, partition_number: u32) -> String;
 }

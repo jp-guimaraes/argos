@@ -25,3 +25,6 @@ argos-platform = { workspace = true }
 # Pinned below 1.8 deliberately: plist 1.8+ raises its MSRV past this
 # workspace's rust-version (1.75).
 plist = "1.7"
+# A fresh mountpoint directory for mount_ntfs_partition (backlog #34, WM1) --
+# same use as argos-platform-linux's copy of this dependency.
+tempfile = "3"

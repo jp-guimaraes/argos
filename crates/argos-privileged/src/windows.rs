@@ -1,16 +1,19 @@
-//! The UEFI:NTFS write path (backlog #27, W3): creates a real GPT (via
-//! `gptman`), `dd`s the vendored UEFI:NTFS boot image as partition 1, then
-//! formats, mounts, and copies the source ISO's file tree onto partition 2 as
-//! NTFS. See `docs/architecture.md`'s phase 2 guiding decisions for why this
-//! exists at all, and `CONTRIBUTING.md`'s scoped exception for why this
-//! crate -- otherwise kept deliberately minimal -- reads the ISO's file tree
-//! directly instead of leaving that to the unprivileged `argos` process.
+//! The UEFI:NTFS write path (backlog #27, W3; extended to macOS by backlog
+//! #34): creates a real GPT (via `gptman`), `dd`s the vendored UEFI:NTFS boot
+//! image as partition 1, then formats, mounts, and copies the source ISO's
+//! file tree onto partition 2 as NTFS. See `docs/architecture.md`'s phase 2
+//! and phase 3 guiding decisions for why this exists at all, and
+//! `CONTRIBUTING.md`'s scoped exception for why this crate -- otherwise kept
+//! deliberately minimal -- reads the ISO's file tree directly instead of
+//! leaving that to the unprivileged `argos` process.
 //!
-//! Linux only, for now: every step past the initial checks calls into
-//! [`argos_platform::PlatformOps`], whose Windows-write methods are
-//! unimplemented on every other backend (see `docs/architecture.md`), so
-//! this fails fast and honestly rather than partitioning a disk it can't
-//! finish setting up.
+//! Linux and macOS only: every step past the initial checks calls into
+//! [`argos_platform::PlatformOps`], whose Windows-write methods (including
+//! [`argos_platform::PlatformOps::partition_device_path`], which this module
+//! uses instead of hardcoding any one platform's partition-naming
+//! convention) are unimplemented on every other backend (see
+//! `docs/architecture.md`), so this fails fast and honestly rather than
+//! partitioning a disk it can't finish setting up.
 
 use crate::protocol::{
     validate_refreshed_device_for_windows_write, VerifyWindowsPlan, WriteWindowsPlan,
@@ -68,9 +71,9 @@ pub fn execute_write_windows_image(
     // Fails fast and honestly (matching what W5's CLI wiring will surface)
     // rather than partitioning a disk on a platform this write path cannot
     // finish setting up -- see this module's doc comment.
-    if !cfg!(target_os = "linux") {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Err(ArgosError::NotImplemented(
-            "Windows installer write support (non-Linux)",
+            "Windows installer write support (non-Linux, non-macOS)",
         ));
     }
 
@@ -109,12 +112,12 @@ pub fn execute_write_windows_image(
     platform.reread_partition_table(&device)?;
 
     progress.on_phase(Phase::Writing);
-    let boot_partition_path = linux_partition_device_path(&plan.device_path, 1);
+    let boot_partition_path = platform.partition_device_path(&device, 1);
     wait_for_path(&boot_partition_path)?;
     let boot_partition_hash = write_boot_partition(&boot_partition_path, progress)?;
 
     progress.on_phase(Phase::FormattingNtfs);
-    let windows_partition_path = linux_partition_device_path(&plan.device_path, 2);
+    let windows_partition_path = platform.partition_device_path(&device, 2);
     wait_for_path(&windows_partition_path)?;
     format_ntfs(&windows_partition_path)?;
 
@@ -164,9 +167,9 @@ pub fn execute_verify_windows_image(
     plan: &VerifyWindowsPlan,
     progress: &dyn ProgressSink,
 ) -> Result<WindowsVerifyOutcome> {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Err(ArgosError::NotImplemented(
-            "Windows installer verify support (non-Linux)",
+            "Windows installer verify support (non-Linux, non-macOS)",
         ));
     }
 
@@ -187,7 +190,7 @@ pub fn execute_verify_windows_image(
     let (boot_observed, windows_observed) = read_observed_partitions(&plan.device_path)?;
     verify_windows_partition_layout(&layout, boot_observed, windows_observed)?;
 
-    let boot_partition_path = linux_partition_device_path(&plan.device_path, 1);
+    let boot_partition_path = platform.partition_device_path(&device, 1);
     verify_boot_partition(&boot_partition_path)?;
 
     progress.on_phase(Phase::Mounting);
@@ -348,9 +351,10 @@ fn write_partition_table(device_path: &str, layout: &WindowsPartitionPlan) -> Re
     Ok(())
 }
 
-/// 16 cryptographically random bytes, read from `/dev/urandom` -- Linux
-/// only (matching the rest of this write path), and dependency-free rather
-/// than pulling in a `uuid`/`rand` crate just for this.
+/// 16 cryptographically random bytes, read from `/dev/urandom` -- present
+/// and equivalent on both Linux and macOS (the two hosts this write path
+/// supports), and dependency-free rather than pulling in a `uuid`/`rand`
+/// crate just for this.
 fn random_guid() -> Result<[u8; 16]> {
     let mut buf = [0u8; 16];
     File::open("/dev/urandom")
@@ -386,21 +390,6 @@ fn wait_for_path(path: &str) -> Result<()> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
-    }
-}
-
-/// The Linux partition-device-path convention (`/dev/sdb` + 1 ->
-/// `/dev/sdb1`, `/dev/nvme0n1` + 1 -> `/dev/nvme0n1p1`), duplicated from
-/// `argos-platform-linux::mounts::partition_device_path` rather than
-/// depended on: that crate's helper is private, and this is the one other
-/// place (besides mounting, which already goes through `PlatformOps`) that
-/// needs to turn a whole-disk path into a specific partition's path, to
-/// open it directly for the boot-partition `dd` and `mkfs.ntfs` below.
-fn linux_partition_device_path(whole_disk: &str, partition_number: u32) -> String {
-    if whole_disk.ends_with(|c: char| c.is_ascii_digit()) {
-        format!("{whole_disk}p{partition_number}")
-    } else {
-        format!("{whole_disk}{partition_number}")
     }
 }
 

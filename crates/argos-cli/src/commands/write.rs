@@ -99,8 +99,8 @@ fn run_dd_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Re
 /// already declined for the copy step itself. `argos verify` covers it as
 /// its own explicit step instead.
 fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::WindowsImageRequiresLinux);
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return Err(ArgosError::WindowsImageHostNotSupported);
     }
 
     let layout = windows_partition_plan_for(&args.iso)?;
@@ -251,6 +251,20 @@ fn confirm_windows_write_or_abort(
         helper::human_size(layout.windows_partition.start_offset_bytes)
     );
     println!();
+    // Not silent about the one non-obvious host prerequisite (backlog #34,
+    // WM4): unlike Linux, where `apt-get install ntfs-3g` is enough, macOS
+    // additionally needs the macFUSE system extension approved by hand in
+    // System Settings before ntfs-3g can mount anything -- a step nothing
+    // here can do on the user's behalf, so it's surfaced up front rather
+    // than only as an error partway through an elevated write.
+    if cfg!(target_os = "macos") {
+        println!(
+            "Note: on macOS this requires ntfs-3g (e.g. `brew install --cask macfuse && \
+             brew install ntfs-3g-mac`) with the macFUSE system extension already approved \
+             in System Settings > Privacy & Security."
+        );
+        println!();
+    }
     println!(
         "This will PERMANENTLY ERASE all data on {}.",
         device.platform_id

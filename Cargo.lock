@@ -114,6 +114,7 @@ dependencies = [
  "argos-core",
  "argos-platform",
  "plist",
+ "tempfile",
 ]
 
 [[package]]

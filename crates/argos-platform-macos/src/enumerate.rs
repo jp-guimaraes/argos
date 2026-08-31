@@ -81,17 +81,7 @@ impl argos_platform::PlatformOps for MacOsPlatform {
         // unmounts every mounted volume implied by the disk (including ones
         // behind an APFS container), which is what's needed before this
         // disk can be opened exclusively for a DD-mode write.
-        let status = Command::new("diskutil")
-            .args(["unmountDisk", &device.platform_id])
-            .status()
-            .map_err(ArgosError::Io)?;
-        if !status.success() {
-            return Err(ArgosError::Io(std::io::Error::other(format!(
-                "diskutil unmountDisk {} exited with {status}",
-                device.platform_id
-            ))));
-        }
-        Ok(())
+        unmount_whole_disk(&device.platform_id)
     }
 
     fn eject(&self, device: &Device) -> Result<()> {
@@ -117,27 +107,103 @@ impl argos_platform::PlatformOps for MacOsPlatform {
         Ok(Some(format!("/dev/{parent}")))
     }
 
-    // Windows installer writes (backlog #27) are Linux-only for now -- see
-    // `docs/architecture.md`'s phase 2 guiding decisions for why (macOS's
-    // only NTFS-write path, ntfs-3g via Homebrew on macFUSE, isn't reliably
-    // testable). A clear, honest error here rather than pretending to
-    // support a write path nothing has verified on this platform.
-    fn reread_partition_table(&self, _device: &Device) -> Result<()> {
-        Err(ArgosError::NotImplemented(
-            "Windows installer write support (macOS, phase 2)",
-        ))
+    // Windows installer writes (backlog #27, extended to macOS by backlog
+    // #34/WM1) -- see `docs/architecture.md`'s phase 3 guiding decisions for
+    // the macFUSE/ntfs-3g prerequisite and why `diskutil unmountDisk` doubles
+    // as this platform's "reread the partition table" primitive.
+    fn reread_partition_table(&self, device: &Device) -> Result<()> {
+        // macOS has no BLKRRPART-style ioctl: DiskArbitration discovers a
+        // freshly-written GPT on its own, but only after being nudged --
+        // `diskutil unmountDisk` is the idiomatic way to force that
+        // re-probe (the same command `PlatformOps::unmount` already uses),
+        // and it also guards against the exact race the module doc for
+        // `argos-platform-macos` warns about: `diskarbitrationd` noticing
+        // the new partitions and trying to auto-mount one mid-write. Calling
+        // it again here, right after the GPT write, closes that window
+        // before the caller opens any partition device directly.
+        unmount_whole_disk(&device.platform_id)
     }
 
-    fn mount_ntfs_partition(&self, _device: &Device, _partition_number: u32) -> Result<PathBuf> {
-        Err(ArgosError::NotImplemented(
-            "Windows installer write support (macOS, phase 2)",
-        ))
+    fn mount_ntfs_partition(&self, device: &Device, partition_number: u32) -> Result<PathBuf> {
+        let partition_path = self.partition_device_path(device, partition_number);
+
+        // Best-effort: macOS's own built-in (read-only) NTFS driver can
+        // auto-mount a partition as soon as `mkfs.ntfs` gives it a valid
+        // NTFS filesystem, racing this call. ntfs-3g can't mount an
+        // already-mounted device, so clear that first -- a no-op, not an
+        // error, when nothing was mounted yet.
+        let _ = Command::new("diskutil")
+            .args(["unmount", &partition_path])
+            .status();
+
+        let mountpoint = tempfile::Builder::new()
+            .prefix("argos-windows-write-")
+            .tempdir()
+            .map_err(ArgosError::Io)?
+            .keep();
+
+        let status = Command::new("ntfs-3g")
+            .arg(&partition_path)
+            .arg(&mountpoint)
+            .status()
+            .map_err(|err| ntfs_3g_error(err, "mount"))?;
+        if !status.success() {
+            return Err(ArgosError::Io(std::io::Error::other(format!(
+                "ntfs-3g {} {} exited with {status}",
+                partition_path,
+                mountpoint.display()
+            ))));
+        }
+        Ok(mountpoint)
     }
 
-    fn unmount_path(&self, _mount_path: &Path) -> Result<()> {
-        Err(ArgosError::NotImplemented(
-            "Windows installer write support (macOS, phase 2)",
-        ))
+    fn unmount_path(&self, mount_path: &Path) -> Result<()> {
+        let status = Command::new("diskutil")
+            .arg("unmount")
+            .arg(mount_path)
+            .status()
+            .map_err(ArgosError::Io)?;
+        if !status.success() {
+            return Err(ArgosError::Io(std::io::Error::other(format!(
+                "diskutil unmount {} exited with {status}",
+                mount_path.display()
+            ))));
+        }
+        Ok(())
+    }
+
+    fn partition_device_path(&self, device: &Device, partition_number: u32) -> String {
+        diskutil::partition_device_path(&device.platform_id, partition_number)
+    }
+}
+
+fn unmount_whole_disk(platform_id: &str) -> Result<()> {
+    let status = Command::new("diskutil")
+        .args(["unmountDisk", platform_id])
+        .status()
+        .map_err(ArgosError::Io)?;
+    if !status.success() {
+        return Err(ArgosError::Io(std::io::Error::other(format!(
+            "diskutil unmountDisk {platform_id} exited with {status}"
+        ))));
+    }
+    Ok(())
+}
+
+/// Wraps a failure to even spawn `ntfs-3g` with a pointer at the actual
+/// prerequisite (macFUSE, approved in System Settings) rather than a bare
+/// "No such file or directory" -- the one relaxation of "no shelling out"
+/// backlog #27's phase 2 guiding decisions call for is far less discoverable
+/// on macOS than on Linux, since nothing here can `apt-get install` it.
+fn ntfs_3g_error(err: std::io::Error, action: &str) -> ArgosError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        ArgosError::Io(std::io::Error::other(format!(
+            "could not run ntfs-3g to {action} the Windows partition: {err} -- install it \
+             (e.g. `brew install --cask macfuse && brew install ntfs-3g-mac`) and approve the \
+             macFUSE system extension in System Settings > Privacy & Security, then try again"
+        )))
+    } else {
+        ArgosError::Io(err)
     }
 }
 

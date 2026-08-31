@@ -106,6 +106,18 @@ pub fn whole_disk_of(identifier: &str) -> String {
     }
 }
 
+/// The macOS partition-path convention (`disk4` + 1 -> `disk4s1`), the
+/// `argos-platform-macos` mirror of `argos-platform-linux::mounts::
+/// partition_device_path` (backlog #34, WM1). Unlike Linux, there's no
+/// digit-suffix special case to worry about: a macOS whole-disk identifier
+/// is always `disk` followed by digits, so `s<N>` is unambiguous either way.
+/// `whole_disk` is expected in `/dev/diskN` form (as [`Device::platform_id`]
+/// always is on this backend -- see `device_from_info`), and is returned in
+/// the same form.
+pub fn partition_device_path(whole_disk: &str, partition_number: u32) -> String {
+    format!("{whole_disk}s{partition_number}")
+}
+
 /// Resolves the physical whole disk actually holding `container` (the
 /// `DiskInfo` of a disk identified by [`DiskInfo::parent_whole_disk`]),
 /// walking through a synthesized APFS container to the physical partition
@@ -363,5 +375,16 @@ mod tests {
     fn resolve_physical_system_disk_falls_back_when_not_a_container() {
         let plain = parse_disk_info(INTERNAL_WHOLE_DISK.as_bytes()).unwrap();
         assert_eq!(resolve_physical_system_disk(&plain), "disk0");
+    }
+
+    #[test]
+    fn partition_device_path_uses_an_s_separator() {
+        assert_eq!(partition_device_path("/dev/disk4", 1), "/dev/disk4s1");
+        assert_eq!(partition_device_path("/dev/disk4", 2), "/dev/disk4s2");
+    }
+
+    #[test]
+    fn partition_device_path_handles_multi_digit_disk_numbers() {
+        assert_eq!(partition_device_path("/dev/disk10", 2), "/dev/disk10s2");
     }
 }
