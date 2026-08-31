@@ -1,9 +1,11 @@
 //! Shared machinery for talking to the privileged `argos-helper` process:
 //! locating the binary, elevating (`pkexec`/`sudo`), feeding it a `Plan` as
 //! JSON on stdin, and turning its `Event` stream into human-visible
-//! progress. Used by both `write` (which sends `Plan::Write`) and `verify`
-//! (which sends `Plan::Verify`) -- the only difference between the two, from
-//! here, is which terminal event carries the hash they print.
+//! progress. Used by `write` and `verify` for both the DD-mode plans
+//! (`Plan::Write`/`Plan::Verify`) and the Windows installer ones
+//! (`Plan::WriteWindowsImage`/`Plan::VerifyWindowsImage`) -- the only
+//! difference between them, from here, is which terminal event carries the
+//! summary string each command prints.
 
 use argos_core::error::{ArgosError, Result};
 use argos_privileged::protocol::{Event, Plan};
@@ -88,21 +90,18 @@ fn stream_helper_events<R: std::io::Read>(
                 bytes_copied,
             } => {
                 // `run_plan`'s single-hash `Result<String>` contract doesn't
-                // really fit a two-partition write (there's no one
-                // meaningful whole-device hash -- see
+                // really fit a two-partition write -- there's no one
+                // meaningful whole-device hash for it (see
                 // `argos_privileged::windows::WindowsWriteOutcome`'s doc
-                // comment). Nothing sends `Plan::WriteWindowsImage` yet (W5,
-                // still pending); this is a placeholder summary just to keep
-                // this match exhaustive until the CLI wiring lands and can
-                // decide what a Windows write should actually report.
+                // comment), so this reports a file/byte summary instead;
+                // `write::run_windows_write` is what prints it.
                 presenter.finish("done");
                 outcome = Some(Ok(format!(
-                    "{files_copied} files, {bytes_copied} bytes copied"
+                    "{files_copied} files copied ({})",
+                    human_size(bytes_copied)
                 )));
             }
             Event::WindowsVerifyOk { files_verified } => {
-                // Same placeholder posture as `WindowsDone` above: nothing
-                // sends `Plan::VerifyWindowsImage` yet (W5, still pending).
                 presenter.finish("verified");
                 outcome = Some(Ok(format!("{files_verified} files verified")));
             }

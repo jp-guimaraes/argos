@@ -9,12 +9,12 @@ use super::helper;
 use crate::platform_select::current_platform;
 use argos_core::device::Device;
 use argos_core::error::{ArgosError, Result};
-use argos_core::image;
-use argos_core::preflight;
+use argos_core::partition::windows::WindowsPartitionPlan;
+use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
-use argos_privileged::protocol::{Plan, WritePlan};
+use argos_privileged::protocol::{Plan, WritePlan, WriteWindowsPlan};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Args {
     pub iso: PathBuf,
@@ -33,11 +33,20 @@ pub fn run(args: Args) -> Result<()> {
 
     check_device_is_offerable(&device, args.i_know_what_im_doing)?;
 
-    let classification = image::classify(&args.iso)?;
-    if !classification.is_writable_as_dd_image() {
-        return Err(ArgosError::UnsupportedIso(args.iso.clone()));
+    // Linux-hybrid ISOs (DD mode) first, since that's the overwhelmingly
+    // common case; only try the Windows-installer shape (UDF/ISO9660, see
+    // `image::windows`) once that's ruled out. A plain-data or corrupt image
+    // matches neither and falls through to `UnsupportedIso` below.
+    if image::classify(&args.iso)?.is_writable_as_dd_image() {
+        return run_dd_write(&platform, &device, &args);
     }
+    if image::windows::classify(&args.iso)?.is_windows_installer_iso() {
+        return run_windows_write(&platform, &device, &args);
+    }
+    Err(ArgosError::UnsupportedIso(args.iso.clone()))
+}
 
+fn run_dd_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
     let image_size_bytes = std::fs::metadata(&args.iso)?.len();
     preflight::check_capacity(
         &device.platform_id,
@@ -54,7 +63,7 @@ pub fn run(args: Args) -> Result<()> {
         )?;
     }
 
-    confirm_or_abort(&device, &args.iso, image_size_bytes)?;
+    confirm_or_abort(device, &args.iso, image_size_bytes)?;
 
     let plan = WritePlan {
         device_path: device.platform_id.clone(),
@@ -69,10 +78,80 @@ pub fn run(args: Args) -> Result<()> {
     println!("Done. SHA-256: {written_hash}");
 
     if !args.no_eject {
-        eject_best_effort(&platform, &device);
+        eject_best_effort(platform, device);
     }
 
     Ok(())
+}
+
+/// The UEFI:NTFS write path (backlog #27, W5): same shape as
+/// [`run_dd_write`] above (preflight, confirm, invoke `argos-helper`,
+/// eject), but against `Plan::WriteWindowsImage` instead, and with a
+/// two-partition layout to show instead of a single image size.
+///
+/// Unlike DD mode, there's no inline post-write verification here (no
+/// `plan.verify` field on `WriteWindowsPlan` at all -- `--no-verify` simply
+/// doesn't apply to a Windows write): `execute_write_windows_image` already
+/// runs as one privileged elevation covering partition+format+copy, and
+/// bolting a second, separate verify pass onto that would mean either a
+/// second `pkexec`/`sudo` prompt or turning the one-shot IPC protocol into a
+/// stateful one -- the same tradeoff `CONTRIBUTING.md`'s scoped exception
+/// already declined for the copy step itself. `argos verify` covers it as
+/// its own explicit step instead.
+fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        return Err(ArgosError::WindowsImageRequiresLinux);
+    }
+
+    let layout = windows_partition_plan_for(&args.iso)?;
+    preflight::check_windows_capacity(&device.platform_id, device.size_bytes, &args.iso, &layout)?;
+
+    if let Some(backing_device_id) = platform.backing_device_of(&args.iso)? {
+        preflight::check_no_source_target_collision(
+            &args.iso,
+            &backing_device_id,
+            &device.platform_id,
+        )?;
+    }
+
+    confirm_windows_write_or_abort(device, &args.iso, &layout)?;
+
+    let plan = WriteWindowsPlan {
+        device_path: device.platform_id.clone(),
+        expected_serial: device.serial.clone(),
+        expected_size_bytes: device.size_bytes,
+        iso_path: args.iso.clone(),
+    };
+
+    let outcome = helper::run_plan(&Plan::WriteWindowsImage(plan))?;
+    println!("Done. {outcome}.");
+    println!(
+        "Run `argos verify {} {}` to confirm it.",
+        device.platform_id,
+        args.iso.display()
+    );
+
+    if !args.no_eject {
+        eject_best_effort(platform, device);
+    }
+
+    Ok(())
+}
+
+/// Builds the same [`WindowsPartitionPlan`] `execute_write_windows_image`
+/// will independently recompute -- purely for display in the confirmation
+/// prompt below; the privileged side never trusts this one, the same
+/// never-trust-the-caller posture the rest of the Windows write path uses.
+fn windows_partition_plan_for(iso: &Path) -> Result<WindowsPartitionPlan> {
+    let files_total_size_bytes: u64 = image::windows::WindowsIso::open(iso)?
+        .list_files()?
+        .iter()
+        .map(|f| f.size)
+        .sum();
+    Ok(WindowsPartitionPlan::new(
+        argos_privileged::windows::uefi_ntfs_image_size_bytes(),
+        files_total_size_bytes,
+    ))
 }
 
 /// Ejects the just-written device. Never fails the command over this: the
@@ -108,7 +187,7 @@ fn check_device_is_offerable(device: &Device, i_know_what_im_doing: bool) -> Res
 
 /// Requires the user to retype the exact device path -- not just "y/N" -- so a
 /// hasty Enter can't confirm the wrong drive.
-fn confirm_or_abort(device: &Device, iso: &std::path::Path, image_size_bytes: u64) -> Result<()> {
+fn confirm_or_abort(device: &Device, iso: &Path, image_size_bytes: u64) -> Result<()> {
     println!("About to overwrite:");
     println!(
         "  device:  {} ({})",
@@ -121,6 +200,56 @@ fn confirm_or_abort(device: &Device, iso: &std::path::Path, image_size_bytes: u6
     );
     println!("  image:   {}", iso.display());
     println!("  image size: {}", helper::human_size(image_size_bytes));
+    println!();
+    println!(
+        "This will PERMANENTLY ERASE all data on {}.",
+        device.platform_id
+    );
+    print!("Type the device path ({}) to confirm: ", device.platform_id);
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    if input.trim() != device.platform_id {
+        println!("Confirmation did not match; aborting. Nothing was written.");
+        return Err(ArgosError::Cancelled);
+    }
+    Ok(())
+}
+
+/// The Windows-write counterpart to [`confirm_or_abort`] above: same
+/// retype-the-device-path guard, but shows the two-partition layout Argos is
+/// about to create (backlog #27, W5) instead of a single image size, since
+/// there's no single "image size" for a two-partition write to show.
+fn confirm_windows_write_or_abort(
+    device: &Device,
+    iso: &Path,
+    layout: &WindowsPartitionPlan,
+) -> Result<()> {
+    println!("About to overwrite:");
+    println!(
+        "  device:  {} ({})",
+        device.platform_id, device.display_name
+    );
+    println!("  size:    {}", helper::human_size(device.size_bytes));
+    println!(
+        "  serial:  {}",
+        device.serial.as_deref().unwrap_or("unknown")
+    );
+    println!("  image:   {} (Windows installer)", iso.display());
+    println!();
+    println!("Argos will create a new partition table with:");
+    println!(
+        "  partition 1 (EFI boot, FAT):       {} at offset {}",
+        helper::human_size(layout.boot_partition.size_bytes),
+        helper::human_size(layout.boot_partition.start_offset_bytes)
+    );
+    println!(
+        "  partition 2 (Windows files, NTFS): {} at offset {}",
+        helper::human_size(layout.windows_partition.size_bytes),
+        helper::human_size(layout.windows_partition.start_offset_bytes)
+    );
     println!();
     println!(
         "This will PERMANENTLY ERASE all data on {}.",

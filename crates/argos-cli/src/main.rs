@@ -19,14 +19,16 @@ struct Cli {
 enum Command {
     /// List disks Argos can see, and whether each looks safe to write to.
     List,
-    /// Write a Linux ISO image to a device.
+    /// Write a Linux or Windows installer ISO image to a device.
     Write {
         /// Path to the ISO image.
         iso: PathBuf,
         /// Target device, e.g. /dev/sdb.
         #[arg(long)]
         device: String,
-        /// Skip the post-write read-back verification.
+        /// Skip the post-write read-back verification. Linux ISOs only --
+        /// a Windows installer write is never verified inline; run `argos
+        /// verify` afterward for that.
         #[arg(long)]
         no_verify: bool,
         /// Don't eject the device after a successful write.
