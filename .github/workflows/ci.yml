@@ -77,7 +77,7 @@ jobs:
       - run: |
           sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
             --features test-overrides --test write_windows_image \
-            -- --ignored --nocapture
+            -- --ignored --nocapture --test-threads=1
 
   dm-resolution-tests:
     name: device-mapper resolution integration tests (root)

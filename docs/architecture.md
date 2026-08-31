@@ -151,6 +151,17 @@ ordinary files and in-memory buffers -- no root, no real hardware.
   whether it needs adjusting) -- and `total_bytes_required` folds in the
   primary/backup GPT structure overhead for the capacity preflight check
   above. W3 turns this plan into a real GPT via `gptman`.
+- `verify` (backlog #27, W4): `verify_windows_partition_layout` and
+  `verify_windows_file_hash` are the Windows-write path's counterpart to
+  `verify_written_image` above -- deliberately *not* a reuse of it, since
+  that function assumes one meaningful whole-device hash, and a
+  two-partition layout has none. Both are pure comparisons over plain data
+  (`ObservedPartition` wraps a partition type GUID + region, carrying no
+  `gptman` type -- only `argos-privileged`, which does the actual reading,
+  links that crate), so they're unit-tested the same way as everything else
+  here: no disk, no privilege. `argos_privileged::windows::execute_verify_windows_image`
+  is what actually reads a real GPT and mounted NTFS partition and calls
+  into these.
 
 ### `argos-platform` / `argos-platform-linux`
 
@@ -326,8 +337,29 @@ devices right after the GPT write, before formatting/mounting need them to.
 Exercised against a real file-backed loop device in
 `crates/argos-privileged/tests/write_windows_image.rs` (root + `losetup` +
 `mkfs.ntfs` + `ntfs-3g` gated, same posture as backlog E9's loop-device
-tests) -- not yet run against real hardware (that's W6) or wired into the CLI
-(W5).
+tests) -- confirmed passing for real in CI's `windows-write-tests` job (a
+real GPT, boot partition, `mkfs.ntfs`, `ntfs-3g` mount, and file copy, all on
+a GitHub-hosted `ubuntu-latest` runner), catching a real bug along the way:
+`losetup --find --show` alone doesn't enable partition scanning, so the
+loop device never got `/dev/loopNpM` nodes for `reread_partition_table` to
+find until `--partscan` was added to the test's own `losetup` call. Not yet
+run against real hardware (that's W6) or wired into the CLI (W5).
+
+`windows::execute_verify_windows_image` (backlog #27, W4) is the same
+write path's verification counterpart, dispatched via a fourth `Plan`
+variant, `VerifyWindowsImage`, and following the same read-only posture
+`execute_verify`'s `VerifyPlan` already established (no TOCTOU refusal
+window, no `expected_serial`/`expected_size_bytes`). It re-derives the
+expected `WindowsPartitionPlan` from the source ISO exactly like the write
+path does, reads the real GPT off the device (`gptman::GPT::find_from`,
+auto-detecting 512- vs 4096-byte sectors) and checks it against the plan
+(`argos_core::verify::verify_windows_partition_layout`), hashes partition
+1's actual bytes against the vendored image, then mounts partition 2 and
+hashes every file `WindowsIso` lists against a fresh read of the source ISO
+(`argos_core::verify::verify_windows_file_hash`, one call per file). Also
+exercised in `write_windows_image.rs`, both the happy path (verify right
+after a real write) and a file corrupted directly on the mounted partition
+afterward, confirming that's caught.
 
 ### `argos-cli`
 
@@ -365,7 +397,7 @@ tagged `Plan` (`Write`/`Verify`) rather than always a `WritePlan`.
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
-| Windows ISO support (backlog #27) | W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), and W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash) implemented. W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO. W2/W3 unit- and loop-device-tested (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated, not yet run in this environment); not yet run against real hardware (W6) or wired into the CLI (W5) |
+| Windows ISO support (backlog #27) | W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), and W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification) implemented. W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO. W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. Not yet run against real hardware (W6) or wired into the CLI (W5) |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted

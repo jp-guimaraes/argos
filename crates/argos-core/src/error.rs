@@ -36,6 +36,16 @@ pub enum ArgosError {
     #[error("checksum mismatch after writing: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
 
+    #[error("partition table does not match the expected Windows write layout: {0}")]
+    WindowsPartitionLayoutMismatch(String),
+
+    #[error("'{path}' does not match after writing: expected {expected}, got {actual}")]
+    WindowsFileMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+
     #[error("operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use")]
     Cancelled,
 
@@ -63,6 +73,8 @@ impl ArgosError {
             ArgosError::Io(_) => 19,
             ArgosError::NotImplemented(_) => 20,
             ArgosError::NotWindowsInstallerIso(_) => 21,
+            ArgosError::WindowsPartitionLayoutMismatch(_) => 22,
+            ArgosError::WindowsFileMismatch { .. } => 23,
         }
     }
 }
