@@ -41,6 +41,13 @@ fn run() -> i32 {
             .map(|written_hash| Event::Done { written_hash }),
         Plan::Verify(verify_plan) => argos_privileged::execute_verify(&verify_plan, &JsonlProgress)
             .map(|hash| Event::VerifyOk { hash }),
+        Plan::WriteWindowsImage(windows_plan) => {
+            argos_privileged::windows::execute_write_windows_image(&windows_plan, &JsonlProgress)
+                .map(|outcome| Event::WindowsDone {
+                    files_copied: outcome.files_copied,
+                    bytes_copied: outcome.bytes_copied,
+                })
+        }
     };
 
     match result {

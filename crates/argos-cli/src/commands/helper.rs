@@ -83,6 +83,23 @@ fn stream_helper_events<R: std::io::Read>(
                 presenter.finish("verified");
                 outcome = Some(Ok(hash));
             }
+            Event::WindowsDone {
+                files_copied,
+                bytes_copied,
+            } => {
+                // `run_plan`'s single-hash `Result<String>` contract doesn't
+                // really fit a two-partition write (there's no one
+                // meaningful whole-device hash -- see
+                // `argos_privileged::windows::WindowsWriteOutcome`'s doc
+                // comment). Nothing sends `Plan::WriteWindowsImage` yet (W5,
+                // still pending); this is a placeholder summary just to keep
+                // this match exhaustive until the CLI wiring lands and can
+                // decide what a Windows write should actually report.
+                presenter.finish("done");
+                outcome = Some(Ok(format!(
+                    "{files_copied} files, {bytes_copied} bytes copied"
+                )));
+            }
             Event::Error { message, .. } => {
                 presenter.abandon();
                 outcome = Some(Err(ArgosError::Io(std::io::Error::other(message))));

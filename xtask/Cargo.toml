@@ -6,3 +6,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+# Only needed by the vendor-uefi-ntfs subcommand, to build the tiny FAT boot
+# image committed under crates/argos-privileged/assets/ -- see that
+# subcommand's doc comment. Never a dependency of anything actually shipped.
+fatfs = "0.3"

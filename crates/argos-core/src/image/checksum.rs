@@ -3,14 +3,27 @@
 //! Streams in fixed-size chunks so multi-GB images never need to fit in memory.
 
 use sha2::{Digest, Sha256};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 
 const CHUNK_SIZE: usize = 1024 * 1024; // 1 MiB
 
 /// Computes the SHA-256 of everything `reader` yields, calling `on_chunk` after
 /// each chunk with the number of bytes hashed so far (for progress reporting).
 /// Does not know or care whether `reader` is a file, a device, or a cursor.
-pub fn sha256_stream<R: Read>(mut reader: R, mut on_chunk: impl FnMut(u64)) -> io::Result<String> {
+pub fn sha256_stream<R: Read>(reader: R, on_chunk: impl FnMut(u64)) -> io::Result<String> {
+    copy_and_hash(reader, io::sink(), on_chunk)
+}
+
+/// Like [`sha256_stream`], but also writes every byte read to `dest` as it
+/// goes -- one pass over `reader` instead of two, for callers (the Windows
+/// installer write path's per-file copy, W3) that need to both land the
+/// bytes somewhere *and* know their hash, rather than only fingerprinting a
+/// stream nothing else is reading.
+pub fn copy_and_hash<R: Read, W: Write>(
+    mut reader: R,
+    mut dest: W,
+    mut on_chunk: impl FnMut(u64),
+) -> io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut total: u64 = 0;
@@ -20,6 +33,7 @@ pub fn sha256_stream<R: Read>(mut reader: R, mut on_chunk: impl FnMut(u64)) -> i
         if n == 0 {
             break;
         }
+        dest.write_all(&buf[..n])?;
         hasher.update(&buf[..n]);
         total += n as u64;
         on_chunk(total);
@@ -57,5 +71,21 @@ mod tests {
         let mut last_seen = 0u64;
         sha256_stream(Cursor::new(data.clone()), |done| last_seen = done).unwrap();
         assert_eq!(last_seen, data.len() as u64);
+    }
+
+    #[test]
+    fn copy_and_hash_writes_every_byte_to_dest() {
+        let data = b"the quick brown fox jumps over the lazy dog".to_vec();
+        let mut dest = Vec::new();
+        copy_and_hash(Cursor::new(data.clone()), &mut dest, |_| {}).unwrap();
+        assert_eq!(dest, data);
+    }
+
+    #[test]
+    fn copy_and_hash_returns_the_same_hash_as_sha256_stream() {
+        let data = b"the quick brown fox jumps over the lazy dog".to_vec();
+        let expected = sha256_stream(Cursor::new(data.clone()), |_| {}).unwrap();
+        let hash = copy_and_hash(Cursor::new(data), &mut Vec::new(), |_| {}).unwrap();
+        assert_eq!(hash, expected);
     }
 }

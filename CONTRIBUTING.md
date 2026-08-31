@@ -32,8 +32,17 @@ also documents the design decisions behind the current crate layout.
   keep the trait honestly cross-platform.
 - `crates/argos-privileged` -- `argos-helper`, the one binary meant to run as
   root. Keep it minimal and dumb by design (see the doc comment in its
-  `main.rs`) -- do not add ISO parsing, D-Bus, or other heavy dependencies to
-  this crate.
+  `main.rs`) -- do not add D-Bus or other heavy dependencies to this crate.
+  **Scoped exception** (backlog #27, decided when W3 landed): the Windows
+  installer write path does read the source ISO's file tree here, via
+  `argos_core::image::windows`/`cdfs`, so it can copy those files onto the
+  freshly-formatted NTFS partition and hash each one as it goes -- in a
+  single privileged elevation, matching every other write path's UX, rather
+  than splitting the operation across two separate `pkexec`/`sudo` prompts or
+  redesigning the one-shot IPC protocol into a stateful one. Don't take this
+  as license to grow the ISO-parsing surface here further; it's accepted
+  specifically because the copy step cannot happen anywhere else without one
+  of those two costs.
 - `crates/argos-cli` -- the `argos` command-line tool.
 
 ## Safety-critical code

@@ -86,8 +86,10 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   to `cdfs` only for genuinely ISO9660-only Windows-shaped images -- which in
   practice means this crate's own synthetic test fixtures, not real media.
   This is also why the workspace's `rust-version` moved from 1.75 to 1.88
-  (`hadris-udf`'s MSRV); `gptman` (added in W3) was pinned to its 1.x line
-  regardless, since 2.x/3.x's MSRV wasn't the deciding factor there.
+  (`hadris-udf`'s MSRV); `gptman` stayed pinned to its 1.x line regardless
+  (already implemented and tested against it before this correction, and
+  revisiting to gptman's newer 2.x/3.x -- now within reach MSRV-wise too --
+  is unrelated cleanup).
 
 ## Crate layout
 
@@ -155,6 +157,19 @@ ordinary files and in-memory buffers -- no root, no real hardware.
 `PlatformOps` is intentionally small and free of Unix-specific assumptions (no
 `/dev/sdX` parsing baked into the trait) so a real Windows backend could
 implement it later without the trait changing.
+
+Three methods added for the Windows write path (backlog #27, W3) --
+`reread_partition_table`, `mount_ntfs_partition`, `unmount_path` -- are
+Linux-only in practice: macOS returns `NotImplemented` for all three (see
+the phase 2 guiding decisions above), and Windows-as-host already returns
+`NotImplemented` for everything. `reread_partition_table` wraps the
+`BLKRRPART` ioctl via `gptman::linux` (cfg-gated to `target_os = "linux"`,
+since that module doesn't exist on other targets -- the one place this
+crate needs a compile-time OS split rather than the runtime-graceful-failure
+posture everything else here uses). `mount_ntfs_partition` shells out to
+`ntfs-3g` against a derived partition device path (`mounts::partition_device_path`,
+the reverse of the existing `whole_disk_of`) and returns a fresh `tempfile`
+mountpoint; `unmount_path` shells out to `umount`.
 
 The Linux backend enumerates disks by reading `/sys/block/*` directly (size,
 removable flag, vendor/model) and cross-referencing the udev database at
@@ -289,6 +304,31 @@ binary that is the only thing here meant to actually run privileged.
 helper process can currently trigger the `CancelToken` passed to the write
 loop, so a running write cannot yet be interrupted cleanly from the CLI side.
 
+`windows::execute_write_windows_image` (backlog #27, W3) is the UEFI:NTFS
+write path's equivalent of `execute`, dispatched via a third `Plan` variant,
+`WriteWindowsImage`. In one privileged elevation -- CONTRIBUTING.md's scoped
+exception to this crate's "keep it minimal" rule covers exactly this -- it
+re-validates the device (`validate_refreshed_device_for_windows_write`, the
+`WriteWindowsPlan` counterpart to the TOCTOU guard above), re-classifies and
+re-lists the source ISO itself (never trusting the plan's idea of what's on
+it), builds a `WindowsPartitionPlan`, writes a real GPT via `gptman`
+(protective MBR + one EFI System Partition entry + one Microsoft Basic Data
+entry, using `partition::windows`'s type GUID constants), `dd`s the vendored
+`uefi-ntfs.img` (embedded via `include_bytes!`; see
+`crates/argos-privileged/assets/PROVENANCE.md` for its provenance) onto
+partition 1, shells out to `mkfs.ntfs` to format partition 2 and to `ntfs-3g`
+(via two new `PlatformOps` methods, Linux-only for now) to mount it, then
+copies every file `image::windows::WindowsIso` lists onto it, hashing each
+one in the same pass (`image::checksum::copy_and_hash`) rather than reading
+it twice. A third new `PlatformOps` method wraps the `BLKRRPART` ioctl
+(via `gptman::linux`) so the two new partitions show up as their own block
+devices right after the GPT write, before formatting/mounting need them to.
+Exercised against a real file-backed loop device in
+`crates/argos-privileged/tests/write_windows_image.rs` (root + `losetup` +
+`mkfs.ntfs` + `ntfs-3g` gated, same posture as backlog E9's loop-device
+tests) -- not yet run against real hardware (that's W6) or wired into the CLI
+(W5).
+
 ### `argos-cli`
 
 `argos list` lists every physical disk visible to the current platform backend
@@ -325,7 +365,7 @@ tagged `Plan` (`Write`/`Verify`) rather than always a `WritePlan`.
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
-| Windows ISO support (backlog #27) | W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper) and W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`) implemented. W1 confirmed end-to-end against a real, official Microsoft Windows 10 22H2 ISO: correctly classified it, listed all 906 files (5.71GB total, including the 5.18GB `install.wim` that's the whole reason this write path exists), and extracted/byte-verified individual files. Also unit-tested with both synthetic UDF and ISO9660 fixtures. No privilege, no hardware, not yet wired into the CLI (W3-W6 still pending) |
+| Windows ISO support (backlog #27) | W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), and W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash) implemented. W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO. W2/W3 unit- and loop-device-tested (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated, not yet run in this environment); not yet run against real hardware (W6) or wired into the CLI (W5) |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted

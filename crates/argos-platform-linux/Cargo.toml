@@ -26,7 +26,13 @@ argos-platform = { workspace = true }
 # compiles fine cross-platform (there's just no udisksd to talk to at
 # runtime anywhere but Linux).
 zbus = "5"
+# Only used for its `linux::reread_partition_table` ioctl (BLKRRPART)
+# wrapper (backlog #27, W3) -- this crate does no GPT reading/writing of its
+# own, that's argos-privileged's job.
+gptman = { workspace = true }
+# A fresh mountpoint directory for mount_ntfs_partition (backlog #27, W3) --
+# a real runtime dependency now, not just a test fixture helper.
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 libc = "0.2"

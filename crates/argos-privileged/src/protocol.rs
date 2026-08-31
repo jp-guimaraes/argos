@@ -29,6 +29,7 @@ use std::path::PathBuf;
 pub enum Plan {
     Write(WritePlan),
     Verify(VerifyPlan),
+    WriteWindowsImage(WriteWindowsPlan),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +40,21 @@ pub struct WritePlan {
     pub image_path: PathBuf,
     pub image_size_bytes: u64,
     pub verify: bool,
+}
+
+/// Backlog #27 (W3): the UEFI:NTFS write path's counterpart to [`WritePlan`].
+/// Deliberately carries only `iso_path`, not a precomputed partition layout
+/// or Windows-files byte total -- `execute_write_windows_image` reads the
+/// ISO's tree itself (`argos_core::image::windows::WindowsIso`) to build a
+/// `WindowsPartitionPlan` from scratch, the same never-trust-the-caller
+/// posture [`validate_refreshed_device`] already applies to the device
+/// itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteWindowsPlan {
+    pub device_path: String,
+    pub expected_serial: Option<String>,
+    pub expected_size_bytes: u64,
+    pub iso_path: PathBuf,
 }
 
 /// Unlike [`WritePlan`], carries no `expected_serial`/`expected_size_bytes`:
@@ -60,11 +76,27 @@ pub struct VerifyPlan {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    Phase { phase: String },
-    Progress { bytes_done: u64, bytes_total: u64 },
-    Done { written_hash: String },
-    VerifyOk { hash: String },
-    Error { message: String, exit_code: i32 },
+    Phase {
+        phase: String,
+    },
+    Progress {
+        bytes_done: u64,
+        bytes_total: u64,
+    },
+    Done {
+        written_hash: String,
+    },
+    WindowsDone {
+        files_copied: u64,
+        bytes_copied: u64,
+    },
+    VerifyOk {
+        hash: String,
+    },
+    Error {
+        message: String,
+        exit_code: i32,
+    },
 }
 
 /// Re-validates a device immediately before opening it for writing. This is
@@ -79,23 +111,51 @@ pub fn validate_refreshed_device(
     plan: &WritePlan,
     refreshed: Option<&Device>,
 ) -> Result<(), ArgosError> {
-    let device = refreshed.ok_or_else(|| ArgosError::DeviceNotFound(plan.device_path.clone()))?;
+    validate_refreshed_device_common(
+        &plan.device_path,
+        plan.expected_size_bytes,
+        plan.expected_serial.as_deref(),
+        refreshed,
+    )
+}
+
+/// The [`WriteWindowsPlan`] counterpart to [`validate_refreshed_device`] --
+/// same TOCTOU guard, same three checks, just against the Windows write
+/// path's plan shape instead of [`WritePlan`]'s.
+pub fn validate_refreshed_device_for_windows_write(
+    plan: &WriteWindowsPlan,
+    refreshed: Option<&Device>,
+) -> Result<(), ArgosError> {
+    validate_refreshed_device_common(
+        &plan.device_path,
+        plan.expected_size_bytes,
+        plan.expected_serial.as_deref(),
+        refreshed,
+    )
+}
+
+fn validate_refreshed_device_common(
+    device_path: &str,
+    expected_size_bytes: u64,
+    expected_serial: Option<&str>,
+    refreshed: Option<&Device>,
+) -> Result<(), ArgosError> {
+    let device = refreshed.ok_or_else(|| ArgosError::DeviceNotFound(device_path.to_string()))?;
 
     if device.is_system_disk {
-        return Err(ArgosError::DeviceIsSystemDisk(plan.device_path.clone()));
+        return Err(ArgosError::DeviceIsSystemDisk(device_path.to_string()));
     }
 
-    if device.size_bytes != plan.expected_size_bytes {
+    if device.size_bytes != expected_size_bytes {
         return Err(ArgosError::DeviceNotFound(format!(
-            "{} changed size since it was confirmed ({} -> {} bytes); aborting",
-            plan.device_path, plan.expected_size_bytes, device.size_bytes
+            "{device_path} changed size since it was confirmed ({expected_size_bytes} -> {} bytes); aborting",
+            device.size_bytes
         )));
     }
 
-    if plan.expected_serial.is_some() && device.serial != plan.expected_serial {
+    if expected_serial.is_some() && device.serial.as_deref() != expected_serial {
         return Err(ArgosError::DeviceNotFound(format!(
-            "{} no longer matches the confirmed serial number; aborting",
-            plan.device_path
+            "{device_path} no longer matches the confirmed serial number; aborting"
         )));
     }
 

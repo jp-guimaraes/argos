@@ -11,7 +11,7 @@
 use argos_core::device::Device;
 use argos_core::error::{ArgosError, Result};
 use argos_platform::PlatformOps;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct WindowsPlatform(());
 
@@ -37,6 +37,18 @@ impl PlatformOps for WindowsPlatform {
     }
 
     fn backing_device_of(&self, _path: &Path) -> Result<Option<String>> {
+        Err(ArgosError::NotImplemented("Windows host support (phase 2)"))
+    }
+
+    fn reread_partition_table(&self, _device: &Device) -> Result<()> {
+        Err(ArgosError::NotImplemented("Windows host support (phase 2)"))
+    }
+
+    fn mount_ntfs_partition(&self, _device: &Device, _partition_number: u32) -> Result<PathBuf> {
+        Err(ArgosError::NotImplemented("Windows host support (phase 2)"))
+    }
+
+    fn unmount_path(&self, _mount_path: &Path) -> Result<()> {
         Err(ArgosError::NotImplemented("Windows host support (phase 2)"))
     }
 }

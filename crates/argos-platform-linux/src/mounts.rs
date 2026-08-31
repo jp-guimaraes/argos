@@ -66,6 +66,20 @@ fn strip_p_digit_suffix(path: &str) -> Option<String> {
         .then(|| stripped.to_string())
 }
 
+/// The reverse of [`whole_disk_of`] (backlog #27, W3): derives the device
+/// path for one partition of a whole disk, e.g. `/dev/sdb` + 2 ->
+/// `/dev/sdb2`, `/dev/nvme0n1` + 2 -> `/dev/nvme0n1p2`. Whole-disk names that
+/// end in a digit from their own namespace (`nvme0n1`, `mmcblk0`, `loop0`)
+/// need the literal `p` separator to stay unambiguous; `sdb`-style names
+/// don't.
+pub fn partition_device_path(whole_disk: &str, partition_number: u32) -> String {
+    if whole_disk.ends_with(|c: char| c.is_ascii_digit()) {
+        format!("{whole_disk}p{partition_number}")
+    } else {
+        format!("{whole_disk}{partition_number}")
+    }
+}
+
 /// True if any mount in `mounts` both (a) lives on `whole_disk` and (b) sits at a
 /// mountpoint that makes the disk a system disk.
 ///
@@ -166,6 +180,34 @@ tmpfs /tmp tmpfs rw 0 0
     #[test]
     fn whole_disk_of_strips_loop_style_partition_suffix() {
         assert_eq!(whole_disk_of("/dev/loop0p1"), "/dev/loop0");
+    }
+
+    #[test]
+    fn partition_device_path_uses_a_bare_suffix_for_sd_style_disks() {
+        assert_eq!(partition_device_path("/dev/sdb", 2), "/dev/sdb2");
+    }
+
+    #[test]
+    fn partition_device_path_uses_a_p_separator_for_nvme_style_disks() {
+        assert_eq!(partition_device_path("/dev/nvme0n1", 2), "/dev/nvme0n1p2");
+    }
+
+    #[test]
+    fn partition_device_path_uses_a_p_separator_for_mmcblk_style_disks() {
+        assert_eq!(partition_device_path("/dev/mmcblk0", 1), "/dev/mmcblk0p1");
+    }
+
+    #[test]
+    fn partition_device_path_uses_a_p_separator_for_loop_devices() {
+        assert_eq!(partition_device_path("/dev/loop0", 1), "/dev/loop0p1");
+    }
+
+    #[test]
+    fn partition_device_path_round_trips_through_whole_disk_of() {
+        for whole_disk in ["/dev/sdb", "/dev/nvme0n1", "/dev/mmcblk0", "/dev/loop0"] {
+            let partition = partition_device_path(whole_disk, 2);
+            assert_eq!(whole_disk_of(&partition), whole_disk);
+        }
     }
 
     /// The trivial resolver used by most tests: no device-mapper indirection,

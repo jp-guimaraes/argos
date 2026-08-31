@@ -10,6 +10,7 @@
 
 pub mod platform_select;
 pub mod protocol;
+pub mod windows;
 
 use argos_core::error::{ArgosError, Result};
 use argos_core::image::checksum::sha256_stream;
