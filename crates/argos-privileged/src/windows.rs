@@ -100,6 +100,18 @@ pub fn execute_write_windows_image(
         &layout,
     )?;
 
+    // Backlog #35: refuse *before* touching the device if the largest single
+    // file wouldn't fit comfortably in memory -- see
+    // `preflight::check_windows_memory`'s doc comment for why this is a
+    // single-file, not whole-tree, check, and `image::windows::open_file`'s
+    // doc comment for why this is a risk at all (no UDF streaming reader).
+    let largest_file_bytes = files.iter().map(|f| f.size).max().unwrap_or(0);
+    preflight::check_windows_memory(
+        &plan.iso_path,
+        largest_file_bytes,
+        available_memory_bytes()?,
+    )?;
+
     // Safe-open precondition (backlog #20), same as the DD-mode write path.
     progress.on_phase(Phase::Unmounting);
     platform.unmount(&device)?;
@@ -359,6 +371,34 @@ fn random_guid() -> Result<[u8; 16]> {
     Ok(buf)
 }
 
+/// Reads `/proc/meminfo`'s `MemAvailable` -- the kernel's own estimate of
+/// memory a new allocation could use without swapping, already accounting
+/// for reclaimable caches -- for [`preflight::check_windows_memory`]
+/// (backlog #35). Deliberately not `MemFree`: that's far more pessimistic
+/// (excludes page cache the kernel would happily reclaim under pressure),
+/// and would false-positive-refuse writes on an otherwise-healthy machine.
+fn available_memory_bytes() -> Result<u64> {
+    let contents = fs::read_to_string("/proc/meminfo").map_err(ArgosError::Io)?;
+    parse_mem_available_kb(&contents)
+        .map(|kb| kb * 1024)
+        .ok_or_else(|| {
+            ArgosError::Io(std::io::Error::other(
+                "could not find MemAvailable in /proc/meminfo",
+            ))
+        })
+}
+
+/// Parsing split out from the actual file read above so it's testable
+/// against a plain string fixture, no real `/proc` needed.
+fn parse_mem_available_kb(meminfo_contents: &str) -> Option<u64> {
+    meminfo_contents.lines().find_map(|line| {
+        let rest = line.strip_prefix("MemAvailable:")?;
+        // The value is `<whitespace><digits> kB` -- take the first
+        // whitespace-separated token, ignoring the unit suffix.
+        rest.split_whitespace().next()?.parse().ok()
+    })
+}
+
 /// Waits (up to 10s, polling every 100ms) for `path` to become a real,
 /// openable block device. Partition device nodes (`/dev/sdb1`, ...) aren't
 /// guaranteed to be openable the instant `PlatformOps::reread_partition_table`
@@ -492,4 +532,39 @@ fn copy_files(
         bytes_copied: bytes_done,
         file_hashes: hashes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mem_available_from_a_real_shaped_proc_meminfo() {
+        let meminfo = "\
+MemTotal:        8025000 kB
+MemFree:          512000 kB
+MemAvailable:    3774812 kB
+Buffers:          102400 kB
+Cached:          2100000 kB
+";
+        assert_eq!(parse_mem_available_kb(meminfo), Some(3_774_812));
+    }
+
+    #[test]
+    fn returns_none_when_mem_available_is_missing() {
+        // Real ancient kernels (pre-3.14) don't expose MemAvailable at all --
+        // `available_memory_bytes` turns this into a clear I/O-flavored
+        // error rather than silently treating it as zero (which would refuse
+        // every Windows write outright) or unlimited (defeating the guard).
+        let meminfo = "MemTotal:        8025000 kB\nMemFree:          512000 kB\n";
+        assert_eq!(parse_mem_available_kb(meminfo), None);
+    }
+
+    #[test]
+    fn ignores_unrelated_lines_that_share_a_prefix() {
+        // MemAvailable vs MemFree/MemTotal share the "Mem" prefix -- make
+        // sure the match is on the exact field name, not a loose contains().
+        let meminfo = "MemTotal:        8025000 kB\nMemAvailable:    1234 kB\n";
+        assert_eq!(parse_mem_available_kb(meminfo), Some(1_234));
+    }
 }
