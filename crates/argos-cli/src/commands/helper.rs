@@ -100,6 +100,12 @@ fn stream_helper_events<R: std::io::Read>(
                     "{files_copied} files, {bytes_copied} bytes copied"
                 )));
             }
+            Event::WindowsVerifyOk { files_verified } => {
+                // Same placeholder posture as `WindowsDone` above: nothing
+                // sends `Plan::VerifyWindowsImage` yet (W5, still pending).
+                presenter.finish("verified");
+                outcome = Some(Ok(format!("{files_verified} files verified")));
+            }
             Event::Error { message, .. } => {
                 presenter.abandon();
                 outcome = Some(Err(ArgosError::Io(std::io::Error::other(message))));

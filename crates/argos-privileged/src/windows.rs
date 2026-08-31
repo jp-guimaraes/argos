@@ -12,14 +12,20 @@
 //! this fails fast and honestly rather than partitioning a disk it can't
 //! finish setting up.
 
-use crate::protocol::{validate_refreshed_device_for_windows_write, WriteWindowsPlan};
+use crate::protocol::{
+    validate_refreshed_device_for_windows_write, VerifyWindowsPlan, WriteWindowsPlan,
+};
 use argos_core::error::{ArgosError, Result};
+use argos_core::image::checksum::sha256_stream;
 use argos_core::image::windows::WindowsIso;
 use argos_core::partition::windows::{
-    WindowsPartitionPlan, EFI_SYSTEM_PARTITION_TYPE_GUID, MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID,
-    SECTOR_SIZE,
+    PartitionRegion, WindowsPartitionPlan, EFI_SYSTEM_PARTITION_TYPE_GUID,
+    MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
 use argos_core::progress::{CancelToken, Phase, ProgressSink};
+use argos_core::verify::{
+    verify_windows_file_hash, verify_windows_partition_layout, ObservedPartition,
+};
 use argos_core::write::dd_mode;
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
@@ -126,6 +132,167 @@ pub fn execute_write_windows_image(
     })
 }
 
+/// What [`execute_verify_windows_image`] returns on success (backlog #27,
+/// W4): just a count, unlike [`WindowsWriteOutcome`] -- verification's whole
+/// point is confirming every file already matches, so there's nothing left
+/// to report per file beyond that count.
+#[derive(Debug)]
+pub struct WindowsVerifyOutcome {
+    pub files_verified: u64,
+}
+
+/// The UEFI:NTFS write path's verification counterpart (backlog #27, W4):
+/// re-derives the expected `WindowsPartitionPlan` from the source ISO (never
+/// trusting the plan, same posture as the write path), confirms the real GPT
+/// on `plan.device_path` matches it
+/// ([`verify_windows_partition_layout`]), confirms the boot partition's
+/// bytes match the vendored image, then mounts the NTFS partition and
+/// confirms every file's hash matches a fresh read of the source ISO.
+///
+/// Deliberately not a reuse of [`argos_core::verify::verify_written_image`]:
+/// that assumes one whole-device hash, and a two-partition layout has no
+/// single meaningful hash like that to compare against.
+pub fn execute_verify_windows_image(
+    plan: &VerifyWindowsPlan,
+    progress: &dyn ProgressSink,
+) -> Result<WindowsVerifyOutcome> {
+    if !cfg!(target_os = "linux") {
+        return Err(ArgosError::NotImplemented(
+            "Windows installer verify support (non-Linux)",
+        ));
+    }
+
+    let platform = crate::platform_select::current_platform();
+    let device = platform
+        .refresh(&plan.device_path, None)?
+        .ok_or_else(|| ArgosError::DeviceNotFound(plan.device_path.clone()))?;
+
+    if !image::windows::classify(&plan.iso_path)?.is_windows_installer_iso() {
+        return Err(ArgosError::NotWindowsInstallerIso(plan.iso_path.clone()));
+    }
+    let iso = WindowsIso::open(&plan.iso_path)?;
+    let files = iso.list_files()?;
+    let files_total_size_bytes: u64 = files.iter().map(|f| f.size).sum();
+    let layout = WindowsPartitionPlan::new(UEFI_NTFS_IMAGE.len() as u64, files_total_size_bytes);
+
+    progress.on_phase(Phase::Verifying);
+    let (boot_observed, windows_observed) = read_observed_partitions(&plan.device_path)?;
+    verify_windows_partition_layout(&layout, boot_observed, windows_observed)?;
+
+    let boot_partition_path = linux_partition_device_path(&plan.device_path, 1);
+    verify_boot_partition(&boot_partition_path)?;
+
+    progress.on_phase(Phase::Mounting);
+    let mountpoint = platform.mount_ntfs_partition(&device, 2)?;
+
+    let verify_result = verify_windows_files(&iso, &files, &mountpoint, progress);
+
+    // Same "always try to unmount" posture as the write path.
+    let unmount_result = platform.unmount_path(&mountpoint);
+    let _ = fs::remove_dir(&mountpoint);
+
+    verify_result?;
+    unmount_result?;
+
+    Ok(WindowsVerifyOutcome {
+        files_verified: files.len() as u64,
+    })
+}
+
+/// Reads the real GPT off `device_path` and extracts partitions 1 and 2 as
+/// plain [`ObservedPartition`] values. `GPT::find_from` (rather than
+/// `read_from` at a fixed sector size) auto-detects 512- vs 4096-byte
+/// sectors, a cheap bit of defensiveness `write_partition_table` doesn't
+/// need (it's the one that decided the sector size in the first place).
+fn read_observed_partitions(device_path: &str) -> Result<(ObservedPartition, ObservedPartition)> {
+    let mut device = File::open(device_path).map_err(ArgosError::Io)?;
+    let gpt = gptman::GPT::find_from(&mut device)
+        .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
+    Ok((observed_partition(&gpt, 1)?, observed_partition(&gpt, 2)?))
+}
+
+fn observed_partition(gpt: &gptman::GPT, partition_number: u32) -> Result<ObservedPartition> {
+    let entry = &gpt[partition_number];
+    if !entry.is_used() {
+        return Err(ArgosError::WindowsPartitionLayoutMismatch(format!(
+            "partition {partition_number} is missing from the GPT"
+        )));
+    }
+    let sector_count = entry.ending_lba - entry.starting_lba + 1;
+    Ok(ObservedPartition {
+        partition_type_guid: entry.partition_type_guid,
+        region: PartitionRegion {
+            start_offset_bytes: entry.starting_lba * gpt.sector_size,
+            size_bytes: sector_count * gpt.sector_size,
+        },
+    })
+}
+
+/// Confirms partition 1's actual bytes match the vendored UEFI:NTFS image --
+/// the same "counterfeit media silently drops bytes" concern
+/// `verify_written_image` exists for on the DD-mode path, applied to just
+/// this one partition instead of the whole device.
+fn verify_boot_partition(partition_path: &str) -> Result<()> {
+    let mut partition = File::open(partition_path).map_err(ArgosError::Io)?;
+    let mut actual = vec![0u8; UEFI_NTFS_IMAGE.len()];
+    partition.read_exact(&mut actual).map_err(ArgosError::Io)?;
+
+    let actual_hash = sha256_stream(Cursor::new(actual), |_| {}).map_err(ArgosError::Io)?;
+    let expected_hash =
+        sha256_stream(Cursor::new(UEFI_NTFS_IMAGE), |_| {}).map_err(ArgosError::Io)?;
+    if actual_hash != expected_hash {
+        return Err(ArgosError::ChecksumMismatch {
+            expected: expected_hash,
+            actual: actual_hash,
+        });
+    }
+    Ok(())
+}
+
+/// Confirms every file `image::windows::WindowsIso` lists matches, byte for
+/// byte, what's actually on the mounted NTFS partition. Hashes every source
+/// file first (the `Checksumming` phase, no progress reported -- mirroring
+/// `execute_verify`'s DD-mode equivalent, which hashes the source ISO the
+/// same quiet way), then re-reads and compares each one from `mountpoint`
+/// (the `Verifying` phase, progress reported), rather than interleaving the
+/// two and reporting some hybrid of both passes' progress.
+fn verify_windows_files(
+    iso: &WindowsIso,
+    files: &[image::windows::IsoFileEntry],
+    mountpoint: &Path,
+    progress: &dyn ProgressSink,
+) -> Result<()> {
+    progress.on_phase(Phase::Checksumming);
+    let mut expected_hashes = Vec::with_capacity(files.len());
+    for entry in files {
+        let source = iso
+            .open_file(&entry.path)
+            .map_err(ArgosError::Io)?
+            .ok_or_else(|| {
+                ArgosError::Io(std::io::Error::other(format!(
+                    "{} listed but could not be reopened",
+                    entry.path
+                )))
+            })?;
+        expected_hashes.push(sha256_stream(source, |_| {}).map_err(ArgosError::Io)?);
+    }
+
+    progress.on_phase(Phase::Verifying);
+    let total_bytes: u64 = files.iter().map(|f| f.size).sum();
+    let mut bytes_done = 0u64;
+    for (entry, expected_hash) in files.iter().zip(expected_hashes.iter()) {
+        let dest = File::open(mountpoint.join(&entry.path)).map_err(ArgosError::Io)?;
+        let actual_hash = sha256_stream(dest, |chunk_done| {
+            progress.on_progress(bytes_done + chunk_done, total_bytes);
+        })
+        .map_err(ArgosError::Io)?;
+
+        verify_windows_file_hash(&entry.path, expected_hash, &actual_hash)?;
+        bytes_done += entry.size;
+    }
+    Ok(())
+}
+
 /// What [`copy_files`] copied -- folded into a full [`WindowsWriteOutcome`]
 /// by its caller, once the boot partition's own hash is available too.
 struct CopiedFiles {
@@ -184,25 +351,34 @@ fn random_guid() -> Result<[u8; 16]> {
     Ok(buf)
 }
 
-/// Waits (up to 5s, polling every 100ms) for `path` to appear. Partition
-/// device nodes (`/dev/sdb1`, ...) aren't guaranteed to exist the instant
-/// `PlatformOps::reread_partition_table` returns -- on a udev-managed
-/// system, the kernel's own partition-table reread and udev actually
-/// creating the corresponding `/dev` entries are two separate steps, and
-/// the ioctl only guarantees the first one finished. Never observed missing
-/// in this crate's own loop-device testing, but real hardware is slower and
-/// less predictable than a loop device backed by a local file.
+/// Waits (up to 10s, polling every 100ms) for `path` to become a real,
+/// openable block device. Partition device nodes (`/dev/sdb1`, ...) aren't
+/// guaranteed to be openable the instant `PlatformOps::reread_partition_table`
+/// returns -- on a udev-managed system, the kernel's own partition-table
+/// reread and udev actually creating/settling the corresponding `/dev`
+/// entries are separate, asynchronous steps, and the ioctl only guarantees
+/// the first one *started*.
+///
+/// Deliberately tries an actual [`File::open`], not just [`Path::exists`]:
+/// observed for real in CI, a stale or not-yet-settled partition node can
+/// exist as a `/dev` entry while the kernel still answers `ENXIO` ("No such
+/// device or address") to an open -- a bare existence check races straight
+/// through that window and fails the write outright instead of retrying.
 fn wait_for_path(path: &str) -> Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !Path::new(path).exists() {
-        if std::time::Instant::now() >= deadline {
-            return Err(ArgosError::Io(std::io::Error::other(format!(
-                "{path} did not appear after the partition table was reread"
-            ))));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match File::open(path) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ArgosError::Io(std::io::Error::other(format!(
+                        "{path} did not become a usable block device after the partition table was reread: {err}"
+                    ))));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    Ok(())
 }
 
 /// The Linux partition-device-path convention (`/dev/sdb` + 1 ->

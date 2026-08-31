@@ -30,6 +30,7 @@ pub enum Plan {
     Write(WritePlan),
     Verify(VerifyPlan),
     WriteWindowsImage(WriteWindowsPlan),
+    VerifyWindowsImage(VerifyWindowsPlan),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +74,19 @@ pub struct VerifyPlan {
     pub iso_size_bytes: u64,
 }
 
+/// Backlog #27 (W4): the [`WriteWindowsPlan`]/two-partition write's
+/// counterpart to [`VerifyPlan`] -- same read-only posture (no
+/// `expected_serial`/`expected_size_bytes`, no TOCTOU refusal window), same
+/// re-resolution of `device_path` before opening it. Carries only
+/// `iso_path`: `execute_verify_windows_image` rebuilds the expected
+/// `WindowsPartitionPlan` and re-lists the ISO's files itself, the same
+/// never-trust-the-caller posture the write path already applies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyWindowsPlan {
+    pub device_path: String,
+    pub iso_path: PathBuf,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
@@ -92,6 +106,9 @@ pub enum Event {
     },
     VerifyOk {
         hash: String,
+    },
+    WindowsVerifyOk {
+        files_verified: u64,
     },
     Error {
         message: String,
@@ -250,5 +267,17 @@ mod tests {
         assert!(json.contains(r#""kind":"verify""#));
         let parsed: Plan = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, Plan::Verify(p) if p.iso_size_bytes == 4_000_000_000));
+    }
+
+    #[test]
+    fn verify_windows_plan_round_trips_through_json_as_a_tagged_plan() {
+        let original = Plan::VerifyWindowsImage(VerifyWindowsPlan {
+            device_path: "/dev/sdz".into(),
+            iso_path: "/tmp/Win11.iso".into(),
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains(r#""kind":"verify_windows_image""#));
+        let parsed: Plan = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Plan::VerifyWindowsImage(p) if p.device_path == "/dev/sdz"));
     }
 }

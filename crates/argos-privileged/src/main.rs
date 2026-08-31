@@ -48,6 +48,15 @@ fn run() -> i32 {
                     bytes_copied: outcome.bytes_copied,
                 })
         }
+        Plan::VerifyWindowsImage(verify_windows_plan) => {
+            argos_privileged::windows::execute_verify_windows_image(
+                &verify_windows_plan,
+                &JsonlProgress,
+            )
+            .map(|outcome| Event::WindowsVerifyOk {
+                files_verified: outcome.files_verified,
+            })
+        }
     };
 
     match result {
