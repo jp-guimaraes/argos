@@ -1,8 +1,9 @@
 //! Sizes and lays out the two-partition scheme the UEFI:NTFS write path (W3)
-//! needs: a protective MBR + GPT, a small FAT32-formatted boot partition
-//! (an exact `dd` of the vendored `uefi-ntfs.img`, see
-//! `docs/architecture.md`'s phase 2 guiding decisions) and a large NTFS
-//! partition holding the extracted Windows files. Everything here is integer
+//! needs: a protective MBR + GPT, a small FAT-formatted boot partition (an
+//! exact `dd` of the vendored `uefi-ntfs.img` -- a 1.44 MB FAT12 image, see
+//! `crates/argos-privileged/assets/PROVENANCE.md` -- not FAT32; small enough
+//! that FAT12 is what it naturally formats as) and a large NTFS partition
+//! holding the extracted Windows files. Everything here is integer
 //! arithmetic over sizes the caller already knows -- no disk, no image, no
 //! privilege. W3 turns the resulting [`WindowsPartitionPlan`] into a real GPT
 //! (via `gptman`) and real filesystems; this module only decides where each
@@ -43,6 +44,24 @@ const PRIMARY_GPT_OVERHEAD_BYTES: u64 =
 /// which has no backup copy).
 const BACKUP_GPT_OVERHEAD_BYTES: u64 =
     GPT_PARTITION_ENTRIES * GPT_PARTITION_ENTRY_SIZE_BYTES + SECTOR_SIZE;
+
+/// GPT partition type GUID for an EFI System Partition
+/// (`C12A7328-F81F-11D2-BA4B-00A0C93EC93B`), used for the boot partition.
+/// GPT stores GUIDs in Microsoft's mixed-endian layout (the first three
+/// fields little-endian, the last two big-endian, i.e. `Uuid::to_bytes_le`
+/// on the canonical string form) -- this is already in that on-disk byte
+/// order, ready to hand straight to `gptman::GPTPartitionEntry`.
+pub const EFI_SYSTEM_PARTITION_TYPE_GUID: [u8; 16] = [
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+];
+
+/// GPT partition type GUID for a Microsoft Basic Data Partition
+/// (`EBD0A0A2-B9E5-4433-87C0-68B6B72699C7`), used for the NTFS partition --
+/// same mixed-endian on-disk byte order as
+/// [`EFI_SYSTEM_PARTITION_TYPE_GUID`] above.
+pub const MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID: [u8; 16] = [
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+];
 
 /// Extra space reserved on top of the raw byte count of the extracted Windows
 /// files when sizing the NTFS partition. NTFS itself has overhead ($MFT
@@ -139,6 +158,37 @@ mod tests {
     // below rather than being masked by already-aligned inputs.
     const UEFI_NTFS_IMAGE_SIZE: u64 = 1_474_990;
     const WINDOWS_FILES_TOTAL_SIZE: u64 = 5_432_100_000;
+
+    /// Renders a mixed-endian on-disk GUID back to its canonical dashed
+    /// string form, so the type GUID constants below can be checked against
+    /// the well-known strings from the UEFI/GPT spec instead of trusting the
+    /// hand-transcribed byte arrays by eye.
+    fn mixed_endian_guid_to_string(bytes: [u8; 16]) -> String {
+        format!(
+            "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+            bytes[3], bytes[2], bytes[1], bytes[0],
+            bytes[5], bytes[4],
+            bytes[7], bytes[6],
+            bytes[8], bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        )
+    }
+
+    #[test]
+    fn efi_system_partition_type_guid_matches_the_uefi_spec_string() {
+        assert_eq!(
+            mixed_endian_guid_to_string(EFI_SYSTEM_PARTITION_TYPE_GUID),
+            "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+        );
+    }
+
+    #[test]
+    fn microsoft_basic_data_partition_type_guid_matches_the_uefi_spec_string() {
+        assert_eq!(
+            mixed_endian_guid_to_string(MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID),
+            "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
+        );
+    }
 
     #[test]
     fn boot_partition_starts_at_the_first_1mib_aligned_lba_after_the_primary_gpt() {

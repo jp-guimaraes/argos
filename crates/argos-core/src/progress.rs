@@ -12,6 +12,17 @@ pub enum Phase {
     Checksumming,
     Writing,
     Verifying,
+    /// Creating the GPT for a Windows installer write (backlog #27, W3).
+    Partitioning,
+    /// Formatting the NTFS partition (`mkfs.ntfs`) for a Windows installer
+    /// write (backlog #27, W3).
+    FormattingNtfs,
+    /// Mounting the freshly-formatted NTFS partition (`ntfs-3g`) for a
+    /// Windows installer write (backlog #27, W3).
+    Mounting,
+    /// Copying the extracted Windows installer files onto the mounted NTFS
+    /// partition (backlog #27, W3).
+    CopyingFiles,
 }
 
 /// Implemented by whatever wants to observe an operation's progress. `argos-core`
