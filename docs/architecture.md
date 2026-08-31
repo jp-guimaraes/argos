@@ -311,9 +311,36 @@ no D-Bus/plist/UDisks2 API. The crate is split into a library (`protocol`,
 reused by `argos-cli` to build plans and parse events) and the `argos-helper`
 binary that is the only thing here meant to actually run privileged.
 
-**Known gap**: cancellation is not wired end-to-end yet -- nothing outside the
-helper process can currently trigger the `CancelToken` passed to the write
-loop, so a running write cannot yet be interrupted cleanly from the CLI side.
+**Cancellation (backlog #35), wired end-to-end for writes.** `CancelToken` is
+now created by `main.rs` (not internally by `execute`/
+`windows::execute_write_windows_image`, as before) and passed in by
+reference, so the same token a background thread flips can actually reach
+the write loop mid-copy. That thread watches whatever's left of `argos`'s
+stdin pipe *after* the `Plan` line (`protocol::watch_for_cancel`) for a
+single control byte (`protocol::CANCEL_SIGNAL`) -- or for the pipe simply
+closing, which cancels too, as a safety net if the parent process dies
+outright. On the `argos-cli` side (`commands/helper.rs::run_plan`), the
+child's stdin is deliberately *not* closed right after the `Plan` is sent
+anymore; it's held open for the write's duration, and a `SIGINT` handler
+(`ctrlc`) writes the cancel byte into it and drops it. `CONTRIBUTING.md`
+documents this IPC as deliberately one-shot, not stateful/bidirectional --
+this doesn't reopen that decision: it's still a single signal, one
+direction, no round trip, just no longer closing the pipe the instant the
+`Plan` line is sent. Relies on the pipe rather than forwarding a real OS
+signal through `pkexec`/`sudo`: `pkexec` in particular doesn't reliably
+forward signals to the process it elevates, unlike `sudo`, so a mechanism
+that has to work identically under both couldn't depend on that. `argos
+verify` is untouched -- it's read-only, so there's nothing a cancel would
+need to leave in a clean state.
+
+Within the Windows installer write path, `windows::copy_files`'s
+per-file loop checks the same token once per file rather than per block the
+way `dd_mode::write_stream` already did -- `copy_and_hash` (used by every
+`sha256_stream` caller, including read-only verify paths that don't need
+cancellation) deliberately wasn't changed to take one. Most files in a
+Windows installer tree are small, so this is close to per-block in practice;
+the accepted gap is a multi-GB `install.wim`/`install.esd`, where a cancel
+can take as long as that one file's remaining copy.
 
 `windows::execute_write_windows_image` (backlog #27, W3) is the UEFI:NTFS
 write path's equivalent of `execute`, dispatched via a third `Plan` variant,
@@ -412,7 +439,7 @@ a specific `WindowsImageRequiresLinux` error rather than only discovering
 | DD-mode write engine, post-write verification | Implemented, unit-tested |
 | Linux disk enumeration | Implemented (sysfs + udev database, cross-checked against UDisks2/D-Bus when reachable) and LVM/RAID/dm-crypt-aware system-disk detection; pure parsing/resolution logic unit-tested, and the D-Bus and device-mapper glue each confirmed against this machine's real `udisksd` and a real `dmsetup` stack |
 | macOS disk enumeration (`diskutil -plist`) | Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/eject/backing_device_of) against a real Mac, both its internal disk and a plugged-in USB stick |
-| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
+| Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case. Write cancellation (backlog #35) wired end-to-end via a stdin control byte (not raw `SIGINT` forwarding through `pkexec`/`sudo`, which isn't reliable) -- unit-tested (`protocol::watch_for_cancel`) and confirmed against a real loop device mid-write (`loop_device_write.rs`'s new cancellation test, root-gated like the rest of that file) |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
 | Windows ISO support (backlog #27) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming, refusing early and honestly on non-Linux hosts). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. Not yet run against real hardware (that's W6) |

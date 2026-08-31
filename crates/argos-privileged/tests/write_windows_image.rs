@@ -35,7 +35,7 @@
 // end-to-end test should build -- the alias just keeps the rest of this
 // file's naming unchanged.
 use argos_core::image::windows::fixtures::udf_windows_installer_iso as windows_installer_iso;
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress};
 use argos_platform::PlatformOps;
 use argos_privileged::protocol::{VerifyWindowsPlan, WriteWindowsPlan};
 use std::process::Command;
@@ -137,8 +137,12 @@ fn writes_a_windows_installer_iso_to_a_real_loop_device() {
         iso_path: iso.path().to_path_buf(),
     };
 
-    let outcome = argos_privileged::windows::execute_write_windows_image(&plan, &NoopProgress)
-        .expect("writing the Windows installer image should succeed");
+    let outcome = argos_privileged::windows::execute_write_windows_image(
+        &plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    )
+    .expect("writing the Windows installer image should succeed");
 
     assert_eq!(outcome.files_copied, 2); // BOOTMGR + SOURCES/BOOT.WIM
     assert_eq!(
@@ -180,8 +184,12 @@ fn refuses_a_non_windows_iso() {
         iso_path: iso.path().to_path_buf(),
     };
 
-    let err =
-        argos_privileged::windows::execute_write_windows_image(&plan, &NoopProgress).unwrap_err();
+    let err = argos_privileged::windows::execute_write_windows_image(
+        &plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    )
+    .unwrap_err();
     assert!(matches!(
         err,
         argos_core::error::ArgosError::NotWindowsInstallerIso(_)
@@ -226,8 +234,12 @@ fn verify_matches_a_prior_windows_write() {
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
     };
-    argos_privileged::windows::execute_write_windows_image(&write_plan, &NoopProgress)
-        .expect("the write itself should succeed");
+    argos_privileged::windows::execute_write_windows_image(
+        &write_plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    )
+    .expect("the write itself should succeed");
 
     let verify_plan = VerifyWindowsPlan {
         device_path: loop_device.path.clone(),
@@ -267,8 +279,12 @@ fn verify_rejects_a_file_corrupted_after_the_write() {
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
     };
-    argos_privileged::windows::execute_write_windows_image(&write_plan, &NoopProgress)
-        .expect("the write itself should succeed");
+    argos_privileged::windows::execute_write_windows_image(
+        &write_plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    )
+    .expect("the write itself should succeed");
 
     // Corrupt one file directly on the mounted NTFS partition, simulating
     // media corruption (or tampering) that happened after the write --

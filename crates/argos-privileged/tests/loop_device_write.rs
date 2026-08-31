@@ -21,7 +21,8 @@
 
 #![cfg(target_os = "linux")]
 
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress, ProgressSink};
+use argos_core::write::dd_mode::BLOCK_SIZE;
 use argos_privileged::protocol::{VerifyPlan, WritePlan};
 use std::io::Write;
 use std::process::Command;
@@ -72,6 +73,21 @@ fn running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+/// Cancels `cancel` from inside `on_progress` -- `write_stream` calls that
+/// right after landing a block and right before checking the token again for
+/// the next one (backlog #35), so this reproduces "the user hit Ctrl+C while
+/// a write was already in flight" deterministically, without a real timer or
+/// a second thread racing the write loop.
+struct CancelOnFirstProgress {
+    cancel: CancelToken,
+}
+
+impl ProgressSink for CancelOnFirstProgress {
+    fn on_progress(&self, _bytes_done: u64, _bytes_total: u64) {
+        self.cancel.cancel();
+    }
+}
+
 #[test]
 #[ignore = "needs root and losetup; see module docs"]
 fn writes_and_verifies_against_a_real_loop_device() {
@@ -104,7 +120,7 @@ fn writes_and_verifies_against_a_real_loop_device() {
         verify: true,
     };
 
-    let hash = argos_privileged::execute(&plan, &NoopProgress)
+    let hash = argos_privileged::execute(&plan, &NoopProgress, &CancelToken::new())
         .expect("write + verify against the loop device should succeed");
     assert_eq!(hash.len(), 64, "expected a hex SHA-256 digest");
 
@@ -144,7 +160,7 @@ fn refuses_when_the_plan_size_does_not_match_the_device_anymore() {
         verify: false,
     };
 
-    let err = argos_privileged::execute(&plan, &NoopProgress).unwrap_err();
+    let err = argos_privileged::execute(&plan, &NoopProgress, &CancelToken::new()).unwrap_err();
     assert!(matches!(
         err,
         argos_core::error::ArgosError::DeviceNotFound(_)
@@ -183,7 +199,8 @@ fn verify_matches_a_prior_write_against_a_real_loop_device() {
         image_size_bytes: image_contents.len() as u64,
         verify: false,
     };
-    argos_privileged::execute(&write_plan, &NoopProgress).expect("the write itself should succeed");
+    argos_privileged::execute(&write_plan, &NoopProgress, &CancelToken::new())
+        .expect("the write itself should succeed");
 
     let verify_plan = VerifyPlan {
         device_path: loop_device.path.clone(),
@@ -223,7 +240,8 @@ fn verify_rejects_a_device_that_does_not_match_the_iso() {
         image_size_bytes: 1024,
         verify: false,
     };
-    argos_privileged::execute(&write_plan, &NoopProgress).expect("the write itself should succeed");
+    argos_privileged::execute(&write_plan, &NoopProgress, &CancelToken::new())
+        .expect("the write itself should succeed");
 
     // ...then ask to verify against a different ISO entirely -- simulates
     // pointing `argos verify` at the wrong image, or a device that was
@@ -242,6 +260,68 @@ fn verify_rejects_a_device_that_does_not_match_the_iso() {
         err,
         argos_core::error::ArgosError::ChecksumMismatch { .. }
     ));
+
+    std::env::remove_var("ARGOS_TEST_FORCE_REMOVABLE");
+}
+
+/// Backlog #35: the same `execute` this whole module already exercises
+/// end-to-end against a real loop device, but with the `CancelToken` --
+/// which `main.rs`'s stdin-watcher thread would otherwise flip on a real
+/// `SIGINT` -- flipped from *inside* the write itself. Proof that a
+/// cancellation requested mid-write actually reaches
+/// `dd_mode::write_stream`'s per-block check (rather than, say, only being
+/// observed before the write starts), and that `execute` propagates
+/// `ArgosError::Cancelled` rather than swallowing or downgrading it.
+#[test]
+#[ignore = "needs root and losetup; see module docs"]
+fn cancelling_mid_write_stops_cleanly_with_a_partial_write() {
+    if !running_as_root() {
+        eprintln!("skipping: not running as root");
+        return;
+    }
+    const DEVICE_SIZE: u64 = 16 * 1024 * 1024;
+    let Some(loop_device) = LoopDevice::attach(DEVICE_SIZE) else {
+        eprintln!("skipping: could not attach a loop device (needs losetup + root)");
+        return;
+    };
+    std::env::set_var("ARGOS_TEST_FORCE_REMOVABLE", &loop_device.path);
+
+    // More than one BLOCK_SIZE, so there's a second block left uncopied when
+    // the first one's progress callback cancels.
+    let image_size = BLOCK_SIZE * 2 + 1024;
+    let mut image = tempfile::NamedTempFile::new().unwrap();
+    let image_contents: Vec<u8> = (0..image_size).map(|i| (i % 233) as u8).collect();
+    image.write_all(&image_contents).unwrap();
+    image.flush().unwrap();
+
+    let plan = WritePlan {
+        device_path: loop_device.path.clone(),
+        expected_serial: None,
+        expected_size_bytes: DEVICE_SIZE,
+        image_path: image.path().to_path_buf(),
+        image_size_bytes: image_contents.len() as u64,
+        verify: false,
+    };
+
+    let cancel = CancelToken::new();
+    let progress = CancelOnFirstProgress {
+        cancel: cancel.clone(),
+    };
+
+    let err = argos_privileged::execute(&plan, &progress, &cancel).unwrap_err();
+    assert!(
+        matches!(err, argos_core::error::ArgosError::Cancelled),
+        "expected Cancelled, got {err:?}"
+    );
+
+    // The first block landed before the cancel took effect; the rest of the
+    // image did not.
+    let written = std::fs::read(&loop_device.path).unwrap();
+    assert_eq!(&written[..BLOCK_SIZE], &image_contents[..BLOCK_SIZE]);
+    assert_ne!(
+        &written[BLOCK_SIZE..image_size],
+        &image_contents[BLOCK_SIZE..]
+    );
 
     std::env::remove_var("ARGOS_TEST_FORCE_REMOVABLE");
 }

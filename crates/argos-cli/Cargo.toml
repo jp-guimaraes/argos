@@ -20,6 +20,7 @@ clap = { workspace = true }
 indicatif = { workspace = true }
 console = { workspace = true }
 serde_json = { workspace = true }
+ctrlc = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 argos-platform-linux = { workspace = true }

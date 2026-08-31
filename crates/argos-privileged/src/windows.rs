@@ -64,6 +64,7 @@ pub struct WindowsWriteOutcome {
 pub fn execute_write_windows_image(
     plan: &WriteWindowsPlan,
     progress: &dyn ProgressSink,
+    cancel: &CancelToken,
 ) -> Result<WindowsWriteOutcome> {
     // Fails fast and honestly (matching what W5's CLI wiring will surface)
     // rather than partitioning a disk on a platform this write path cannot
@@ -111,7 +112,7 @@ pub fn execute_write_windows_image(
     progress.on_phase(Phase::Writing);
     let boot_partition_path = linux_partition_device_path(&plan.device_path, 1);
     wait_for_path(&boot_partition_path)?;
-    let boot_partition_hash = write_boot_partition(&boot_partition_path, progress)?;
+    let boot_partition_hash = write_boot_partition(&boot_partition_path, progress, cancel)?;
 
     progress.on_phase(Phase::FormattingNtfs);
     let windows_partition_path = linux_partition_device_path(&plan.device_path, 2);
@@ -121,7 +122,7 @@ pub fn execute_write_windows_image(
     progress.on_phase(Phase::Mounting);
     let mountpoint = platform.mount_ntfs_partition(&device, 2)?;
 
-    let copy_result = copy_files(&iso, &files, &mountpoint, progress);
+    let copy_result = copy_files(&iso, &files, &mountpoint, progress, cancel);
 
     // Always try to unmount, even if the copy failed partway through --
     // leaving the mount dangling helps no one, and unmount's own error (if
@@ -407,18 +408,21 @@ fn linux_partition_device_path(whole_disk: &str, partition_number: u32) -> Strin
 /// `dd`s the vendored UEFI:NTFS image onto partition 1, verbatim -- see this
 /// module's top doc comment for why that's all partition 1 ever needs.
 /// Returns its SHA-256, for whatever future verification wants it.
-fn write_boot_partition(partition_path: &str, progress: &dyn ProgressSink) -> Result<String> {
+fn write_boot_partition(
+    partition_path: &str,
+    progress: &dyn ProgressSink,
+    cancel: &CancelToken,
+) -> Result<String> {
     let mut partition = OpenOptions::new()
         .write(true)
         .open(partition_path)
         .map_err(ArgosError::Io)?;
-    let cancel = CancelToken::new();
     let hash = dd_mode::write_stream(
         Cursor::new(UEFI_NTFS_IMAGE),
         &mut partition,
         UEFI_NTFS_IMAGE.len() as u64,
         progress,
-        &cancel,
+        cancel,
     )?;
     partition.flush().map_err(ArgosError::Io)?;
     Ok(hash)
@@ -446,11 +450,23 @@ fn format_ntfs(partition_path: &str) -> Result<()> {
 
 /// Copies every file `image::windows::WindowsIso` lists into `mountpoint`,
 /// hashing each one as it's copied.
+///
+/// Cancellation (backlog #35) is checked once per file, not per chunk the
+/// way [`dd_mode::write_stream`] checks per block: `copy_and_hash` doesn't
+/// take a `CancelToken` itself, deliberately kept out of scope since it's
+/// shared by every `sha256_stream` caller, including the read-only verify
+/// paths, which don't need cancellation at all. Most files in a Windows
+/// installer tree are small, so this is close to per-block in practice; the
+/// one real gap is a multi-GB `install.wim`/`install.esd`, where a cancel
+/// can take as long as that one file's remaining copy -- an accepted,
+/// documented limitation for this first pass rather than a reason to thread
+/// cancellation through the shared hashing helper too.
 fn copy_files(
     iso: &WindowsIso,
     files: &[image::windows::IsoFileEntry],
     mountpoint: &Path,
     progress: &dyn ProgressSink,
+    cancel: &CancelToken,
 ) -> Result<CopiedFiles> {
     progress.on_phase(Phase::CopyingFiles);
 
@@ -459,6 +475,10 @@ fn copy_files(
     let mut hashes = Vec::with_capacity(files.len());
 
     for entry in files {
+        if cancel.is_cancelled() {
+            return Err(ArgosError::Cancelled);
+        }
+
         let source = iso
             .open_file(&entry.path)
             .map_err(ArgosError::Io)?

@@ -16,8 +16,56 @@
 
 use argos_core::device::Device;
 use argos_core::error::ArgosError;
+use argos_core::progress::CancelToken;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::PathBuf;
+
+/// The one control byte `argos` can send `argos-helper` *after* the initial
+/// [`Plan`] line, to request a clean cancellation of an in-progress write
+/// (backlog #35). `CONTRIBUTING.md` documents this IPC as deliberately
+/// one-shot, not stateful/bidirectional -- this doesn't reopen that decision:
+/// it's still a single signal in a single direction over the same pipe, not a
+/// round trip or a negotiation. What changes is that `argos` no longer closes
+/// its end of the pipe right after sending the `Plan`; it keeps it open for
+/// the write's duration so this byte has somewhere to go if a `SIGINT`
+/// arrives, and `argos-helper` watches for it (or for the pipe simply closing
+/// -- see [`watch_for_cancel`]) on a background thread while the write runs.
+///
+/// An arbitrary non-JSON byte, not a JSON message, so the watcher thread
+/// never needs to buffer or parse anything -- one `read()` call, one
+/// comparison. `0x03` is the traditional ASCII "end of text" / historical
+/// terminal-driver Ctrl-C byte, chosen for the mnemonic, not because
+/// anything here goes through a terminal.
+pub const CANCEL_SIGNAL: u8 = 0x03;
+
+/// Runs on a background thread for the duration of a write, watching
+/// whatever's left of `argos`'s stdin pipe after the `Plan` line for
+/// [`CANCEL_SIGNAL`] and calling `cancel.cancel()` when it sees one.
+///
+/// Also cancels on plain EOF (the pipe closing without the byte ever
+/// arriving) or a read error, as a safety net: if the unprivileged parent
+/// process dies or is killed outright rather than delivering a clean
+/// `SIGINT`-triggered byte, this is the only way `argos-helper` finds out --
+/// and stopping is the safer default when the process that was supposed to
+/// be watching this write is gone. Harmless if it fires *after* the write
+/// already finished (the caller's write loop has stopped checking the token
+/// by then either way).
+///
+/// Takes a plain [`Read`] rather than assuming stdin specifically so it's
+/// testable against an in-memory buffer.
+pub fn watch_for_cancel<R: Read>(mut reader: R, cancel: CancelToken) {
+    let mut byte = [0u8; 1];
+    loop {
+        match reader.read(&mut byte) {
+            Ok(0) => break,                             // EOF -- parent closed the pipe
+            Ok(_) if byte[0] == CANCEL_SIGNAL => break, // the real signal
+            Ok(_) => continue,                          // anything else on this channel: ignore
+            Err(_) => break,
+        }
+    }
+    cancel.cancel();
+}
 
 /// The one value `argos` ever sends `argos-helper` on stdin. Tagged so a
 /// single JSON blob unambiguously carries which operation to run -- `argos
@@ -267,6 +315,30 @@ mod tests {
         assert!(json.contains(r#""kind":"verify""#));
         let parsed: Plan = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, Plan::Verify(p) if p.iso_size_bytes == 4_000_000_000));
+    }
+
+    #[test]
+    fn watch_for_cancel_cancels_the_token_when_it_sees_the_signal_byte() {
+        let cancel = CancelToken::new();
+        watch_for_cancel(std::io::Cursor::new(vec![CANCEL_SIGNAL]), cancel.clone());
+        assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn watch_for_cancel_cancels_the_token_on_plain_eof_too() {
+        let cancel = CancelToken::new();
+        watch_for_cancel(std::io::Cursor::new(Vec::<u8>::new()), cancel.clone());
+        assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn watch_for_cancel_ignores_unrelated_bytes_before_the_real_signal() {
+        let cancel = CancelToken::new();
+        watch_for_cancel(
+            std::io::Cursor::new(vec![b'x', b'y', CANCEL_SIGNAL]),
+            cancel.clone(),
+        );
+        assert!(cancel.is_cancelled());
     }
 
     #[test]
