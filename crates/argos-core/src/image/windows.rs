@@ -5,11 +5,20 @@
 //! UEFI:NTFS rather than `install.wim` splitting).
 //!
 //! Unlike an isohybrid Linux image, a Windows installation ISO carries no
-//! embedded MBR/GPT at all -- it's a plain ISO9660 filesystem. Recognizing one
-//! means actually reading its directory tree rather than probing a couple of
-//! fixed byte offsets, so this module reads through [`cdfs`], a pure-Rust
-//! ISO9660/ECMA-119 implementation (used here under the local dependency name
-//! `cdfs`, backed by the `newtua-cdfs` fork -- see `Cargo.toml` for why).
+//! embedded MBR/GPT at all. It also, in practice, is **not** a plain ISO9660
+//! filesystem: real official Windows 10/11 media is mastered as a UDF
+//! bridge (ISO9660 + UDF, ECMA-167) -- confirmed against a real Microsoft
+//! Windows 10 22H2 ISO during W1's own validation, contradicting Argos's
+//! initial phase 2 planning, which treated UDF as a rare edge case for
+//! unusually large multi-edition images rather than the norm. The plain
+//! ISO9660 layer such a bridge carries exposes only a tiny stub (a
+//! `README.TXT` pointing UEFI:NTFS-less systems at Microsoft's site); the
+//! real `bootmgr`/`sources` tree lives in the UDF layer only. So this module
+//! tries [`hadris_udf`] (pure-Rust UDF/ECMA-167) first, falling through to
+//! [`cdfs`] (pure-Rust ISO9660/ECMA-119, under the local dependency name
+//! `cdfs`, backed by the `newtua-cdfs` fork -- see `Cargo.toml` for why) only
+//! for genuinely ISO9660-only Windows-shaped images, including this module's
+//! own synthetic test fixtures.
 //!
 //! Detection looks for the same two paths every official Windows 10/11
 //! install media has always shipped: `bootmgr` and `sources/boot.wim` at the
@@ -20,7 +29,7 @@
 //! missing does.
 
 use std::fs::File;
-use std::io::{self, Read, Seek};
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 const BOOTMGR_PATH: &str = "bootmgr";
@@ -41,7 +50,7 @@ impl WindowsClassification {
     }
 }
 
-/// Classifies the ISO9660 image at `path` as a Windows installer or not.
+/// Classifies the image at `path` as a Windows installer or not.
 pub fn classify(path: &Path) -> io::Result<WindowsClassification> {
     let file = File::open(path)?;
     classify_reader(file)
@@ -49,7 +58,22 @@ pub fn classify(path: &Path) -> io::Result<WindowsClassification> {
 
 /// Same as [`classify`], but against any `Read + Seek` source -- lets tests
 /// exercise this against small in-memory fixtures instead of real files.
-pub fn classify_reader<R: Read + Seek>(reader: R) -> io::Result<WindowsClassification> {
+pub fn classify_reader<R: Read + Seek>(mut reader: R) -> io::Result<WindowsClassification> {
+    // Tries UDF first (real Windows media), falling back to ISO9660 (this
+    // module's own synthetic fixtures, and any genuinely ISO9660-only
+    // Windows-shaped image) -- see this module's top doc comment for why.
+    // `UdfVolume::open` takes its reader by value, so it's given a temporary
+    // `&mut` borrow here rather than `reader` itself: on failure, `reader` is
+    // still ours to rewind and retry with cdfs.
+    if let Ok(udf) = hadris_udf::UdfVolume::open(&mut reader) {
+        let has_bootmgr = udf_is_file_at(&udf, BOOTMGR_PATH)?;
+        let has_boot_wim = has_bootmgr && udf_is_file_at(&udf, BOOT_WIM_PATH)?;
+        return Ok(WindowsClassification {
+            is_windows_installer: has_bootmgr && has_boot_wim,
+        });
+    }
+
+    reader.seek(SeekFrom::Start(0))?;
     let iso = match cdfs::ISO9660::new(reader) {
         Ok(iso) => iso,
         // A real I/O failure (short read, broken pipe, ...) is Argos's
@@ -82,6 +106,54 @@ fn is_file_at<T: cdfs::ISO9660Reader>(iso: &cdfs::ISO9660<T>, path: &str) -> io:
     }
 }
 
+fn udf_is_file_at<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
+    udf: &hadris_udf::UdfVolume<T>,
+    path: &str,
+) -> io::Result<bool> {
+    match udf_find(udf, path).map_err(udf_err_to_io)? {
+        Some(entry) => Ok(entry.is_file()),
+        None => Ok(false),
+    }
+}
+
+/// Descends `path` (`/`-separated, case-insensitive -- real Windows UDF
+/// media has been observed using both `bootmgr` and `BOOTMGR`) from `udf`'s
+/// root directory, the UDF counterpart to `cdfs::ISODirectory::find_recursive`.
+fn udf_find<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
+    udf: &hadris_udf::UdfVolume<T>,
+    path: &str,
+) -> hadris_udf::Result<Option<hadris_udf::dir::UdfDirEntry>> {
+    let mut dir = udf.root_dir()?;
+    let mut segments = path.split('/').filter(|s| !s.is_empty()).peekable();
+
+    while let Some(segment) = segments.next() {
+        let Some(entry) = dir
+            .entries()
+            .find(|e| e.name().eq_ignore_ascii_case(segment))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        if segments.peek().is_none() {
+            return Ok(Some(entry));
+        }
+        if !entry.is_dir() {
+            return Ok(None);
+        }
+        dir = udf.read_directory(&entry.icb)?;
+    }
+
+    // Empty path: the root directory itself was asked for, which is never a
+    // file -- not reachable via this module's own callers, but Ok(None) is
+    // the honest answer rather than panicking on an empty entries() lookup.
+    Ok(None)
+}
+
+fn udf_err_to_io(err: hadris_udf::Error) -> io::Error {
+    io::Error::other(err.to_string())
+}
+
 /// One regular file found while walking a [`WindowsIso`]'s tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IsoFileEntry {
@@ -96,32 +168,66 @@ pub struct IsoFileEntry {
 /// at a time. W3 is what actually copies bytes onto a mounted NTFS partition
 /// (hashing each file as it goes); nothing here touches a disk.
 pub struct WindowsIso {
-    iso: cdfs::ISO9660<File>,
+    backing: Backing,
+}
+
+enum Backing {
+    Udf(hadris_udf::UdfVolume<BufReader<File>>),
+    Iso9660(Box<cdfs::ISO9660<File>>),
 }
 
 impl WindowsIso {
     pub fn open(path: &Path) -> io::Result<Self> {
-        let file = File::open(path)?;
-        let iso = cdfs::ISO9660::new(file).map_err(cdfs_err_to_io)?;
-        Ok(Self { iso })
+        // Same UDF-first, ISO9660-fallback order as classify_reader, and for
+        // the same reason -- see this module's top doc comment.
+        if let Ok(udf) = hadris_udf::UdfVolume::open(BufReader::new(File::open(path)?)) {
+            return Ok(Self {
+                backing: Backing::Udf(udf),
+            });
+        }
+        let iso = cdfs::ISO9660::new(File::open(path)?).map_err(cdfs_err_to_io)?;
+        Ok(Self {
+            backing: Backing::Iso9660(Box::new(iso)),
+        })
     }
 
     /// Recursively lists every regular file in the image, depth-first.
-    /// Symlinks are skipped (Windows install media is plain ISO9660 with no
-    /// Rock Ridge symlinks) rather than followed or reported as an error.
+    /// Symlinks are skipped (Windows install media has none in either its
+    /// UDF or ISO9660 layer) rather than followed or reported as an error.
     pub fn list_files(&self) -> io::Result<Vec<IsoFileEntry>> {
         let mut out = Vec::new();
-        walk(self.iso.root(), "", &mut out)?;
+        match &self.backing {
+            Backing::Udf(udf) => {
+                let root = udf.root_dir().map_err(udf_err_to_io)?;
+                walk_udf(udf, &root, "", &mut out)?;
+            }
+            Backing::Iso9660(iso) => walk(iso.root(), "", &mut out)?,
+        }
         Ok(out)
     }
 
     /// Returns a reader over one file's contents, by its path relative to the
     /// image root (e.g. `"sources/boot.wim"`). `Ok(None)` if `path` doesn't
     /// name a regular file (missing, or a directory/symlink).
-    pub fn open_file(&self, path: &str) -> io::Result<Option<cdfs::ISOFileReader<File>>> {
-        match self.iso.open(path).map_err(cdfs_err_to_io)? {
-            Some(cdfs::DirectoryEntry::File(file)) => Ok(Some(file.read())),
-            _ => Ok(None),
+    ///
+    /// The UDF backend has no streaming file reader (`hadris_udf` reads a
+    /// whole file into memory at once) -- its bytes are wrapped in a
+    /// [`Cursor`] so both backends still satisfy plain [`Read`] here, but a
+    /// multi-GB `install.wim` on UDF-backed media costs that much memory
+    /// during the copy in W3, unlike the ISO9660 backend's true streaming.
+    pub fn open_file(&self, path: &str) -> io::Result<Option<Box<dyn Read + '_>>> {
+        match &self.backing {
+            Backing::Udf(udf) => match udf_find(udf, path).map_err(udf_err_to_io)? {
+                Some(entry) if entry.is_file() => {
+                    let bytes = udf.read_file(&entry).map_err(udf_err_to_io)?;
+                    Ok(Some(Box::new(Cursor::new(bytes))))
+                }
+                _ => Ok(None),
+            },
+            Backing::Iso9660(iso) => match iso.open(path).map_err(cdfs_err_to_io)? {
+                Some(cdfs::DirectoryEntry::File(file)) => Ok(Some(Box::new(file.read()))),
+                _ => Ok(None),
+            },
         }
     }
 }
@@ -154,6 +260,31 @@ fn walk<T: cdfs::ISO9660Reader>(
     Ok(())
 }
 
+fn walk_udf<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
+    udf: &hadris_udf::UdfVolume<T>,
+    dir: &hadris_udf::UdfDir,
+    prefix: &str,
+    out: &mut Vec<IsoFileEntry>,
+) -> io::Result<()> {
+    for entry in dir.entries() {
+        let path = if prefix.is_empty() {
+            entry.name().to_string()
+        } else {
+            format!("{prefix}/{}", entry.name())
+        };
+        if entry.is_dir() {
+            let subdir = udf.read_directory(&entry.icb).map_err(udf_err_to_io)?;
+            walk_udf(udf, &subdir, &path, out)?;
+        } else {
+            out.push(IsoFileEntry {
+                path,
+                size: entry.size,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn cdfs_err_to_io(err: cdfs::ISOError) -> io::Error {
     match err {
         cdfs::ISOError::Io(err) => err,
@@ -161,19 +292,24 @@ fn cdfs_err_to_io(err: cdfs::ISOError) -> io::Error {
     }
 }
 
-#[cfg(test)]
-mod fixtures {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures {
     //! Hand-rolled, minimal ISO9660 images -- just enough structure for
     //! `cdfs` to parse (Primary Volume Descriptor, terminator, single-block
     //! directory extents, no path table), not a byte-accurate replica of what
     //! a real mastering tool emits. Same spirit as `image::isohybrid`'s
     //! hand-crafted sector fixtures, one level deeper since here `cdfs` has
     //! to actually walk a directory tree rather than read fixed offsets.
+    //!
+    //! Exposed beyond this crate's own tests, behind the `test-fixtures`
+    //! feature, so `argos-privileged`'s root-gated loop-device integration
+    //! tests (backlog #27, W3) can exercise a real
+    //! Windows-installer-shaped ISO without duplicating this builder.
 
     const BLOCK: usize = 2048;
 
     fn even_pad(mut field: Vec<u8>) -> Vec<u8> {
-        if field.len() % 2 != 0 {
+        if !field.len().is_multiple_of(2) {
             field.push(0);
         }
         field
@@ -323,6 +459,49 @@ mod fixtures {
         image
     }
 
+    /// The UDF counterpart to [`windows_installer_iso`] above: what a real
+    /// official Windows installer image actually looks like (confirmed
+    /// against a real Windows 10 22H2 ISO -- see this module's parent doc
+    /// comment), built with `hadris_udf::write` rather than hand-rolled
+    /// bytes, since UDF/ECMA-167 has no equivalent to ISO9660's "just a
+    /// couple of directory records" simplicity.
+    pub fn udf_windows_installer_iso(include_bootmgr: bool, include_boot_wim: bool) -> Vec<u8> {
+        use hadris_udf::write::{SimpleDir, SimpleFile, UdfWriteOptions, UdfWriter};
+        use std::io::Cursor;
+
+        let mut root = SimpleDir::new("");
+        if include_bootmgr {
+            root.add_file(SimpleFile::new(
+                "bootmgr",
+                b"argos test fixture: windows boot manager".to_vec(),
+            ));
+        }
+        let mut sources = SimpleDir::new("sources");
+        if include_boot_wim {
+            sources.add_file(SimpleFile::new(
+                "boot.wim",
+                b"argos test fixture: boot.wim payload".to_vec(),
+            ));
+        }
+        root.add_dir(sources);
+
+        let output = UdfWriter::create(Cursor::new(Vec::new()), &root, UdfWriteOptions::default())
+            .expect("building the synthetic UDF fixture should succeed");
+        output.into_inner().into_inner()
+    }
+
+    /// A plain, empty UDF image -- the UDF counterpart to [`plain_iso`]
+    /// below: a valid UDF volume, but nothing Windows-shaped about it.
+    pub fn plain_udf() -> Vec<u8> {
+        use hadris_udf::write::{SimpleDir, UdfWriteOptions, UdfWriter};
+        use std::io::Cursor;
+
+        let root = SimpleDir::new("");
+        let output = UdfWriter::create(Cursor::new(Vec::new()), &root, UdfWriteOptions::default())
+            .expect("building the synthetic UDF fixture should succeed");
+        output.into_inner().into_inner()
+    }
+
     /// A plain ISO9660 image with an empty root directory and nothing else --
     /// e.g. what a Linux ISO's filesystem looks like from `cdfs`'s point of
     /// view: valid ISO9660, but nothing Windows-shaped about it.
@@ -349,12 +528,109 @@ mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{plain_iso, windows_installer_iso};
+    use super::fixtures::{plain_iso, plain_udf, udf_windows_installer_iso, windows_installer_iso};
     use super::*;
     use std::io::Cursor;
 
+    // -- UDF: the shape real Windows installer media actually has --
+
     #[test]
-    fn classifies_a_real_windows_installer_shape() {
+    fn classifies_a_real_windows_installer_shape_udf() {
+        let image = udf_windows_installer_iso(true, true);
+        let result = classify_reader(Cursor::new(image)).unwrap();
+        assert!(result.is_windows_installer_iso());
+    }
+
+    #[test]
+    fn rejects_udf_missing_bootmgr() {
+        let image = udf_windows_installer_iso(false, true);
+        let result = classify_reader(Cursor::new(image)).unwrap();
+        assert!(!result.is_windows_installer_iso());
+    }
+
+    #[test]
+    fn rejects_udf_missing_boot_wim() {
+        let image = udf_windows_installer_iso(true, false);
+        let result = classify_reader(Cursor::new(image)).unwrap();
+        assert!(!result.is_windows_installer_iso());
+    }
+
+    #[test]
+    fn rejects_plain_non_windows_udf() {
+        let result = classify_reader(Cursor::new(plain_udf())).unwrap();
+        assert!(!result.is_windows_installer_iso());
+    }
+
+    #[test]
+    fn lists_every_file_with_its_path_and_size_udf() {
+        let dir = tempfile::tempdir().unwrap();
+        let iso_path = dir.path().join("windows.iso");
+        std::fs::write(&iso_path, udf_windows_installer_iso(true, true)).unwrap();
+
+        let iso = WindowsIso::open(&iso_path).unwrap();
+        let mut files = iso.list_files().unwrap();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        assert_eq!(
+            files,
+            vec![
+                IsoFileEntry {
+                    path: "bootmgr".to_string(),
+                    size: 40,
+                },
+                IsoFileEntry {
+                    path: "sources/boot.wim".to_string(),
+                    size: 36,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn opens_and_reads_a_file_by_path_udf() {
+        let dir = tempfile::tempdir().unwrap();
+        let iso_path = dir.path().join("windows.iso");
+        std::fs::write(&iso_path, udf_windows_installer_iso(true, true)).unwrap();
+
+        let iso = WindowsIso::open(&iso_path).unwrap();
+        let mut contents = Vec::new();
+        iso.open_file(BOOT_WIM_PATH)
+            .unwrap()
+            .expect("sources/boot.wim should exist")
+            .read_to_end(&mut contents)
+            .unwrap();
+
+        assert_eq!(contents, b"argos test fixture: boot.wim payload");
+        assert!(iso.open_file("no/such/file").unwrap().is_none());
+    }
+
+    #[test]
+    fn classification_is_case_insensitive_on_udf_names() {
+        // hadris_udf::write::SimpleFile keeps whatever case it's given;
+        // real Windows UDF media has been observed both ways, so lookups
+        // must not assume one.
+        use hadris_udf::write::{SimpleDir, SimpleFile, UdfWriteOptions, UdfWriter};
+
+        let mut root = SimpleDir::new("");
+        root.add_file(SimpleFile::new("BOOTMGR", b"x".to_vec()));
+        let mut sources = SimpleDir::new("SOURCES");
+        sources.add_file(SimpleFile::new("BOOT.WIM", b"y".to_vec()));
+        root.add_dir(sources);
+        let image = UdfWriter::create(Cursor::new(Vec::new()), &root, UdfWriteOptions::default())
+            .unwrap()
+            .into_inner()
+            .into_inner();
+
+        let result = classify_reader(Cursor::new(image)).unwrap();
+        assert!(result.is_windows_installer_iso());
+    }
+
+    // -- ISO9660 fallback: this module's own synthetic fixtures, and any
+    // genuinely ISO9660-only Windows-shaped image (real media is UDF -- see
+    // this module's top doc comment) --
+
+    #[test]
+    fn classifies_a_windows_installer_shape_iso9660_fallback() {
         let image = windows_installer_iso(true, true);
         let result = classify_reader(Cursor::new(image)).unwrap();
         assert!(result.is_windows_installer_iso());
@@ -381,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_input_that_is_not_iso9660_at_all() {
+    fn rejects_input_that_is_not_recognized_in_either_format() {
         let result = classify_reader(Cursor::new(vec![0u8; 4096])).unwrap();
         assert!(!result.is_windows_installer_iso());
     }

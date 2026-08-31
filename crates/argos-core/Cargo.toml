@@ -18,6 +18,31 @@ serde = { workspace = true }
 # See docs/architecture.md's phase-2 guiding decisions for why the fork was
 # chosen over the canonical crate.
 cdfs = { package = "newtua-cdfs", version = "0.2.4-newtua.1" }
+# Real Windows installer media is a UDF bridge, not plain ISO9660 --
+# confirmed against a real Windows 10 22H2 ISO during W1's own validation.
+# Pure Rust, `read`+`std`+`sync` only (default features; `write` is a
+# dev-only feature, used just to build synthetic UDF test fixtures). See
+# docs/architecture.md's phase-2 guiding decisions and this crate's
+# rust-version bump (1.75 -> 1.88, hadris-udf's MSRV) for why.
+hadris-udf = "2.2.0"
+
+[features]
+# Exposes image::windows::fixtures outside this crate's own tests, so
+# argos-privileged's root-gated Windows-write integration tests (backlog
+# #27, W3) can build a real Windows-installer-shaped ISO without
+# duplicating that hand-rolled ISO9660/UDF builders. Never enabled in a
+# production build -- only ever turned on as a dev-dependency feature.
+#
+# Forwards to hadris-udf's own `write` feature: when a downstream crate
+# (argos-privileged) depends on this crate normally (not via
+# [dev-dependencies]) with test-fixtures on, this crate's own
+# [dev-dependencies] section -- where hadris-udf/write is otherwise enabled,
+# for this crate's own `cargo test` -- never applies transitively, so the
+# fixtures module's use of hadris_udf::write needs this forwarding instead.
+test-fixtures = ["hadris-udf/write"]
 
 [dev-dependencies]
 tempfile = "3"
+# Only for building synthetic UDF fixtures in tests -- argos-core itself
+# never writes a UDF filesystem.
+hadris-udf = { version = "2.2.0", features = ["write"] }

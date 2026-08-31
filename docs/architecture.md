@@ -55,9 +55,11 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   is needed. Splitting `install.wim` into `.swm` (`wimlib`, Rufus's older
   method, useful for very old BIOS-only compatibility) is deliberately
   deferred to the backlog.
-- **`gptman`** (pure-Rust GPT) and **`cdfs`** (ISO9660 reader, used here under
+- **`gptman`** (pure-Rust GPT), **`cdfs`** (ISO9660 reader, used here under
   the local dependency name `cdfs` but backed by the `newtua-cdfs` fork -- see
-  below) are the only new dependencies this needs.
+  below), and **`hadris-udf`** (pure-Rust UDF/ECMA-167 reader, added after W1
+  validation showed real Windows media needs it -- see the correction below)
+  are the only new dependencies this needs.
 - This relaxes v1's "no shelling out" rule specifically to call
   `mkfs.ntfs`/`ntfs-3g` as an external process on Linux to format and mount
   the NTFS partition -- the same posture v1 already accepted for
@@ -71,11 +73,21 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   else, publishing its library under the same crate name (`cdfs`) and API --
   `argos-core`'s `Cargo.toml` depends on it as `cdfs = { package = "newtua-cdfs",
   ... }` so the rest of the codebase is unaffected by the rename.
-- **Known, non-blocking risk**: very large Windows ISOs (multi-edition media)
-  can ship in a UDF bridge format rather than plain ISO9660, if their embedded
-  `install.wim`/`.esd` alone exceeds 4GB. `cdfs` only reads ISO9660; a UDF
-  reader (e.g. `hadris-udf`) may need to be added later if this is hit in
-  practice. Treated as a W1-adjacent spike, not something blocking the plan.
+- **Correction (post-W1 validation): real Windows installer media is UDF, not
+  ISO9660 -- this is the norm, not a rare edge case.** The original planning
+  above treated a UDF bridge as a risk unique to unusually large multi-edition
+  images. Testing `image::windows` against a real, official Windows 10 22H2
+  ISO (single edition, nothing unusual) during W1 disproved that: it's
+  mastered as an ISO9660+UDF bridge, with the ISO9660 layer exposing only a
+  stub `README.TXT` -- `bootmgr`, `sources/`, and everything else live in the
+  UDF layer exclusively. `cdfs` (ISO9660-only) could not see any of it.
+  `image::windows` now tries [`hadris-udf`](https://github.com/hxyulin/hadris)
+  (pure-Rust ECMA-167/UDF, `read`+`std`+`sync` features) first, falling back
+  to `cdfs` only for genuinely ISO9660-only Windows-shaped images -- which in
+  practice means this crate's own synthetic test fixtures, not real media.
+  This is also why the workspace's `rust-version` moved from 1.75 to 1.88
+  (`hadris-udf`'s MSRV); `gptman` (added in W3) was pinned to its 1.x line
+  regardless, since 2.x/3.x's MSRV wasn't the deciding factor there.
 
 ## Crate layout
 
@@ -112,11 +124,13 @@ ordinary files and in-memory buffers -- no root, no real hardware.
   Only `Hybrid` is writable in DD mode.
 - `image::windows` (backlog #27, W1): recognizes an official Windows
   installer ISO by the presence of `bootmgr` + `sources/boot.wim` at its
-  root, read through `cdfs` (see the phase 2 guiding decisions above) rather
-  than fixed byte offsets, since a Windows ISO carries no embedded MBR/GPT to
-  probe. `WindowsIso` is a thin read-only wrapper (list files with their
-  sizes, open one by path) over the same `cdfs` tree, reused by W3 to copy
-  the extracted files onto the NTFS partition.
+  root, rather than fixed byte offsets, since a Windows ISO carries no
+  embedded MBR/GPT to probe. Tries `hadris-udf` first, falling back to
+  `cdfs` (see the phase 2 guiding decisions above, including the post-W1
+  correction on why UDF has to come first). `WindowsIso` is a thin
+  read-only wrapper (list files with their sizes, open one by path) over
+  whichever backend recognized the image, reused by W3 to copy the
+  extracted files onto the NTFS partition.
 - `image::checksum`: streaming SHA-256, used both to fingerprint the source ISO
   and (once E5/E6 land) to verify what was actually written.
 - `preflight`: capacity and source/target-collision checks that run in the
@@ -299,7 +313,7 @@ tagged `Plan` (`Write`/`Verify`) rather than always a `WritePlan`.
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
-| Windows ISO support (backlog #27) | W1 (`image::windows`: detection + read-only file-tree wrapper) implemented, unit-tested with synthetic ISO9660 fixtures. No privilege, no hardware, not yet wired into the CLI (W2-W6 still pending) |
+| Windows ISO support (backlog #27) | W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper) implemented. Confirmed end-to-end against a real, official Microsoft Windows 10 22H2 ISO: correctly classified it, listed all 906 files (5.71GB total, including the 5.18GB `install.wim` that's the whole reason this write path exists), and extracted/byte-verified individual files. Also unit-tested with both synthetic UDF and ISO9660 fixtures. No privilege, no hardware, not yet wired into the CLI (W2-W6 still pending) |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted
