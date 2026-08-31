@@ -6,7 +6,7 @@ also documents the design decisions behind the current crate layout.
 
 ## Getting set up
 
-- Install a stable Rust toolchain (1.75+). Via [`mise`](https://mise.jdx.dev):
+- Install a stable Rust toolchain (1.88+). Via [`mise`](https://mise.jdx.dev):
   `mise use -g rust@latest`. Via [`rustup`](https://rustup.rs) works too.
 - `cargo build --workspace`
 - `cargo test --workspace`

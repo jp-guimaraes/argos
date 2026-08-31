@@ -30,6 +30,9 @@ pub enum ArgosError {
     #[error("'{0}' is not a Linux ISO9660 image Argos recognizes")]
     UnsupportedIso(PathBuf),
 
+    #[error("'{0}' is not a Windows installer ISO Argos recognizes (no 'bootmgr' + 'sources/boot.wim' at the root)")]
+    NotWindowsInstallerIso(PathBuf),
+
     #[error("checksum mismatch after writing: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
 
@@ -59,6 +62,7 @@ impl ArgosError {
             ArgosError::Cancelled => 18,
             ArgosError::Io(_) => 19,
             ArgosError::NotImplemented(_) => 20,
+            ArgosError::NotWindowsInstallerIso(_) => 21,
         }
     }
 }

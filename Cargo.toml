@@ -14,7 +14,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+# 1.75 until W1's UDF-support correction (backlog #27): real Windows install
+# media turned out to need UDF reading (hadris-udf, MSRV 1.88), not just
+# ISO9660, so this moved with it.
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jp-guimaraes/argos"
 authors = ["Argos contributors"]
@@ -36,6 +39,11 @@ argos-privileged = { path = "crates/argos-privileged", version = "0.1.0" }
 
 thiserror = "2"
 sha2 = "0.10"
+# Pinned to the 1.x line: implemented and tested against it before this
+# workspace's rust-version bump (see above) removed the original reason for
+# avoiding 2.x/3.x (their MSRV, 1.85, no longer being out of reach). Revisiting
+# to the latest line is unrelated cleanup, not something W3 needed.
+gptman = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }

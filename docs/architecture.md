@@ -28,6 +28,67 @@ for the full backlog (epics E0-E11) that this was planned from.
   accepted external-process calls are unmount/eject helpers
   (`umount`/`eject` on Linux, `diskutil` on macOS).
 
+## Guiding decisions (phase 2: Windows ISO support, backlog #27)
+
+v1's "Linux ISOs only, DD mode" scope (above) was always meant to be revisited
+once it shipped. Windows install-media support breaks the "Argos never
+creates/alters a partition table" invariant v1 relied on, so -- per the
+project's own rule that this needed an explicit architecture decision before
+being touched -- these were decided in a 2026-08-30 planning session, ahead of
+implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
+
+- **Implementation/test platform: Linux first.** The highest-risk new piece is
+  creating a real NTFS partition, which is native and mature on Linux
+  (`ntfs-3g`/`mkfs.ntfs`) but on macOS depends on `ntfs-3g` via Homebrew
+  running on macFUSE (kext approval, historically fragile) -- not reliably
+  testable there. The macOS backend is deferred; `argos-core`'s planning logic
+  (image classification, partition-plan arithmetic) stays host-agnostic from
+  the start, same as v1's split.
+- **FAT32 4GB limit (`install.wim`/`.esd`) workaround: UEFI:NTFS**, Rufus's
+  current method -- a small FAT32 boot partition (loads the UEFI:NTFS driver)
+  plus a large NTFS partition holding the Windows files untouched, no
+  splitting. The boot partition is always an exact copy of
+  [`pbatard/uefi-ntfs`](https://github.com/pbatard/uefi-ntfs)'s pre-built,
+  Secure-Boot-signed `.img` (the same artifact Rufus vendors as
+  `res/uefi/uefi-ntfs.img`), so it's a plain `dd` of a vendored binary --
+  `argos_core::write::dd_mode` already covers that, and no FAT32-writing crate
+  is needed. Splitting `install.wim` into `.swm` (`wimlib`, Rufus's older
+  method, useful for very old BIOS-only compatibility) is deliberately
+  deferred to the backlog.
+- **`gptman`** (pure-Rust GPT), **`cdfs`** (ISO9660 reader, used here under
+  the local dependency name `cdfs` but backed by the `newtua-cdfs` fork -- see
+  below), and **`hadris-udf`** (pure-Rust UDF/ECMA-167 reader, added after W1
+  validation showed real Windows media needs it -- see the correction below)
+  are the only new dependencies this needs.
+- This relaxes v1's "no shelling out" rule specifically to call
+  `mkfs.ntfs`/`ntfs-3g` as an external process on Linux to format and mount
+  the NTFS partition -- the same posture v1 already accepted for
+  `unmount`/`eject` helpers. Creating the partition table itself stays
+  pure-Rust (`gptman`).
+- **`cdfs` dependency: the `newtua-cdfs` fork, not the canonical crate.** The
+  canonical `cdfs` crate on crates.io hard-depends on `fuser` (FUSE bindings)
+  and a `clap`-based mount binary, neither of which `argos-core` uses or wants
+  as a transitive dependency. `newtua-cdfs` (maintained by the same team as
+  The Unarchiver) is a "forced fork" that strips exactly that and nothing
+  else, publishing its library under the same crate name (`cdfs`) and API --
+  `argos-core`'s `Cargo.toml` depends on it as `cdfs = { package = "newtua-cdfs",
+  ... }` so the rest of the codebase is unaffected by the rename.
+- **Correction (post-W1 validation): real Windows installer media is UDF, not
+  ISO9660 -- this is the norm, not a rare edge case.** The original planning
+  above treated a UDF bridge as a risk unique to unusually large multi-edition
+  images. Testing `image::windows` against a real, official Windows 10 22H2
+  ISO (single edition, nothing unusual) during W1 disproved that: it's
+  mastered as an ISO9660+UDF bridge, with the ISO9660 layer exposing only a
+  stub `README.TXT` -- `bootmgr`, `sources/`, and everything else live in the
+  UDF layer exclusively. `cdfs` (ISO9660-only) could not see any of it.
+  `image::windows` now tries [`hadris-udf`](https://github.com/hxyulin/hadris)
+  (pure-Rust ECMA-167/UDF, `read`+`std`+`sync` features) first, falling back
+  to `cdfs` only for genuinely ISO9660-only Windows-shaped images -- which in
+  practice means this crate's own synthetic test fixtures, not real media.
+  This is also why the workspace's `rust-version` moved from 1.75 to 1.88
+  (`hadris-udf`'s MSRV); `gptman` (added in W3) was pinned to its 1.x line
+  regardless, since 2.x/3.x's MSRV wasn't the deciding factor there.
+
 ## Crate layout
 
 ```
@@ -61,6 +122,15 @@ ordinary files and in-memory buffers -- no root, no real hardware.
   (embedded MBR signature + partition entry, El Torito boot catalog, a
   best-effort GPT/UEFI hint) into `Hybrid` / `ElToritoOnly` / `PlainData`.
   Only `Hybrid` is writable in DD mode.
+- `image::windows` (backlog #27, W1): recognizes an official Windows
+  installer ISO by the presence of `bootmgr` + `sources/boot.wim` at its
+  root, rather than fixed byte offsets, since a Windows ISO carries no
+  embedded MBR/GPT to probe. Tries `hadris-udf` first, falling back to
+  `cdfs` (see the phase 2 guiding decisions above, including the post-W1
+  correction on why UDF has to come first). `WindowsIso` is a thin
+  read-only wrapper (list files with their sizes, open one by path) over
+  whichever backend recognized the image, reused by W3 to copy the
+  extracted files onto the NTFS partition.
 - `image::checksum`: streaming SHA-256, used both to fingerprint the source ISO
   and (once E5/E6 land) to verify what was actually written.
 - `preflight`: capacity and source/target-collision checks that run in the
@@ -243,6 +313,7 @@ tagged `Plan` (`Write`/`Verify`) rather than always a `WritePlan`.
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
+| Windows ISO support (backlog #27) | W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper) implemented. Confirmed end-to-end against a real, official Microsoft Windows 10 22H2 ISO: correctly classified it, listed all 906 files (5.71GB total, including the 5.18GB `install.wim` that's the whole reason this write path exists), and extracted/byte-verified individual files. Also unit-tested with both synthetic UDF and ISO9660 fixtures. No privilege, no hardware, not yet wired into the CLI (W2-W6 still pending) |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted
