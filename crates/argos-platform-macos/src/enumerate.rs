@@ -199,7 +199,8 @@ fn ntfs_3g_error(err: std::io::Error, action: &str) -> ArgosError {
     if err.kind() == std::io::ErrorKind::NotFound {
         ArgosError::Io(std::io::Error::other(format!(
             "could not run ntfs-3g to {action} the Windows partition: {err} -- install it \
-             (e.g. `brew install --cask macfuse && brew install ntfs-3g-mac`) and approve the \
+             (e.g. `brew install --cask macfuse && brew tap gromgit/fuse && brew install \
+             ntfs-3g-mac`; plain `brew install ntfs-3g` is Linux-only) and approve the \
              macFUSE system extension in System Settings > Privacy & Security, then try again"
         )))
     } else {

@@ -5,25 +5,35 @@
 //! coverage on Linux, built the same way `hdiutil_image_write.rs` attaches an
 //! image for the DD-mode path.
 //!
-//! Requires `ntfs-3g` and `mkfs.ntfs` (via Homebrew, e.g. `brew install
-//! ntfs-3g-mac`) **and** the macFUSE system extension already approved in
-//! System Settings > Privacy & Security -- a one-time manual step nothing
-//! here can do on its own, which is exactly why this suite is *not* part of
-//! CI (see `docs/architecture.md`'s phase 3 guiding decisions): GitHub-hosted
+//! Requires `ntfs-3g` and `mkntfs` (via Homebrew: `brew install --cask
+//! macfuse && brew tap gromgit/fuse && brew install ntfs-3g-mac` -- the
+//! macOS fork installs `mkntfs`, not `mkfs.ntfs` the way Linux's package
+//! does; same tool, same flags, different name), the macFUSE system
+//! extension already approved in System Settings > Privacy & Security, and
+//! **root** (confirmed empirically: macFUSE's external-FUSE `ntfs-3g`
+//! refuses to mount a block device for a non-root user, exit code 19,
+//! `"Unprivileged user can not mount NTFS block devices..."` -- matching
+//! `write_windows_image.rs`'s Linux equivalent, and consistent with
+//! `argos-cli`'s real elevation path: `argos write`/`argos verify` always
+//! run `argos-helper` under `sudo` on macOS, since `pkexec` is Linux-only).
+//! A one-time manual step (the macFUSE approval) nothing here can do on its
+//! own is exactly why this suite is *not* part of CI (see
+//! `docs/architecture.md`'s phase 3 guiding decisions): GitHub-hosted
 //! `macos-latest` runners have no way to click through that approval dialog
 //! on an ephemeral machine. Run this explicitly, locally, once macFUSE is
 //! approved:
 //!
 //! ```sh
-//! cargo test -p argos-privileged --features test-overrides \
-//!     --test write_windows_image_macos -- --ignored --nocapture --test-threads=1
+//! sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
+//!     --features test-overrides --test write_windows_image_macos \
+//!     -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! Every test skips itself (rather than failing) when a prerequisite isn't
-//! met, so running this without `--ignored`+ntfs-3g on a developer machine
-//! that hasn't set macFUSE up is harmless. `--test-threads=1` for the same
-//! reason `write_windows_image.rs` uses it: each test partitions and
-//! mounts/unmounts a real filesystem on its own attached image, real
+//! met, so running this without `--ignored`+root+ntfs-3g on a developer
+//! machine that hasn't set macFUSE up is harmless. `--test-threads=1` for
+//! the same reason `write_windows_image.rs` uses it: each test partitions
+//! and mounts/unmounts a real filesystem on its own attached image, real
 //! stateful OS resources these tests were never designed to share
 //! concurrently.
 
@@ -103,16 +113,31 @@ fn command_available(name: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// Duplicated from `write_windows_image.rs`'s copy of this helper. Confirmed
+/// empirically to matter here too, not just on Linux: macFUSE's external-FUSE
+/// `ntfs-3g` refuses to mount a block device for a non-root user (exit code
+/// 19), so every test that formats+mounts the Windows partition needs this
+/// check -- matching how `argos-cli` always runs `argos-helper` under `sudo`
+/// on macOS for real.
+fn running_as_root() -> bool {
+    // SAFETY: geteuid() takes no arguments and has no preconditions.
+    unsafe { libc::geteuid() == 0 }
+}
+
 /// Same sizing rationale as `write_windows_image.rs`'s `DEVICE_SIZE`: room
 /// for the boot image, this test's tiny fixture ISO, the NTFS overhead
 /// margin, and GPT overhead, while staying a throwaway-sized sparse file.
 const DEVICE_SIZE: u64 = 200 * 1024 * 1024;
 
 #[test]
-#[ignore = "needs ntfs-3g, mkfs.ntfs, and an approved macFUSE extension; see module docs"]
+#[ignore = "needs root, ntfs-3g, mkntfs, and an approved macFUSE extension; see module docs"]
 fn writes_a_windows_installer_iso_to_a_real_attached_image() {
-    if !command_available("mkfs.ntfs") || !command_available("ntfs-3g") {
-        eprintln!("skipping: mkfs.ntfs/ntfs-3g not installed");
+    if !running_as_root() {
+        eprintln!("skipping: not running as root (needed for ntfs-3g to mount a block device)");
+        return;
+    }
+    if !command_available("mkntfs") || !command_available("ntfs-3g") {
+        eprintln!("skipping: mkntfs/ntfs-3g not installed");
         return;
     }
     let Some(image) = AttachedImage::attach(DEVICE_SIZE) else {
@@ -195,10 +220,14 @@ fn refuses_a_non_windows_iso() {
 }
 
 #[test]
-#[ignore = "needs ntfs-3g, mkfs.ntfs, and an approved macFUSE extension; see module docs"]
+#[ignore = "needs root, ntfs-3g, mkntfs, and an approved macFUSE extension; see module docs"]
 fn verify_matches_a_prior_windows_write() {
-    if !command_available("mkfs.ntfs") || !command_available("ntfs-3g") {
-        eprintln!("skipping: mkfs.ntfs/ntfs-3g not installed");
+    if !running_as_root() {
+        eprintln!("skipping: not running as root (needed for ntfs-3g to mount a block device)");
+        return;
+    }
+    if !command_available("mkntfs") || !command_available("ntfs-3g") {
+        eprintln!("skipping: mkntfs/ntfs-3g not installed");
         return;
     }
     let Some(image) = AttachedImage::attach(DEVICE_SIZE) else {
@@ -232,10 +261,14 @@ fn verify_matches_a_prior_windows_write() {
 }
 
 #[test]
-#[ignore = "needs ntfs-3g, mkfs.ntfs, and an approved macFUSE extension; see module docs"]
+#[ignore = "needs root, ntfs-3g, mkntfs, and an approved macFUSE extension; see module docs"]
 fn verify_rejects_a_file_corrupted_after_the_write() {
-    if !command_available("mkfs.ntfs") || !command_available("ntfs-3g") {
-        eprintln!("skipping: mkfs.ntfs/ntfs-3g not installed");
+    if !running_as_root() {
+        eprintln!("skipping: not running as root (needed for ntfs-3g to mount a block device)");
+        return;
+    }
+    if !command_available("mkntfs") || !command_available("ntfs-3g") {
+        eprintln!("skipping: mkntfs/ntfs-3g not installed");
         return;
     }
     let Some(image) = AttachedImage::attach(DEVICE_SIZE) else {

@@ -260,7 +260,8 @@ fn confirm_windows_write_or_abort(
     if cfg!(target_os = "macos") {
         println!(
             "Note: on macOS this requires ntfs-3g (e.g. `brew install --cask macfuse && \
-             brew install ntfs-3g-mac`) with the macFUSE system extension already approved \
+             brew tap gromgit/fuse && brew install ntfs-3g-mac` -- plain `brew install \
+             ntfs-3g` is Linux-only) with the macFUSE system extension already approved \
              in System Settings > Privacy & Security."
         );
         println!();

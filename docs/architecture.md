@@ -100,12 +100,19 @@ These were decided in a 2026-08-31 planning session, ahead of implementation,
 and are tracked as backlog issue #34 (sub-epics WM1-WM5):
 
 - **NTFS driver: macFUSE**, the same option phase 2 already had in mind --
-  mature, and what Homebrew installs by default for `ntfs-3g` on macOS. The
-  alternative considered, `FUSE-T` (an NFS-loopback driver needing no
-  kext/system-extension), was set aside for now as a smaller, less
-  production-tested project; it's recorded here as the fallback if macFUSE
-  proves unworkable in practice (approval friction, breakage across a macOS
-  update).
+  mature, and the option Homebrew still supports on macOS, though not under
+  the plain `ntfs-3g` formula name: confirmed against a real install, that
+  formula is Linux-only now (`ntfs-3g: Linux is required for this software`),
+  and the macOS build lives in a separate tap instead --
+  `brew tap gromgit/fuse && brew install ntfs-3g-mac`, which installs the
+  mount tool as `ntfs-3g` but the formatting tool as `mkntfs`, not
+  `mkfs.ntfs` (same underlying `tuxera/ntfs-3g` project either way -- same
+  flags, `format_ntfs` in `argos-privileged::windows` picks the right binary
+  name per platform). The alternative considered, `FUSE-T` (an NFS-loopback
+  driver needing no kext/system-extension), was set aside for now as a
+  smaller, less production-tested project; it's recorded here as the
+  fallback if macFUSE proves unworkable in practice (approval friction,
+  breakage across a macOS update).
 - **Final real-hardware validation doesn't change which machine writes vs.
   which machine boots.** Writing the pendrive happens on the Mac; booting it
   is still tested on the same kind of target PC the Linux write path (backlog
@@ -341,11 +348,48 @@ Arbitration. A failure to even spawn `ntfs-3g` (`ErrorKind::NotFound`) is
 rewrapped with a pointer at the actual prerequisite -- installing `ntfs-3g`
 and approving the macFUSE system extension in System Settings -- rather than
 a bare "No such file or directory", since nothing on this path can install or
-approve either one on the user's behalf. Not yet exercised against a real
-mounted NTFS filesystem on this machine (that needs macFUSE approved first --
-see `write_windows_image_macos.rs`'s module doc); the GPT/partitioning half
-of that same test file *was* run for real here, including the negative case
-(a non-Windows ISO refused before touching the device).
+approve either one on the user's behalf.
+
+Confirmed for real against an `hdiutil`-attached image, once macFUSE was
+actually installed here (WM1 was designed against docs, then corrected
+against what really happened on this machine), catching two real bugs the
+planning session couldn't have anticipated:
+
+1. Homebrew's plain `ntfs-3g` formula is Linux-only now
+   (`ntfs-3g: Linux is required for this software`); the macOS build lives in
+   a separate tap, `gromgit/fuse`, as `ntfs-3g-mac` -- installing the mount
+   tool as `ntfs-3g` but the formatting tool as `mkntfs`, not `mkfs.ntfs`.
+   `argos-privileged::windows::format_ntfs` now picks the right binary name
+   per platform (same tool, same `-Q -F` flags either way).
+2. macOS device special files (`/dev/diskN` *and* `/dev/rdiskN`, confirmed
+   both) don't support `lseek(..., SEEK_END)` to report their size the way
+   Linux block devices do -- it returns `0`. `gptman` relies on exactly that
+   internally (`GPTHeader::update_from`, used by `GPT::new_from` and by
+   `GPT::write_protective_mbr_into`) to compute a brand new GPT's last usable
+   LBA, so without a fix it panicked (`attempt to subtract with overflow`)
+   before writing a single byte -- on any real macOS disk, not just the test
+   image. `argos-privileged::windows::SizedDevice` wraps the open device file
+   so `SeekFrom::End` answers from the already-known, already-validated
+   `Device::size_bytes` instead of asking the OS; `SeekFrom::Start`/`Current`
+   and `Read`/`Write` pass straight through unmodified.
+
+With both fixed, a full write against the `hdiutil`-attached image succeeded
+end-to-end for real on this machine -- GPT creation, boot-partition `dd`,
+`mkntfs` formatting -- up to the `ntfs-3g` mount step itself, which then
+surfaced a third, expected finding: macFUSE's external-FUSE `ntfs-3g`
+refuses to mount a block device for a non-root user (exit code 19,
+`"Unprivileged user can not mount NTFS block devices..."`). This isn't a bug
+-- it's the same constraint `write_windows_image.rs` already documents for
+the Linux path, and `argos-cli` already elevates `argos-helper` via `sudo`
+on macOS for exactly this reason (see the `argos-cli` section below); the
+mount step (and everything after it: formatting was already confirmed
+above, but the file copy and `ntfs-3g`-backed verify read-back are not) is
+what's left to confirm, with root, on this machine or the next available
+one. `write_windows_image_macos.rs`'s three `ntfs-3g`-mounting cases now
+check for root and skip cleanly without it, mirroring
+`write_windows_image.rs`; its one case that never reaches partitioning
+(refusing a non-Windows ISO) needs neither root nor `ntfs-3g` and has run
+clean.
 
 The DD-mode write itself (`argos-helper`, separate from E3's enumeration
 scope) has since been verified too: `argos write` against a real physical
@@ -515,7 +559,7 @@ before any preflight work or confirmation prompt, and fail with a specific
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
-| Windows ISO support (backlog #27, extended to macOS by #34) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. Not yet run against real hardware (that's W6). **WM1-WM4 (backlog #34) implemented**: the macOS `PlatformOps` backend now has real `reread_partition_table`/`mount_ntfs_partition`/`unmount_path`/`partition_device_path` implementations (all `diskutil`-based) instead of `NotImplemented` stubs, the Linux-only gates in `argos-privileged::windows` and `argos-cli` are gone (now `WindowsImageHostNotSupported` only on hosts that are neither Linux nor macOS), and `write`'s confirmation prompt notes the `ntfs-3g`/macFUSE prerequisite on macOS. `write_windows_image_macos.rs`'s non-`ntfs-3g` case (refusing a non-Windows ISO) has run for real on a Mac via an `hdiutil`-attached image; its `ntfs-3g`-dependent cases, and WM5 (real hardware validation), are blocked on macFUSE being installed and approved locally -- not run in CI by design (see the phase 3 guiding decisions) |
+| Windows ISO support (backlog #27, extended to macOS by #34) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. Not yet run against real hardware (that's W6). **WM1-WM4 (backlog #34) implemented**: the macOS `PlatformOps` backend now has real `reread_partition_table`/`mount_ntfs_partition`/`unmount_path`/`partition_device_path` implementations (all `diskutil`-based) instead of `NotImplemented` stubs, the Linux-only gates in `argos-privileged::windows` and `argos-cli` are gone (now `WindowsImageHostNotSupported` only on hosts that are neither Linux nor macOS), and `write`'s confirmation prompt notes the `ntfs-3g`/macFUSE prerequisite on macOS. Confirmed for real on this machine once macFUSE was actually installed (see the `argos-platform-macos` section above for the two real bugs that testing caught and fixed: the `ntfs-3g-mac`/`mkntfs` naming, and a `gptman`-vs-macOS `SEEK_END` panic via the new `SizedDevice` wrapper) -- GPT creation, boot-partition `dd`, and `mkntfs` formatting all passed against an `hdiutil`-attached image; the `ntfs-3g` mount step itself needs root (confirmed, matching the Linux path) and is the next thing to confirm, along with the file copy and verify read-back past it. WM5 (real hardware validation) remains blocked on physical access to both a Mac and a target PC. None of this is run in CI by design (see the phase 3 guiding decisions) |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted

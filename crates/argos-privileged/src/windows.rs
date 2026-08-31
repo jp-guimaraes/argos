@@ -33,7 +33,7 @@ use argos_core::write::dd_mode;
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// The vendored UEFI:NTFS boot image, embedded at compile time so
@@ -108,7 +108,7 @@ pub fn execute_write_windows_image(
     platform.unmount(&device)?;
 
     progress.on_phase(Phase::Partitioning);
-    write_partition_table(&plan.device_path, &layout)?;
+    write_partition_table(&plan.device_path, &layout, device.size_bytes)?;
     platform.reread_partition_table(&device)?;
 
     progress.on_phase(Phase::Writing);
@@ -312,19 +312,82 @@ struct CopiedFiles {
     file_hashes: Vec<(String, String)>,
 }
 
+/// Wraps a device handle so `Seek::seek(SeekFrom::End(_))` answers from a
+/// known `total_size_bytes` instead of asking the OS -- `SeekFrom::Start`/
+/// `Current` and all `Read`/`Write` calls pass straight through unmodified.
+///
+/// Needed because `gptman` (`GPTHeader::update_from`, used by
+/// `GPT::new_from`, and `GPT::write_protective_mbr_into`) determines total
+/// disk size by seeking to the end, which works on a Linux block-device
+/// special file but not on macOS: confirmed empirically (backlog #34, WM1
+/// follow-up) that `lseek(fd, 0, SEEK_END)` returns `0` on both `/dev/diskN`
+/// and `/dev/rdiskN` there, which without this wrapper underflows a
+/// subtraction inside `gptman` and panics before a single byte is written.
+/// `total_size_bytes` is the platform-refreshed [`argos_core::device::Device::size_bytes`],
+/// already re-validated against the real device by
+/// `validate_refreshed_device_for_windows_write` moments earlier -- trusted
+/// here for the same reason it's trusted for the capacity preflight check.
+struct SizedDevice<'a> {
+    file: &'a mut File,
+    total_size_bytes: u64,
+}
+
+impl Read for SizedDevice<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+impl Write for SizedDevice<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for SizedDevice<'_> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let SeekFrom::End(offset) = pos else {
+            return self.file.seek(pos);
+        };
+        let target = self
+            .total_size_bytes
+            .checked_add_signed(offset)
+            .ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "seek to end{offset:+} is out of bounds for a {}-byte device",
+                    self.total_size_bytes
+                ))
+            })?;
+        self.file.seek(SeekFrom::Start(target))
+    }
+}
+
 /// Builds and writes the GPT itself: a protective MBR, partition 1 (EFI
 /// System Partition, for the UEFI:NTFS boot image) and partition 2
 /// (Microsoft Basic Data, for the NTFS Windows files), sized and placed
 /// exactly as `layout` computed.
-fn write_partition_table(device_path: &str, layout: &WindowsPartitionPlan) -> Result<()> {
+fn write_partition_table(
+    device_path: &str,
+    layout: &WindowsPartitionPlan,
+    total_size_bytes: u64,
+) -> Result<()> {
     let mut device = OpenOptions::new()
         .read(true)
         .write(true)
         .open(device_path)
         .map_err(ArgosError::Io)?;
 
-    let mut gpt = gptman::GPT::new_from(&mut device, SECTOR_SIZE, random_guid()?)
-        .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
+    let mut gpt = {
+        let mut sized = SizedDevice {
+            file: &mut device,
+            total_size_bytes,
+        };
+        gptman::GPT::new_from(&mut sized, SECTOR_SIZE, random_guid()?)
+            .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?
+    };
 
     gpt[1] = gptman::GPTPartitionEntry {
         partition_type_guid: EFI_SYSTEM_PARTITION_TYPE_GUID,
@@ -343,8 +406,14 @@ fn write_partition_table(device_path: &str, layout: &WindowsPartitionPlan) -> Re
         partition_name: "ARGOS-WIN".into(),
     };
 
-    gptman::GPT::write_protective_mbr_into(&mut device, SECTOR_SIZE)
-        .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
+    {
+        let mut sized = SizedDevice {
+            file: &mut device,
+            total_size_bytes,
+        };
+        gptman::GPT::write_protective_mbr_into(&mut sized, SECTOR_SIZE)
+            .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
+    }
     gpt.write_into(&mut device)
         .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
     device.flush().map_err(ArgosError::Io)?;
@@ -417,17 +486,29 @@ fn write_boot_partition(partition_path: &str, progress: &dyn ProgressSink) -> Re
 /// relaxation of "no shelling out" `docs/architecture.md`'s phase 2 guiding
 /// decisions call for, alongside `ntfs-3g` for mounting.
 fn format_ntfs(partition_path: &str) -> Result<()> {
+    // The one place this crate needs a platform split for the Windows write
+    // path (backlog #34, WM1 follow-up): Linux's ntfs-3g package symlinks
+    // `mkfs.ntfs` to the same underlying `mkntfs` tool, but the macOS fork
+    // (Homebrew's `gromgit/fuse/ntfs-3g-mac`) installs only `mkntfs` --
+    // there is no `mkfs.ntfs` on PATH there. Same binary, same flags
+    // (confirmed against a real `ntfs-3g-mac` install: `-Q`/`-F` behave
+    // identically), just a different name to shell out to.
+    let mkntfs = if cfg!(target_os = "macos") {
+        "mkntfs"
+    } else {
+        "mkfs.ntfs"
+    };
     // -Q: quick format (skip zeroing every sector -- the partition is about
     // to be filled with the Windows install's own files anyway).
     // -F: force, since this partition never had a filesystem to confirm
     // overwriting -- gptman just created it moments ago.
-    let status = std::process::Command::new("mkfs.ntfs")
+    let status = std::process::Command::new(mkntfs)
         .args(["-Q", "-F", partition_path])
         .status()
         .map_err(ArgosError::Io)?;
     if !status.success() {
         return Err(ArgosError::Io(std::io::Error::other(format!(
-            "mkfs.ntfs -Q -F {partition_path} exited with {status}"
+            "{mkntfs} -Q -F {partition_path} exited with {status}"
         ))));
     }
     Ok(())
