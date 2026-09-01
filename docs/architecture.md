@@ -59,7 +59,10 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   the local dependency name `cdfs` but backed by the `newtua-cdfs` fork -- see
   below), and **`hadris-udf`** (pure-Rust UDF/ECMA-167 reader, added after W1
   validation showed real Windows media needs it -- see the correction below)
-  are the only new dependencies this needs.
+  are the only new dependencies this needs. (Phase 3 update: `hadris-udf`
+  has since been replaced at runtime by Argos's own `image::udf` module --
+  see the correction below and `docs/plan-phase3-self-contained.md` -- and
+  survives only as a dev-dependency fixture generator.)
 - This relaxes v1's "no shelling out" rule specifically to call
   `mkfs.ntfs`/`ntfs-3g` as an external process on Linux to format and mount
   the NTFS partition -- the same posture v1 already accepted for
@@ -81,15 +84,17 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   mastered as an ISO9660+UDF bridge, with the ISO9660 layer exposing only a
   stub `README.TXT` -- `bootmgr`, `sources/`, and everything else live in the
   UDF layer exclusively. `cdfs` (ISO9660-only) could not see any of it.
-  `image::windows` now tries [`hadris-udf`](https://github.com/hxyulin/hadris)
-  (pure-Rust ECMA-167/UDF, `read`+`std`+`sync` features) first, falling back
-  to `cdfs` only for genuinely ISO9660-only Windows-shaped images -- which in
-  practice means this crate's own synthetic test fixtures, not real media.
-  This is also why the workspace's `rust-version` moved from 1.75 to 1.88
-  (`hadris-udf`'s MSRV); `gptman` stayed pinned to its 1.x line regardless
-  (already implemented and tested against it before this correction, and
-  revisiting to gptman's newer 2.x/3.x -- now within reach MSRV-wise too --
-  is unrelated cleanup).
+  `image::windows` therefore tries UDF first, falling back to `cdfs` only
+  for genuinely ISO9660-only Windows-shaped images -- which in practice
+  means this crate's own synthetic test fixtures, not real media. The UDF
+  backend was originally [`hadris-udf`](https://github.com/hxyulin/hadris)
+  (the reason the workspace's `rust-version` moved from 1.75 to 1.88;
+  `gptman` stayed pinned to its 1.x line regardless); phase 3's M1 (backlog
+  #40) replaced it with Argos's own `image::udf` module after `hadris-udf`'s
+  whole-file-in-memory read caused a real OOM (#38) and its private extent
+  resolution made streaming impossible to add from outside. `hadris-udf`
+  remains a dev-dependency only, generating UDF test fixtures as an
+  independent implementation `image::udf` is verified against.
 
 ## Crate layout
 
@@ -124,15 +129,27 @@ ordinary files and in-memory buffers -- no root, no real hardware.
   (embedded MBR signature + partition entry, El Torito boot catalog, a
   best-effort GPT/UEFI hint) into `Hybrid` / `ElToritoOnly` / `PlainData`.
   Only `Hybrid` is writable in DD mode.
+- `image::udf` (phase 3, M1 / backlog #40): Argos's own minimal, read-only
+  UDF/ECMA-167 reader with **streaming** file access -- anchor/volume
+  descriptor sequence parsing (tag checksum + CRC verified on every
+  descriptor), type-1 partition maps, File/Extended File Entries, short and
+  long allocation descriptors, embedded data, sparse extents, and
+  allocation-extent continuation chains. A file read materializes only the
+  extent list and serves content in caller-sized chunks through a shared
+  `Mutex`-guarded source, so a multi-GB `install.wim` costs a few MB of RAM
+  to copy (measured: 3.5MB peak RSS streaming a 512MB file), not its own
+  size. Anything outside scope (metadata partitions, extended ADs,
+  non-2048-byte blocks) is refused with a clear error, never misread.
 - `image::windows` (backlog #27, W1): recognizes an official Windows
   installer ISO by the presence of `bootmgr` + `sources/boot.wim` at its
   root, rather than fixed byte offsets, since a Windows ISO carries no
-  embedded MBR/GPT to probe. Tries `hadris-udf` first, falling back to
+  embedded MBR/GPT to probe. Tries `image::udf` first, falling back to
   `cdfs` (see the phase 2 guiding decisions above, including the post-W1
   correction on why UDF has to come first). `WindowsIso` is a thin
   read-only wrapper (list files with their sizes, open one by path) over
   whichever backend recognized the image, reused by W3 to copy the
-  extracted files onto the NTFS partition.
+  extracted files onto the NTFS partition -- both backends stream, so the
+  copy runs in constant memory.
 - `image::checksum`: streaming SHA-256, used both to fingerprint the source ISO
   and (once E5/E6 land) to verify what was actually written.
 - `preflight`: capacity and source/target-collision checks that run in the
@@ -142,24 +159,14 @@ ordinary files and in-memory buffers -- no root, no real hardware.
   is the Windows-write equivalent of `check_capacity`: it compares the device
   against `WindowsPartitionPlan::total_bytes_required` instead of the raw ISO
   size, since a two-partition GPT layout needs more room than that.
-  `check_windows_memory` (backlog #35, found running W6 against real
-  hardware) is a different kind of preflight -- not disk capacity but system
-  RAM: `image::windows::WindowsIso::open_file`'s UDF backend has no streaming
-  reader (see its doc comment), so `windows::copy_files` (in
-  `argos-privileged`, below) holds one whole file in memory at a time, and a
-  real Windows ISO's `install.wim`/`install.esd` routinely runs 4-5GB. A real
-  Windows 10 ISO's write on a 7.7GB-RAM machine confirmed this isn't
-  theoretical: `install.wim` alone pushed the whole machine into memory
-  pressure severe enough for `systemd-oomd` to kill an unrelated process
-  sharing the same cgroup as `argos-helper` (VSCode, in that instance) before
-  the write could even fail on its own. `check_windows_memory` compares only
-  the *largest single file*, not the ISO's total size, against currently
-  available memory (a conservative 50% margin, not a measured bound -- see
-  its doc comment), called by `execute_write_windows_image` right alongside
-  `check_windows_capacity`, before anything destructive happens. Doesn't
-  eliminate the underlying cost (that needs a streaming API from
-  `hadris-udf`, which doesn't exist yet); refuses cleanly instead of letting
-  the OS find out the hard way.
+  A third check, `check_windows_memory` (#38, found running W6 against real
+  hardware), briefly guarded the UDF backend's whole-file-in-memory read --
+  a real Windows 10 ISO's `install.wim` had pushed a 7.7GB-RAM machine into
+  memory pressure severe enough for `systemd-oomd` to kill an unrelated
+  process sharing `argos-helper`'s cgroup. It was retired together with the
+  cost it guarded when `image::udf`'s streaming reader (phase 3 M1, #40)
+  made the copy constant-memory; its exit code (25) stays reserved rather
+  than reused.
 - `partition::windows` (backlog #27, W2): pure arithmetic, no disk I/O.
   `WindowsPartitionPlan::new` lays out the UEFI:NTFS boot partition and the
   NTFS Windows partition -- 1 MiB-aligned starts (the same convention
@@ -433,7 +440,7 @@ a specific `WindowsImageRequiresLinux` error rather than only discovering
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
-| Windows ISO support (backlog #27) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming, refusing early and honestly on non-Linux hosts). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. First real-hardware W6 attempt (real Windows 10 ISO to a physical USB drive) surfaced a real memory-exhaustion bug (backlog #35, `install.wim`'s whole-file-in-memory UDF read plus a memory-constrained machine OOM-killed an unrelated process); fixed with `preflight::check_windows_memory`, a preflight guard refusing the write cleanly instead. W6 retry pending |
+| Windows ISO support (backlog #27) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming, refusing early and honestly on non-Linux hosts). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. First real-hardware W6 attempt (real Windows 10 ISO to a physical USB drive) surfaced a real memory-exhaustion bug (#38, `install.wim`'s whole-file-in-memory UDF read plus a memory-constrained machine OOM-killed an unrelated process); first mitigated with a `check_windows_memory` preflight refusal, then fixed for real by `image::udf`, Argos's own streaming UDF reader (phase 3 M1, #40 -- constant-memory copy confirmed at 3.5MB peak RSS streaming a 512MB fixture file; the preflight guard and `hadris-udf` runtime dependency were retired with it). Still pending: re-validating `image::udf` against a real official Windows 10/11 ISO (the synthetic fixtures are `hadris-udf`-generated), then the W6 retry itself |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted

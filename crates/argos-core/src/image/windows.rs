@@ -14,11 +14,13 @@
 //! ISO9660 layer such a bridge carries exposes only a tiny stub (a
 //! `README.TXT` pointing UEFI:NTFS-less systems at Microsoft's site); the
 //! real `bootmgr`/`sources` tree lives in the UDF layer only. So this module
-//! tries [`hadris_udf`] (pure-Rust UDF/ECMA-167) first, falling through to
-//! [`cdfs`] (pure-Rust ISO9660/ECMA-119, under the local dependency name
-//! `cdfs`, backed by the `newtua-cdfs` fork -- see `Cargo.toml` for why) only
-//! for genuinely ISO9660-only Windows-shaped images, including this module's
-//! own synthetic test fixtures.
+//! tries [`image::udf`](super::udf) (Argos's own read-only, streaming
+//! UDF/ECMA-167 reader -- see its module docs for why it replaced the
+//! `hadris-udf` crate) first, falling through to [`cdfs`] (pure-Rust
+//! ISO9660/ECMA-119, under the local dependency name `cdfs`, backed by the
+//! `newtua-cdfs` fork -- see `Cargo.toml` for why) only for genuinely
+//! ISO9660-only Windows-shaped images, including this module's own synthetic
+//! test fixtures.
 //!
 //! Detection looks for the same two paths every official Windows 10/11
 //! install media has always shipped: `bootmgr` and `sources/boot.wim` at the
@@ -28,8 +30,9 @@
 //! whether this is a Windows installer, whereas `bootmgr` and `boot.wim`
 //! missing does.
 
+use super::udf;
 use std::fs::File;
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 const BOOTMGR_PATH: &str = "bootmgr";
@@ -65,12 +68,19 @@ pub fn classify_reader<R: Read + Seek>(mut reader: R) -> io::Result<WindowsClass
     // `UdfVolume::open` takes its reader by value, so it's given a temporary
     // `&mut` borrow here rather than `reader` itself: on failure, `reader` is
     // still ours to rewind and retry with cdfs.
-    if let Ok(udf) = hadris_udf::UdfVolume::open(&mut reader) {
-        let has_bootmgr = udf_is_file_at(&udf, BOOTMGR_PATH)?;
-        let has_boot_wim = has_bootmgr && udf_is_file_at(&udf, BOOT_WIM_PATH)?;
-        return Ok(WindowsClassification {
-            is_windows_installer: has_bootmgr && has_boot_wim,
-        });
+    match udf::UdfVolume::open(&mut reader) {
+        Ok(udf) => {
+            let has_bootmgr = udf_is_file_at(&udf, BOOTMGR_PATH)?;
+            let has_boot_wim = has_bootmgr && udf_is_file_at(&udf, BOOT_WIM_PATH)?;
+            return Ok(WindowsClassification {
+                is_windows_installer: has_bootmgr && has_boot_wim,
+            });
+        }
+        // A real I/O failure is Argos's problem and must propagate; any
+        // other failure just means "not (usable) UDF" -- fall through to
+        // ISO9660 exactly as before.
+        Err(udf::UdfError::Io(err)) => return Err(err),
+        Err(_) => {}
     }
 
     reader.seek(SeekFrom::Start(0))?;
@@ -106,11 +116,8 @@ fn is_file_at<T: cdfs::ISO9660Reader>(iso: &cdfs::ISO9660<T>, path: &str) -> io:
     }
 }
 
-fn udf_is_file_at<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
-    udf: &hadris_udf::UdfVolume<T>,
-    path: &str,
-) -> io::Result<bool> {
-    match udf_find(udf, path).map_err(udf_err_to_io)? {
+fn udf_is_file_at<T: Read + Seek>(udf: &udf::UdfVolume<T>, path: &str) -> io::Result<bool> {
+    match udf_find(udf, path).map_err(udf::UdfError::into_io)? {
         Some(entry) => Ok(entry.is_file()),
         None => Ok(false),
     }
@@ -119,10 +126,10 @@ fn udf_is_file_at<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
 /// Descends `path` (`/`-separated, case-insensitive -- real Windows UDF
 /// media has been observed using both `bootmgr` and `BOOTMGR`) from `udf`'s
 /// root directory, the UDF counterpart to `cdfs::ISODirectory::find_recursive`.
-fn udf_find<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
-    udf: &hadris_udf::UdfVolume<T>,
+fn udf_find<T: Read + Seek>(
+    udf: &udf::UdfVolume<T>,
     path: &str,
-) -> hadris_udf::Result<Option<hadris_udf::dir::UdfDirEntry>> {
+) -> Result<Option<udf::UdfDirEntry>, udf::UdfError> {
     let mut dir = udf.root_dir()?;
     let mut segments = path.split('/').filter(|s| !s.is_empty()).peekable();
 
@@ -150,10 +157,6 @@ fn udf_find<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
     Ok(None)
 }
 
-fn udf_err_to_io(err: hadris_udf::Error) -> io::Error {
-    io::Error::other(err.to_string())
-}
-
 /// One regular file found while walking a [`WindowsIso`]'s tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IsoFileEntry {
@@ -172,7 +175,10 @@ pub struct WindowsIso {
 }
 
 enum Backing {
-    Udf(hadris_udf::UdfVolume<BufReader<File>>),
+    // Plain `File`, not `BufReader<File>`: every access seeks absolutely
+    // (metadata is random-access, content reads come in large chunks), so a
+    // read buffer would be discarded on every seek and help nothing.
+    Udf(udf::UdfVolume<File>),
     Iso9660(Box<cdfs::ISO9660<File>>),
 }
 
@@ -180,10 +186,14 @@ impl WindowsIso {
     pub fn open(path: &Path) -> io::Result<Self> {
         // Same UDF-first, ISO9660-fallback order as classify_reader, and for
         // the same reason -- see this module's top doc comment.
-        if let Ok(udf) = hadris_udf::UdfVolume::open(BufReader::new(File::open(path)?)) {
-            return Ok(Self {
-                backing: Backing::Udf(udf),
-            });
+        match udf::UdfVolume::open(File::open(path)?) {
+            Ok(udf) => {
+                return Ok(Self {
+                    backing: Backing::Udf(udf),
+                })
+            }
+            Err(udf::UdfError::Io(err)) => return Err(err),
+            Err(_) => {}
         }
         let iso = cdfs::ISO9660::new(File::open(path)?).map_err(cdfs_err_to_io)?;
         Ok(Self {
@@ -198,7 +208,7 @@ impl WindowsIso {
         let mut out = Vec::new();
         match &self.backing {
             Backing::Udf(udf) => {
-                let root = udf.root_dir().map_err(udf_err_to_io)?;
+                let root = udf.root_dir().map_err(udf::UdfError::into_io)?;
                 walk_udf(udf, &root, "", &mut out)?;
             }
             Backing::Iso9660(iso) => walk(iso.root(), "", &mut out)?,
@@ -210,17 +220,16 @@ impl WindowsIso {
     /// image root (e.g. `"sources/boot.wim"`). `Ok(None)` if `path` doesn't
     /// name a regular file (missing, or a directory/symlink).
     ///
-    /// The UDF backend has no streaming file reader (`hadris_udf` reads a
-    /// whole file into memory at once) -- its bytes are wrapped in a
-    /// [`Cursor`] so both backends still satisfy plain [`Read`] here, but a
-    /// multi-GB `install.wim` on UDF-backed media costs that much memory
-    /// during the copy in W3, unlike the ISO9660 backend's true streaming.
+    /// Both backends stream: the UDF backend resolves the file's extent list
+    /// once and reads content in whatever chunks the caller asks for
+    /// (`image::udf`, phase 3 M1 / #40), so even a multi-GB `install.wim`
+    /// costs constant memory during W3's copy.
     pub fn open_file(&self, path: &str) -> io::Result<Option<Box<dyn Read + '_>>> {
         match &self.backing {
-            Backing::Udf(udf) => match udf_find(udf, path).map_err(udf_err_to_io)? {
+            Backing::Udf(udf) => match udf_find(udf, path).map_err(udf::UdfError::into_io)? {
                 Some(entry) if entry.is_file() => {
-                    let bytes = udf.read_file(&entry).map_err(udf_err_to_io)?;
-                    Ok(Some(Box::new(Cursor::new(bytes))))
+                    let reader = udf.open_file(&entry).map_err(udf::UdfError::into_io)?;
+                    Ok(Some(Box::new(reader)))
                 }
                 _ => Ok(None),
             },
@@ -260,9 +269,9 @@ fn walk<T: cdfs::ISO9660Reader>(
     Ok(())
 }
 
-fn walk_udf<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
-    udf: &hadris_udf::UdfVolume<T>,
-    dir: &hadris_udf::UdfDir,
+fn walk_udf<T: Read + Seek>(
+    udf: &udf::UdfVolume<T>,
+    dir: &udf::UdfDir,
     prefix: &str,
     out: &mut Vec<IsoFileEntry>,
 ) -> io::Result<()> {
@@ -273,7 +282,9 @@ fn walk_udf<T: hadris_udf::sync::Read + hadris_udf::sync::Seek>(
             format!("{prefix}/{}", entry.name())
         };
         if entry.is_dir() {
-            let subdir = udf.read_directory(&entry.icb).map_err(udf_err_to_io)?;
+            let subdir = udf
+                .read_directory(&entry.icb)
+                .map_err(udf::UdfError::into_io)?;
             walk_udf(udf, &subdir, &path, out)?;
         } else {
             out.push(IsoFileEntry {
