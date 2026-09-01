@@ -33,6 +33,7 @@ serde_json = { workspace = true }
 # rule doesn't block that write path's other new dependency,
 # argos-core's `image::windows` (already pulled in transitively).
 gptman = { workspace = true }
+fatfs = "0.3.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 argos-platform-linux = { workspace = true }

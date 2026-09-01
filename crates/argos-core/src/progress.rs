@@ -20,6 +20,10 @@ pub enum Phase {
     /// Mounting the freshly-formatted NTFS partition (`ntfs-3g`) for a
     /// Windows installer write (backlog #27, W3).
     Mounting,
+    /// Formatting the FAT32 partition (pure-Rust `fatfs`, no external
+    /// process and no mount) for a Windows installer write (phase 3 M3,
+    /// backlog #43).
+    FormattingFat32,
     /// Copying the extracted Windows installer files onto the mounted NTFS
     /// partition (backlog #27, W3).
     CopyingFiles,

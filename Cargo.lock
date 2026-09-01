@@ -132,6 +132,7 @@ dependencies = [
  "argos-platform",
  "argos-platform-linux",
  "argos-platform-macos",
+ "fatfs",
  "gptman",
  "libc",
  "serde",

@@ -8,9 +8,11 @@
 //! integration tests (backlog E9) can call it directly against a real device
 //! node, without spawning the compiled binary and piping JSON through stdin.
 
+pub mod partition_io;
 pub mod platform_select;
 pub mod protocol;
 pub mod windows;
+pub mod windows_fat32;
 
 use argos_core::error::{ArgosError, Result};
 use argos_core::image::checksum::sha256_stream;

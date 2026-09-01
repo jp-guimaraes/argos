@@ -37,7 +37,7 @@
 use argos_core::image::windows::fixtures::udf_windows_installer_iso as windows_installer_iso;
 use argos_core::progress::NoopProgress;
 use argos_platform::PlatformOps;
-use argos_privileged::protocol::{VerifyWindowsPlan, WriteWindowsPlan};
+use argos_privileged::protocol::{VerifyWindowsPlan, WindowsLayout, WriteWindowsPlan};
 use std::process::Command;
 
 struct LoopDevice {
@@ -135,6 +135,7 @@ fn writes_a_windows_installer_iso_to_a_real_loop_device() {
         expected_serial: None,
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
+        layout: WindowsLayout::Ntfs,
     };
 
     let outcome = argos_privileged::windows::execute_write_windows_image(&plan, &NoopProgress)
@@ -178,6 +179,7 @@ fn refuses_a_non_windows_iso() {
         expected_serial: None,
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
+        layout: WindowsLayout::Ntfs,
     };
 
     let err =
@@ -225,6 +227,7 @@ fn verify_matches_a_prior_windows_write() {
         expected_serial: None,
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
+        layout: WindowsLayout::Ntfs,
     };
     argos_privileged::windows::execute_write_windows_image(&write_plan, &NoopProgress)
         .expect("the write itself should succeed");
@@ -232,6 +235,7 @@ fn verify_matches_a_prior_windows_write() {
     let verify_plan = VerifyWindowsPlan {
         device_path: loop_device.path.clone(),
         iso_path: iso.path().to_path_buf(),
+        layout: WindowsLayout::Ntfs,
     };
     let outcome =
         argos_privileged::windows::execute_verify_windows_image(&verify_plan, &NoopProgress)
@@ -266,6 +270,7 @@ fn verify_rejects_a_file_corrupted_after_the_write() {
         expected_serial: None,
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
+        layout: WindowsLayout::Ntfs,
     };
     argos_privileged::windows::execute_write_windows_image(&write_plan, &NoopProgress)
         .expect("the write itself should succeed");
@@ -294,6 +299,7 @@ fn verify_rejects_a_file_corrupted_after_the_write() {
     let verify_plan = VerifyWindowsPlan {
         device_path: loop_device.path.clone(),
         iso_path: iso.path().to_path_buf(),
+        layout: WindowsLayout::Ntfs,
     };
     let err = argos_privileged::windows::execute_verify_windows_image(&verify_plan, &NoopProgress)
         .unwrap_err();

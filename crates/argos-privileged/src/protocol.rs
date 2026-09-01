@@ -56,6 +56,24 @@ pub struct WriteWindowsPlan {
     pub expected_serial: Option<String>,
     pub expected_size_bytes: u64,
     pub iso_path: PathBuf,
+    /// Which on-disk layout to produce (phase 3 M3.5, backlog #43).
+    /// `#[serde(default)]` keeps the JSON contract backward-compatible: a
+    /// plan from an older `argos` simply carries no `layout` key and gets
+    /// the NTFS layout it was written against.
+    #[serde(default)]
+    pub layout: WindowsLayout,
+}
+
+/// The two Windows-media layouts the helper can produce: the original
+/// two-partition UEFI:NTFS scheme (backlog #27) and phase 3's single
+/// FAT32 partition (backlog #43). NTFS stays the default until M5's
+/// real-hardware validation flips it (decision point M4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsLayout {
+    #[default]
+    Ntfs,
+    Fat32,
 }
 
 /// Unlike [`WritePlan`], carries no `expected_serial`/`expected_size_bytes`:
@@ -85,6 +103,9 @@ pub struct VerifyPlan {
 pub struct VerifyWindowsPlan {
     pub device_path: String,
     pub iso_path: PathBuf,
+    /// Same backward-compatible default as [`WriteWindowsPlan::layout`].
+    #[serde(default)]
+    pub layout: WindowsLayout,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -274,10 +295,22 @@ mod tests {
         let original = Plan::VerifyWindowsImage(VerifyWindowsPlan {
             device_path: "/dev/sdz".into(),
             iso_path: "/tmp/Win11.iso".into(),
+            layout: WindowsLayout::Fat32,
         });
         let json = serde_json::to_string(&original).unwrap();
         assert!(json.contains(r#""kind":"verify_windows_image""#));
         let parsed: Plan = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, Plan::VerifyWindowsImage(p) if p.device_path == "/dev/sdz"));
+        assert!(
+            matches!(parsed, Plan::VerifyWindowsImage(p) if p.device_path == "/dev/sdz" && p.layout == WindowsLayout::Fat32)
+        );
+    }
+
+    /// A plan JSON written before the `layout` field existed must still
+    /// parse -- and must mean NTFS, the only layout such a sender knew.
+    #[test]
+    fn windows_plans_without_a_layout_key_default_to_ntfs() {
+        let json = r#"{"kind":"write_windows_image","device_path":"/dev/sdz","expected_serial":null,"expected_size_bytes":8000000000,"iso_path":"/tmp/Win11.iso"}"#;
+        let parsed: Plan = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Plan::WriteWindowsImage(p) if p.layout == WindowsLayout::Ntfs));
     }
 }
