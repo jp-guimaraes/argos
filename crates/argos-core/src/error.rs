@@ -49,6 +49,13 @@ pub enum ArgosError {
     #[error("writing or verifying a Windows installer image requires a Linux host with ntfs-3g installed, for now")]
     WindowsImageRequiresLinux,
 
+    #[error("'{image_path}' contains a file of {file_size_bytes} bytes, but only {available_memory_bytes} bytes of memory are available; the Windows write path has to hold that file in memory whole (no streaming reader for UDF-backed media -- see image::windows), so this would very likely be killed by the OS partway through. Free up memory (e.g. close other applications) and try again")]
+    WindowsFileTooLargeForAvailableMemory {
+        image_path: PathBuf,
+        file_size_bytes: u64,
+        available_memory_bytes: u64,
+    },
+
     #[error("operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use")]
     Cancelled,
 
@@ -79,6 +86,7 @@ impl ArgosError {
             ArgosError::WindowsPartitionLayoutMismatch(_) => 22,
             ArgosError::WindowsFileMismatch { .. } => 23,
             ArgosError::WindowsImageRequiresLinux => 24,
+            ArgosError::WindowsFileTooLargeForAvailableMemory { .. } => 25,
         }
     }
 }
