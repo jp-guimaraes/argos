@@ -46,6 +46,64 @@ pub fn sync_device(file: &std::fs::File) -> io::Result<()> {
     }
 }
 
+/// Opens a whole-disk device node for read+write with **exclusive access**,
+/// so the OS's own disk-arbitration machinery cannot mount a partition out
+/// from under an in-progress write.
+///
+/// `O_EXCL` on a block/character device (as opposed to its create-a-file
+/// meaning) is the portable way to say "this disk is mine for now": on
+/// macOS it makes `diskarbitrationd` refuse to mount anything on the disk
+/// while the descriptor is open, and on Linux it likewise blocks mounts and
+/// other exclusive openers.
+///
+/// Why this is here: a real-hardware write died with `EBUSY` partway through
+/// the copy phase, with the GPT and FAT32 already correctly on the stick and
+/// macOS having mounted the new partition at `/Volumes/ARGOS-WIN`. Once a
+/// partition is mounted, writes to its byte range through the whole-disk
+/// node are refused, which fits the failure exactly.
+///
+/// **Not reproduced in a test, and the causal link is inferred rather than
+/// proven**: an `hdiutil` image attached with `-nomount` is exempt from disk
+/// arbitration, so on a disk image nothing ever auto-mounts (verified: no
+/// mount appeared in 30s of holding the device open after formatting, and
+/// the subsequent write succeeded). Only physical media exercises this, so
+/// M5 (#44) is what will confirm it.
+///
+/// The caller must unmount the device first (the write path already does,
+/// as its `Unmounting` phase): `O_EXCL` *fails* with `EBUSY` if a partition
+/// is already mounted, which is the honest outcome -- better than writing
+/// underneath a live filesystem.
+pub fn open_device_exclusive(path: &str) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_EXCL)
+        .open(path)
+        .map_err(|err| {
+            // A bare "Resource busy (os error 16)" tells a user nothing about
+            // what to do next, and this is the one error they are most likely
+            // to meet: it means something still holds a partition on the disk.
+            if err.raw_os_error() == Some(libc::EBUSY) {
+                io::Error::new(
+                    io::ErrorKind::ResourceBusy,
+                    format!(
+                        "{path} is busy: a partition on it is still mounted. \
+                         Close anything using it and unmount the whole disk \
+                         ({}), then retry.",
+                        if cfg!(target_os = "macos") {
+                            format!("diskutil unmountDisk {path}")
+                        } else {
+                            format!("umount {path}*")
+                        }
+                    ),
+                )
+            } else {
+                err
+            }
+        })
+}
+
 /// Wraps a device handle so `Seek(SeekFrom::End(_))` is answered from a
 /// known `total_size_bytes` instead of from the OS. Every other seek, read
 /// and write passes straight through.

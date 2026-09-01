@@ -143,4 +143,5 @@ jobs:
       # macFUSE route #34 originally planned.
       - run: |
           cargo test -p argos-privileged --features test-overrides \
-            --test hdiutil_windows_fat32 -- --ignored --nocapture --test-threads=1
+            --test hdiutil_windows_fat32 --test automount_regression \
+            -- --ignored --nocapture --test-threads=1

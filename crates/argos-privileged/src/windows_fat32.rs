@@ -45,7 +45,6 @@ use argos_core::verify::{
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use sha2::{Digest, Sha256};
-use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 /// FAT32's hard per-file ceiling: sizes are 32-bit, so 4GiB-1.
@@ -96,11 +95,11 @@ pub fn execute_write_windows_fat32(
     progress.on_phase(Phase::Unmounting);
     platform.unmount(&device)?;
 
-    let mut device_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&plan.device_path)
-        .map_err(ArgosError::Io)?;
+    // Exclusive: once format_volume makes the partition recognizable, macOS
+    // would otherwise auto-mount it mid-copy and the write would die with
+    // EBUSY. See partition_io::open_device_exclusive.
+    let mut device_file =
+        crate::partition_io::open_device_exclusive(&plan.device_path).map_err(ArgosError::Io)?;
     // SizedDevice, not the bare file: macOS device nodes can't answer
     // SEEK_END, which gptman needs to lay out a new GPT. See its doc
     // comment -- without it this panics before writing a byte, on any real
@@ -136,14 +135,16 @@ pub fn execute_verify_windows_fat32(
     let actions = plan_copy_actions(&iso, &files)?;
     let layout = fat32_layout_for(&actions);
 
-    // Opened read-write (not File::open) only so the same SizedDevice
-    // wrapper the write path uses applies here too -- verify never writes,
-    // and PartitionWindow's Write impl is simply never exercised.
-    let mut device_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&plan.device_path)
-        .map_err(ArgosError::Io)?;
+    // Unmount first, then open exclusively -- the same treatment the write
+    // path gets, for two reasons: a freshly written stick has its FAT32
+    // partition auto-mounted by macOS (so a plain open fails with EBUSY),
+    // and reading the device under a live mount could serve the mounted
+    // filesystem's cached view rather than what is actually on the medium,
+    // which is precisely what verification must not do.
+    progress.on_phase(Phase::Unmounting);
+    platform.unmount(&device)?;
+    let mut device_file =
+        crate::partition_io::open_device_exclusive(&plan.device_path).map_err(ArgosError::Io)?;
     let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
     let files_verified = verify_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
 
