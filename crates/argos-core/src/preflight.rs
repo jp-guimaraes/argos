@@ -55,6 +55,27 @@ pub fn check_windows_capacity(
     Ok(())
 }
 
+/// [`check_windows_capacity`]'s counterpart for the single-partition FAT32
+/// layout (phase 3 M3, backlog #43) -- same comparison, same error, against
+/// [`crate::partition::windows::WindowsFat32Plan::total_bytes_required`].
+pub fn check_windows_fat32_capacity(
+    device_label: &str,
+    device_size_bytes: u64,
+    image_path: &Path,
+    plan: &crate::partition::windows::WindowsFat32Plan,
+) -> Result<()> {
+    let required_bytes = plan.total_bytes_required();
+    if device_size_bytes < required_bytes {
+        return Err(ArgosError::DeviceTooSmall(
+            device_label.to_string(),
+            image_path.to_path_buf(),
+            device_size_bytes,
+            required_bytes,
+        ));
+    }
+    Ok(())
+}
+
 /// Fails if the image file is stored on the very device that would be overwritten.
 /// `image_backing_device_id` and `target_device_id` must already be resolved to
 /// the same identifier space (e.g. both physical-disk platform ids) by the caller.
