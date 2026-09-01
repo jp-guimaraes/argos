@@ -100,15 +100,17 @@ fn run_dd_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Re
 /// already declined for the copy step itself. `argos verify` covers it as
 /// its own explicit step instead.
 fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::WindowsImageRequiresLinux);
-    }
-
     // Both branches compute their layout purely for the preflight + the
     // confirmation prompt below -- the privileged side independently
     // recomputes it either way (see windows_partition_plan_for).
     match args.layout {
         WindowsLayout::Ntfs => {
+            // The NTFS layout still needs mkfs.ntfs + ntfs-3g, which is why
+            // it stays Linux-only; the FAT32 layout (phase 3 M4, #34) needs
+            // neither and runs on macOS too.
+            if !cfg!(target_os = "linux") {
+                return Err(ArgosError::WindowsImageRequiresLinux);
+            }
             let layout = windows_partition_plan_for(&args.iso)?;
             preflight::check_windows_capacity(
                 &device.platform_id,

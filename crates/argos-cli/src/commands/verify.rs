@@ -64,7 +64,8 @@ fn run_dd_verify(args: &Args) -> Result<()> {
 /// The Windows-write counterpart to [`run_dd_verify`] above (backlog #27,
 /// W5): same shape, against `Plan::VerifyWindowsImage` instead.
 fn run_windows_verify(args: &Args) -> Result<()> {
-    if !cfg!(target_os = "linux") {
+    // Same split as the write path: only the NTFS layout is Linux-only.
+    if args.layout == WindowsLayout::Ntfs && !cfg!(target_os = "linux") {
         return Err(ArgosError::WindowsImageRequiresLinux);
     }
 

@@ -19,11 +19,15 @@
 //! a splittable WIM (or is a solid `.esd`) is still refused with a clear
 //! error rather than truncated.
 //!
-//! Linux-only for now, matching `crate::windows` -- but only by the explicit
-//! gate at the top of each `execute_*` function, kept until M4 (#34) flips
-//! it: everything below the gate is already platform-neutral.
+//! **Runs on Linux and macOS** (phase 3 M4, backlog #34). Nothing in this
+//! path is platform-specific: with no `mkfs`, no mount and no partition
+//! device nodes, the only OS interaction left is the pre-write unmount,
+//! which `PlatformOps` already provides on both. That is precisely why the
+//! phase-3 plan replaced the NTFS layout -- the macFUSE/`ntfs-3g`
+//! dependency #34 was originally scoped around simply has no counterpart
+//! here. `--layout ntfs` keeps its Linux-only gate.
 
-use crate::partition_io::PartitionWindow;
+use crate::partition_io::{PartitionWindow, SizedDevice};
 use crate::protocol::{
     validate_refreshed_device_for_windows_write, VerifyWindowsPlan, WriteWindowsPlan,
 };
@@ -41,7 +45,7 @@ use argos_core::verify::{
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 /// FAT32's hard per-file ceiling: sizes are 32-bit, so 4GiB-1.
@@ -63,13 +67,6 @@ pub fn execute_write_windows_fat32(
     plan: &WriteWindowsPlan,
     progress: &dyn ProgressSink,
 ) -> Result<Fat32WriteOutcome> {
-    // The gate M4 (#34) lifts; see this module's doc comment.
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::NotImplemented(
-            "Windows installer write support (non-Linux)",
-        ));
-    }
-
     let platform = crate::platform_select::current_platform();
 
     let refreshed = platform.refresh(&plan.device_path, plan.expected_serial.as_deref())?;
@@ -104,8 +101,17 @@ pub fn execute_write_windows_fat32(
         .write(true)
         .open(&plan.device_path)
         .map_err(ArgosError::Io)?;
-    let outcome = write_fat32_media(&mut device_file, &layout, &iso, &actions, progress)?;
-    device_file.sync_all().map_err(ArgosError::Io)?;
+    // SizedDevice, not the bare file: macOS device nodes can't answer
+    // SEEK_END, which gptman needs to lay out a new GPT. See its doc
+    // comment -- without it this panics before writing a byte, on any real
+    // macOS disk.
+    let outcome = {
+        let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
+        write_fat32_media(&mut sized, &layout, &iso, &actions, progress)?
+    };
+    // Not sync_all(): macOS device nodes reject F_FULLFSYNC. See
+    // partition_io::sync_device.
+    crate::partition_io::sync_device(&device_file).map_err(ArgosError::Io)?;
     Ok(outcome)
 }
 
@@ -117,14 +123,8 @@ pub fn execute_verify_windows_fat32(
     plan: &VerifyWindowsPlan,
     progress: &dyn ProgressSink,
 ) -> Result<crate::windows::WindowsVerifyOutcome> {
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::NotImplemented(
-            "Windows installer verify support (non-Linux)",
-        ));
-    }
-
     let platform = crate::platform_select::current_platform();
-    platform
+    let device = platform
         .refresh(&plan.device_path, None)?
         .ok_or_else(|| ArgosError::DeviceNotFound(plan.device_path.clone()))?;
 
@@ -136,8 +136,16 @@ pub fn execute_verify_windows_fat32(
     let actions = plan_copy_actions(&iso, &files)?;
     let layout = fat32_layout_for(&actions);
 
-    let mut device_file = File::open(&plan.device_path).map_err(ArgosError::Io)?;
-    let files_verified = verify_fat32_media(&mut device_file, &layout, &iso, &actions, progress)?;
+    // Opened read-write (not File::open) only so the same SizedDevice
+    // wrapper the write path uses applies here too -- verify never writes,
+    // and PartitionWindow's Write impl is simply never exercised.
+    let mut device_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&plan.device_path)
+        .map_err(ArgosError::Io)?;
+    let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
+    let files_verified = verify_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
 
     Ok(crate::windows::WindowsVerifyOutcome { files_verified })
 }

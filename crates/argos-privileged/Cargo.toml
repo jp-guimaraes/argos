@@ -37,6 +37,9 @@ gptman = { workspace = true }
 # M2.3): argos-core hashes whole readers, but a split part is produced
 # incrementally through a Write sink, so this crate needs the hasher itself.
 sha2 = { workspace = true }
+# fsync(2) as the fallback when a device node rejects F_FULLFSYNC, which is
+# what File::sync_all maps to on macOS. See partition_io::sync_device.
+libc = "0.2"
 fatfs = "0.3.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -48,4 +51,3 @@ argos-platform-macos = { workspace = true }
 [dev-dependencies]
 argos-core = { workspace = true, features = ["test-fixtures"] }
 tempfile = "3"
-libc = "0.2"
