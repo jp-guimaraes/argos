@@ -5,3 +5,7 @@
 # never meant to be committed.
 /.testdata/
 .playwright-mcp/
+
+# Session-local working notes (may contain credentials pasted during a session)
+.claude/
+HANDOFF.md
