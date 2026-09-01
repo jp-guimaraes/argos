@@ -13,6 +13,7 @@ use argos_core::partition::windows::{WindowsFat32Plan, WindowsPartitionPlan};
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use argos_privileged::protocol::{Plan, WindowsLayout, WritePlan, WriteWindowsPlan};
+use argos_privileged::windows_fat32::{fat32_layout_for, plan_copy_actions, CopyAction};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -122,7 +123,7 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
             confirm_windows_write_or_abort(device, &args.iso, &layout)?;
         }
         WindowsLayout::Fat32 => {
-            let layout = windows_fat32_plan_for(&args.iso)?;
+            let (layout, actions) = windows_fat32_plan_for(&args.iso)?;
             preflight::check_windows_fat32_capacity(
                 &device.platform_id,
                 device.size_bytes,
@@ -130,7 +131,7 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
                 &layout,
             )?;
             check_source_collision(platform, device, args)?;
-            confirm_windows_fat32_write_or_abort(device, &args.iso, &layout)?;
+            confirm_windows_fat32_write_or_abort(device, &args.iso, &layout, &actions)?;
         }
     }
 
@@ -174,21 +175,26 @@ fn windows_partition_plan_for(iso: &Path) -> Result<WindowsPartitionPlan> {
 }
 
 /// [`windows_partition_plan_for`]'s FAT32 counterpart (phase 3 M3.5,
-/// backlog #43) -- same display-only role. Also front-runs the helper's
-/// own FAT32 per-file size check so an ISO whose `install.wim` can't fit
-/// fails here, with the clear dedicated error, *before* any sudo/pkexec
-/// prompt or destructive confirmation.
-fn windows_fat32_plan_for(iso: &Path) -> Result<WindowsFat32Plan> {
-    let files = image::windows::WindowsIso::open(iso)?.list_files()?;
-    for entry in &files {
-        if entry.size > argos_privileged::windows_fat32::FAT32_MAX_FILE_BYTES {
-            return Err(ArgosError::WindowsFileTooLargeForFat32 {
-                path: entry.path.clone(),
-                size_bytes: entry.size,
-            });
-        }
-    }
-    Ok(WindowsFat32Plan::new(files.iter().map(|f| f.size).sum()))
+/// backlog #43) -- same display-only role, and it front-runs the helper's
+/// own refusals so an ISO the FAT32 layout genuinely cannot hold fails
+/// here, before any sudo/pkexec prompt or destructive confirmation.
+///
+/// Calls the helper's own [`plan_copy_actions`], deliberately, rather than
+/// reimplementing the "will this fit?" rules: the first version of this
+/// function had its own copy of the pre-splitter check, which went stale
+/// the moment the WIM splitter landed and made `argos write --layout
+/// fat32` refuse real Windows media the helper handled fine. Sharing the
+/// function is what keeps the prompt's numbers and the helper's behaviour
+/// from ever disagreeing again.
+///
+/// Returns the layout plus the copy actions, so the caller can show how
+/// many `.swm` parts an oversized `install.wim` will become.
+fn windows_fat32_plan_for(iso: &Path) -> Result<(WindowsFat32Plan, Vec<CopyAction>)> {
+    let image = image::windows::WindowsIso::open(iso)?;
+    let files = image.list_files()?;
+    let actions = plan_copy_actions(&image, &files)?;
+    let layout = fat32_layout_for(&actions);
+    Ok((layout, actions))
 }
 
 /// The source-on-target-device guard, shared verbatim by both Windows
@@ -263,7 +269,7 @@ fn confirm_or_abort(device: &Device, iso: &Path, image_size_bytes: u64) -> Resul
 
     if input.trim() != device.platform_id {
         println!("Confirmation did not match; aborting. Nothing was written.");
-        return Err(ArgosError::Cancelled);
+        return Err(ArgosError::NotConfirmed);
     }
     Ok(())
 }
@@ -313,7 +319,7 @@ fn confirm_windows_write_or_abort(
 
     if input.trim() != device.platform_id {
         println!("Confirmation did not match; aborting. Nothing was written.");
-        return Err(ArgosError::Cancelled);
+        return Err(ArgosError::NotConfirmed);
     }
     Ok(())
 }
@@ -325,6 +331,7 @@ fn confirm_windows_fat32_write_or_abort(
     device: &Device,
     iso: &Path,
     layout: &WindowsFat32Plan,
+    actions: &[CopyAction],
 ) -> Result<()> {
     println!("About to overwrite:");
     println!(
@@ -344,6 +351,23 @@ fn confirm_windows_fat32_write_or_abort(
         helper::human_size(layout.windows_partition.size_bytes),
         helper::human_size(layout.windows_partition.start_offset_bytes)
     );
+    // Splitting is invisible in the layout above but very visible on the
+    // resulting media (install.wim becomes install.swm + install2.swm ...),
+    // so say so before the user commits to the write.
+    for action in actions {
+        if let CopyAction::SplitWim {
+            source_path,
+            part_paths,
+            ..
+        } = action
+        {
+            println!(
+                "  note: {source_path} is over FAT32's 4GiB file limit and will be split into {} parts ({})",
+                part_paths.len(),
+                part_paths.join(", ")
+            );
+        }
+    }
     println!();
     println!(
         "This will PERMANENTLY ERASE all data on {}.",
@@ -357,7 +381,7 @@ fn confirm_windows_fat32_write_or_abort(
 
     if input.trim() != device.platform_id {
         println!("Confirmation did not match; aborting. Nothing was written.");
-        return Err(ArgosError::Cancelled);
+        return Err(ArgosError::NotConfirmed);
     }
     Ok(())
 }
@@ -407,5 +431,33 @@ mod tests {
         let mut device = usb_stick();
         device.os_reports_removable = false;
         assert!(check_device_is_offerable(&device, true).is_ok());
+    }
+
+    /// Regression guard for a bug found by a user running `argos write
+    /// --layout fat32` against a real Windows 11 ISO: this function used to
+    /// carry its own pre-splitter "every file must fit FAT32" check, so it
+    /// rejected media the helper could write perfectly well, before even
+    /// prompting. The planning logic is now shared with the helper --
+    /// asserting on a real oversized WIM here is what proves the two agree.
+    ///
+    /// Uses the synthetic UDF fixture (small files only), so it pins the
+    /// non-refusal for ordinary media; the oversized-WIM half is covered by
+    /// `argos-privileged`'s own `plan_copy_actions` tests, which run against
+    /// a WIM too large for FAT32.
+    #[test]
+    fn fat32_planning_accepts_ordinary_windows_media() {
+        let iso = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            iso.path(),
+            argos_core::image::windows::fixtures::udf_windows_installer_iso(true, true),
+        )
+        .unwrap();
+
+        let (layout, actions) = windows_fat32_plan_for(iso.path()).expect(
+            "a Windows installer ISO must plan cleanly for fat32 -- a refusal here means the \
+             CLI and the helper disagree about what the layout can hold",
+        );
+        assert!(!actions.is_empty());
+        assert!(layout.total_bytes_required() > 0);
     }
 }

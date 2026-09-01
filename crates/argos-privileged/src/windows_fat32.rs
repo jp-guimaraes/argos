@@ -158,8 +158,16 @@ pub const SWM_PART_TARGET_BYTES: u64 = 3_800 * 1024 * 1024;
 
 /// What to do with one file from the ISO when populating the FAT32
 /// partition (phase 3 M2.3, backlog #42).
+///
+/// Public because `argos-cli` builds the very same plan before elevating,
+/// to size the partition and show the layout in its confirmation prompt.
+/// It is deliberately the *same* function, not a parallel copy: an earlier
+/// version had the CLI reimplement "does every file fit FAT32?", which
+/// silently went stale the moment the splitter landed and made `argos
+/// write --layout fat32` refuse real Windows media the helper could
+/// handle perfectly well.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CopyAction {
+pub enum CopyAction {
     /// Copy the ISO file through verbatim, under its own name.
     Direct { path: String, size: u64 },
     /// Split this WIM into `.swm` parts (it doesn't fit FAT32 whole).
@@ -173,7 +181,7 @@ enum CopyAction {
 
 impl CopyAction {
     /// Bytes this action will occupy on the FAT32 filesystem.
-    fn bytes_on_target(&self) -> u64 {
+    pub fn bytes_on_target(&self) -> u64 {
         match self {
             CopyAction::Direct { size, .. } => *size,
             CopyAction::SplitWim { part_sizes, .. } => part_sizes.iter().sum(),
@@ -185,7 +193,7 @@ impl CopyAction {
 /// ... -- the naming Windows Setup looks for, and what `wimsplit` produces.
 /// Case is taken from the source path so media that uses uppercase names
 /// keeps them.
-fn swm_part_path(source_path: &str, part_number: u16) -> String {
+pub fn swm_part_path(source_path: &str, part_number: u16) -> String {
     let stem = source_path
         .strip_suffix(".wim")
         .or_else(|| source_path.strip_suffix(".WIM"))
@@ -210,7 +218,7 @@ fn swm_part_path(source_path: &str, part_number: u16) -> String {
 /// LZMS blocks can't be split at resource boundaries) still fails with
 /// [`ArgosError::WindowsFileTooLargeForFat32`], now carrying the splitter's
 /// own explanation.
-fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<CopyAction>> {
+pub fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<CopyAction>> {
     let mut actions = Vec::with_capacity(files.len());
     for entry in files {
         if entry.size <= FAT32_MAX_FILE_BYTES {
@@ -257,7 +265,7 @@ fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<Cop
     Ok(actions)
 }
 
-fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
+pub fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
     WindowsFat32Plan::new(actions.iter().map(CopyAction::bytes_on_target).sum())
 }
 

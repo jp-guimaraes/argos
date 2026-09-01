@@ -49,11 +49,14 @@ pub enum ArgosError {
     #[error("writing or verifying a Windows installer image requires a Linux host with ntfs-3g installed, for now")]
     WindowsImageRequiresLinux,
 
-    #[error("'{path}' is {size_bytes} bytes, over FAT32's 4GiB-1 file limit; the fat32 layout cannot hold it until the WIM splitter (phase 3 M2) lands -- use --layout ntfs on a Linux host meanwhile")]
+    #[error("'{path}' is {size_bytes} bytes, over FAT32's 4GiB-1 file limit, and cannot be split to fit (only a WIM can be, and a solid .esd cannot); try --layout ntfs on a Linux host")]
     WindowsFileTooLargeForFat32 { path: String, size_bytes: u64 },
 
     #[error("operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use")]
     Cancelled,
+
+    #[error("confirmation did not match; nothing was written and the device is untouched")]
+    NotConfirmed,
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -87,6 +90,14 @@ impl ArgosError {
             // reader removed the whole-file-in-memory cost (phase 3 M1,
             // #40); it stays reserved rather than reused.
             ArgosError::WindowsFileTooLargeForFat32 { .. } => 26,
+            // Distinct from Cancelled (18) on purpose: that one means a
+            // write was interrupted partway and the media is unusable,
+            // while this one means the user declined before anything was
+            // touched. Printing Cancelled's "device is left in an
+            // inconsistent state" right after "Nothing was written" read as
+            // a contradiction, and could scare someone who simply typed the
+            // device path wrong.
+            ArgosError::NotConfirmed => 27,
         }
     }
 }
