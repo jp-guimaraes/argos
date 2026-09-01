@@ -33,6 +33,10 @@ serde_json = { workspace = true }
 # rule doesn't block that write path's other new dependency,
 # argos-core's `image::windows` (already pulled in transitively).
 gptman = { workspace = true }
+# Hashing each .swm part as the WIM splitter streams it onto FAT32 (phase 3
+# M2.3): argos-core hashes whole readers, but a split part is produced
+# incrementally through a Write sink, so this crate needs the hasher itself.
+sha2 = { workspace = true }
 fatfs = "0.3.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]

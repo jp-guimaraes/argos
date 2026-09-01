@@ -239,7 +239,37 @@ impl WindowsIso {
             },
         }
     }
+
+    /// Like [`Self::open_file`], but the returned reader is also [`Seek`] --
+    /// what the WIM splitter (phase 3 M2, `image::wim`) needs, since a WIM's
+    /// lookup table and XML block live at the *end* of the file while its
+    /// resources are read from the front.
+    ///
+    /// UDF only: `Ok(None)` on the ISO9660 backend even for a file that
+    /// exists, since `cdfs`'s reader doesn't seek. That costs nothing in
+    /// practice -- every official Windows ISO is a UDF bridge (the W1
+    /// correction), and `install.wim` is only ever read through this path.
+    pub fn open_file_seekable(
+        &self,
+        path: &str,
+    ) -> io::Result<Option<Box<dyn ReadSeek + Send + '_>>> {
+        match &self.backing {
+            Backing::Udf(udf) => match udf_find(udf, path).map_err(udf::UdfError::into_io)? {
+                Some(entry) if entry.is_file() => {
+                    let reader = udf.open_file(&entry).map_err(udf::UdfError::into_io)?;
+                    Ok(Some(Box::new(reader)))
+                }
+                _ => Ok(None),
+            },
+            Backing::Iso9660(_) => Ok(None),
+        }
+    }
 }
+
+/// `Read + Seek` as one object-safe trait, so [`WindowsIso::open_file_seekable`]
+/// can hand back a boxed reader that still seeks.
+pub trait ReadSeek: Read + std::io::Seek {}
+impl<T: Read + std::io::Seek> ReadSeek for T {}
 
 fn walk<T: cdfs::ISO9660Reader>(
     dir: &cdfs::ISODirectory<T>,

@@ -95,7 +95,8 @@ impl ResourceHeader {
         }
     }
 
-    fn serialize(&self) -> [u8; 24] {
+    /// Public so tests in dependent crates can hand-build fixture WIMs.
+    pub fn serialize(&self) -> [u8; 24] {
         let mut out = [0u8; 24];
         out[..8].copy_from_slice(&self.size_in_wim.to_le_bytes());
         debug_assert!(self.size_in_wim < 1 << 56);
@@ -200,7 +201,8 @@ impl LookupEntry {
         }
     }
 
-    fn serialize(&self) -> [u8; 50] {
+    /// Public so tests in dependent crates can hand-build fixture WIMs.
+    pub fn serialize(&self) -> [u8; 50] {
         let mut out = [0u8; 50];
         out[..24].copy_from_slice(&self.resource.serialize());
         out[24..26].copy_from_slice(&self.part_number.to_le_bytes());
@@ -353,6 +355,27 @@ fn plan_parts(wim: &WimImage, max_part_bytes: u64) -> Vec<Vec<usize>> {
     }
 
     parts
+}
+
+/// Computes exactly what [`split`] *would* produce, without reading or
+/// writing a single resource byte: the size of each part, in order.
+///
+/// This is what lets a caller size its destination (the FAT32 partition,
+/// M3) and confirm every part fits its filesystem's per-file limit *before*
+/// touching the target device. `split` uses the same placement function, so
+/// the sizes returned here are the sizes actually written.
+pub fn plan_part_sizes(wim: &WimImage, max_part_bytes: u64) -> Vec<u64> {
+    let xml_len = wim.xml_data.len() as u64;
+    plan_parts(wim, max_part_bytes)
+        .iter()
+        .map(|entry_indices| {
+            let resource_bytes: u64 = entry_indices
+                .iter()
+                .map(|&i| wim.entries[i].resource.size_in_wim)
+                .sum();
+            part_overhead(xml_len) + resource_bytes + LOOKUP_ENTRY_SIZE * entry_indices.len() as u64
+        })
+        .collect()
 }
 
 /// Splits `source` (a whole, non-solid `.wim`) into spanned `.swm` parts of
@@ -871,6 +894,23 @@ mod tests {
         // stay under it -- and nothing was dropped.
         assert!(sizes.iter().any(|&s| s > 1000));
         assert_eq!(sizes.iter().filter(|&&s| s > 1000).count(), 1);
+    }
+
+    #[test]
+    fn plan_part_sizes_predicts_exactly_what_split_writes() {
+        let wim_bytes = typical_fixture();
+        for limit in [1500u64, 2500, 5000, 1 << 20] {
+            let predicted = {
+                let mut cursor = Cursor::new(wim_bytes.clone());
+                let wim = WimImage::open(&mut cursor).unwrap();
+                plan_part_sizes(&wim, limit)
+            };
+            let actual: Vec<u64> = split_to_vecs(&wim_bytes, limit)
+                .iter()
+                .map(|p| p.len() as u64)
+                .collect();
+            assert_eq!(predicted, actual, "limit {limit}");
+        }
     }
 
     #[test]
