@@ -9,9 +9,15 @@
 //!
 //! The media boots because FAT32 is what UEFI firmware reads natively: the
 //! ISO's own `efi/boot/bootx64.efi` (Microsoft-signed) is copied like any
-//! other file, so no vendored boot image is involved. Files over FAT32's
-//! 4GiB-1 limit (a real `install.wim` usually is) are refused with a clear
-//! error until M2's WIM splitter slots into the copy pipeline.
+//! other file, so no vendored boot image is involved.
+//!
+//! Files over FAT32's 4GiB-1 limit -- a real `install.wim` always is -- are
+//! split on the fly into `.swm` parts by `argos_core::image::wim` (phase 3
+//! M2.3, backlog #42): the ISO's UDF stream feeds the splitter, which feeds
+//! `fatfs` directly, hashing each part in the same pass, so a 5GB
+//! `install.wim` never lands anywhere whole. Anything oversized that *isn't*
+//! a splittable WIM (or is a solid `.esd`) is still refused with a clear
+//! error rather than truncated.
 //!
 //! Linux-only for now, matching `crate::windows` -- but only by the explicit
 //! gate at the top of each `execute_*` function, kept until M4 (#34) flips
@@ -23,6 +29,7 @@ use crate::protocol::{
 };
 use argos_core::error::{ArgosError, Result};
 use argos_core::image::checksum::{copy_and_hash, sha256_stream};
+use argos_core::image::wim;
 use argos_core::image::windows::{IsoFileEntry, WindowsIso};
 use argos_core::partition::windows::{
     WindowsFat32Plan, MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
@@ -33,6 +40,7 @@ use argos_core::verify::{
 };
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
+use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -77,9 +85,9 @@ pub fn execute_write_windows_fat32(
     }
     let iso = WindowsIso::open(&plan.iso_path)?;
     let files = iso.list_files()?;
-    ensure_files_fit_fat32(&files)?;
+    let actions = plan_copy_actions(&iso, &files)?;
 
-    let layout = fat32_layout_for(&files);
+    let layout = fat32_layout_for(&actions);
     preflight::check_windows_fat32_capacity(
         &plan.device_path,
         plan.expected_size_bytes,
@@ -96,7 +104,7 @@ pub fn execute_write_windows_fat32(
         .write(true)
         .open(&plan.device_path)
         .map_err(ArgosError::Io)?;
-    let outcome = write_fat32_media(&mut device_file, &layout, &iso, &files, progress)?;
+    let outcome = write_fat32_media(&mut device_file, &layout, &iso, &actions, progress)?;
     device_file.sync_all().map_err(ArgosError::Io)?;
     Ok(outcome)
 }
@@ -125,34 +133,124 @@ pub fn execute_verify_windows_fat32(
     }
     let iso = WindowsIso::open(&plan.iso_path)?;
     let files = iso.list_files()?;
-    let layout = fat32_layout_for(&files);
+    let actions = plan_copy_actions(&iso, &files)?;
+    let layout = fat32_layout_for(&actions);
 
     let mut device_file = File::open(&plan.device_path).map_err(ArgosError::Io)?;
-    verify_fat32_media(&mut device_file, &layout, &iso, &files, progress)?;
+    let files_verified = verify_fat32_media(&mut device_file, &layout, &iso, &actions, progress)?;
 
-    Ok(crate::windows::WindowsVerifyOutcome {
-        files_verified: files.len() as u64,
-    })
+    Ok(crate::windows::WindowsVerifyOutcome { files_verified })
 }
 
-/// Refuses any file FAT32 cannot hold. Today that means a real Windows
-/// ISO's `install.wim` is refused here -- deliberately, with an error that
-/// names the file and the way out -- until M2's splitter turns that file
-/// into `.swm` parts before it reaches the FAT32 copy.
-fn ensure_files_fit_fat32(files: &[IsoFileEntry]) -> Result<()> {
-    for entry in files {
-        if entry.size > FAT32_MAX_FILE_BYTES {
-            return Err(ArgosError::WindowsFileTooLargeForFat32 {
-                path: entry.path.clone(),
-                size_bytes: entry.size,
-            });
+/// Target size for one `.swm` part: comfortably under FAT32's 4GiB-1
+/// ceiling, matching what Rufus and `wimlib-imagex split` use in practice.
+/// Not the hard limit itself -- leaving headroom means a part that runs
+/// slightly over its budget (one oversized resource) still fits FAT32.
+pub const SWM_PART_TARGET_BYTES: u64 = 3_800 * 1024 * 1024;
+
+/// What to do with one file from the ISO when populating the FAT32
+/// partition (phase 3 M2.3, backlog #42).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CopyAction {
+    /// Copy the ISO file through verbatim, under its own name.
+    Direct { path: String, size: u64 },
+    /// Split this WIM into `.swm` parts (it doesn't fit FAT32 whole).
+    /// `part_paths` are the destination names, part 1 first.
+    SplitWim {
+        source_path: String,
+        part_paths: Vec<String>,
+        part_sizes: Vec<u64>,
+    },
+}
+
+impl CopyAction {
+    /// Bytes this action will occupy on the FAT32 filesystem.
+    fn bytes_on_target(&self) -> u64 {
+        match self {
+            CopyAction::Direct { size, .. } => *size,
+            CopyAction::SplitWim { part_sizes, .. } => part_sizes.iter().sum(),
         }
     }
-    Ok(())
 }
 
-fn fat32_layout_for(files: &[IsoFileEntry]) -> WindowsFat32Plan {
-    WindowsFat32Plan::new(files.iter().map(|f| f.size).sum())
+/// `sources/install.wim` -> `sources/install.swm`, `sources/install2.swm`,
+/// ... -- the naming Windows Setup looks for, and what `wimsplit` produces.
+/// Case is taken from the source path so media that uses uppercase names
+/// keeps them.
+fn swm_part_path(source_path: &str, part_number: u16) -> String {
+    let stem = source_path
+        .strip_suffix(".wim")
+        .or_else(|| source_path.strip_suffix(".WIM"))
+        .unwrap_or(source_path);
+    let ext = if source_path.ends_with(".WIM") {
+        "SWM"
+    } else {
+        "swm"
+    };
+    if part_number == 1 {
+        format!("{stem}.{ext}")
+    } else {
+        format!("{stem}{part_number}.{ext}")
+    }
+}
+
+/// Decides, for every file in the ISO, whether it can be copied whole or
+/// must be split -- and refuses cleanly if it can be neither.
+///
+/// A file over FAT32's limit is only splittable if it's a WIM this module's
+/// splitter accepts (`image::wim`): anything else (or a solid `.esd`, whose
+/// LZMS blocks can't be split at resource boundaries) still fails with
+/// [`ArgosError::WindowsFileTooLargeForFat32`], now carrying the splitter's
+/// own explanation.
+fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<CopyAction>> {
+    let mut actions = Vec::with_capacity(files.len());
+    for entry in files {
+        if entry.size <= FAT32_MAX_FILE_BYTES {
+            actions.push(CopyAction::Direct {
+                path: entry.path.clone(),
+                size: entry.size,
+            });
+            continue;
+        }
+
+        let too_large = || ArgosError::WindowsFileTooLargeForFat32 {
+            path: entry.path.clone(),
+            size_bytes: entry.size,
+        };
+
+        let mut reader = iso
+            .open_file_seekable(&entry.path)
+            .map_err(ArgosError::Io)?
+            .ok_or_else(too_large)?;
+        let image = wim::WimImage::open(&mut reader).map_err(|err| {
+            // The splitter's message (e.g. the solid-.esd refusal) is the
+            // useful part; keep it rather than a generic "too large".
+            ArgosError::Io(std::io::Error::other(format!(
+                "{} is {} bytes, over FAT32's limit, and cannot be split: {err}",
+                entry.path, entry.size
+            )))
+        })?;
+
+        let part_sizes = wim::plan_part_sizes(&image, SWM_PART_TARGET_BYTES);
+        if part_sizes.iter().any(|&size| size > FAT32_MAX_FILE_BYTES) {
+            // One resource alone exceeds FAT32's per-file limit -- nothing
+            // any split can do about it (resources are never divided).
+            return Err(too_large());
+        }
+        let part_paths = (1..=part_sizes.len() as u16)
+            .map(|n| swm_part_path(&entry.path, n))
+            .collect();
+        actions.push(CopyAction::SplitWim {
+            source_path: entry.path.clone(),
+            part_paths,
+            part_sizes,
+        });
+    }
+    Ok(actions)
+}
+
+fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
+    WindowsFat32Plan::new(actions.iter().map(CopyAction::bytes_on_target).sum())
 }
 
 /// Partitions, formats, and populates `device` per `layout` -- everything
@@ -163,7 +261,7 @@ fn write_fat32_media<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsFat32Plan,
     iso: &WindowsIso,
-    files: &[IsoFileEntry],
+    actions: &[CopyAction],
     progress: &dyn ProgressSink,
 ) -> Result<Fat32WriteOutcome> {
     progress.on_phase(Phase::Partitioning);
@@ -184,7 +282,7 @@ fn write_fat32_media<H: Read + Write + Seek>(
 
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).map_err(ArgosError::Io)?;
-    let copy_result = copy_files_fat32(&fs, iso, files, progress);
+    let copy_result = copy_files_fat32(&fs, iso, actions, progress);
     // Unmount regardless of how the copy went -- it's what flushes the FAT
     // and FSInfo sectors -- but a copy error outranks an unmount error.
     let unmount_result = fs.unmount().map_err(ArgosError::Io);
@@ -200,29 +298,40 @@ fn verify_fat32_media<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsFat32Plan,
     iso: &WindowsIso,
-    files: &[IsoFileEntry],
+    actions: &[CopyAction],
     progress: &dyn ProgressSink,
-) -> Result<()> {
+) -> Result<u64> {
     progress.on_phase(Phase::Verifying);
     let observed = read_observed_fat32_partition(device)?;
     verify_windows_fat32_layout(layout, observed)?;
 
-    // Hash every source file first, then compare each against the device --
-    // same two-pass shape (and the same phase for each pass) as the NTFS
-    // path's verify_windows_files.
+    // Hash what *should* be on the device first, then compare each file
+    // against what actually is -- same two-pass shape (and the same phase
+    // per pass) as the NTFS path's verify_windows_files. For a split WIM
+    // that means re-running the splitter over the ISO's WIM into a hashing
+    // sink: the splitter is deterministic, so the parts it produces now
+    // must hash identically to the ones the write produced.
     progress.on_phase(Phase::Checksumming);
-    let mut expected_hashes = Vec::with_capacity(files.len());
-    for entry in files {
-        let source = iso
-            .open_file(&entry.path)
-            .map_err(ArgosError::Io)?
-            .ok_or_else(|| {
-                ArgosError::Io(std::io::Error::other(format!(
-                    "{} listed but could not be reopened",
-                    entry.path
-                )))
-            })?;
-        expected_hashes.push(sha256_stream(source, |_| {}).map_err(ArgosError::Io)?);
+    let mut expected: Vec<(String, String)> = Vec::new();
+    for action in actions {
+        match action {
+            CopyAction::Direct { path, .. } => {
+                let source = open_iso_file(iso, path)?;
+                expected.push((
+                    path.clone(),
+                    sha256_stream(source, |_| {}).map_err(ArgosError::Io)?,
+                ));
+            }
+            CopyAction::SplitWim {
+                source_path,
+                part_paths,
+                ..
+            } => {
+                for (path, hash) in split_wim_part_hashes(iso, source_path, part_paths, |_| {})? {
+                    expected.push((path, hash));
+                }
+            }
+        }
     }
 
     progress.on_phase(Phase::Verifying);
@@ -231,23 +340,102 @@ fn verify_fat32_media<H: Read + Write + Seek>(
     let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).map_err(ArgosError::Io)?;
     let root = fs.root_dir();
 
-    let total_bytes: u64 = files.iter().map(|f| f.size).sum();
+    let total_bytes: u64 = actions.iter().map(CopyAction::bytes_on_target).sum();
     let mut bytes_done = 0u64;
-    for (entry, expected_hash) in files.iter().zip(expected_hashes.iter()) {
-        let dest = root.open_file(&entry.path).map_err(|e| {
+    for (path, expected_hash) in &expected {
+        let dest = root.open_file(path).map_err(|e| {
             ArgosError::Io(std::io::Error::other(format!(
-                "{} missing from the FAT32 partition: {e}",
-                entry.path
+                "{path} missing from the FAT32 partition: {e}"
             )))
         })?;
+        let mut this_file = 0u64;
         let actual_hash = sha256_stream(dest, |chunk_done| {
+            this_file = chunk_done;
             progress.on_progress(bytes_done + chunk_done, total_bytes);
         })
         .map_err(ArgosError::Io)?;
-        verify_windows_file_hash(&entry.path, expected_hash, &actual_hash)?;
-        bytes_done += entry.size;
+        verify_windows_file_hash(path, expected_hash, &actual_hash)?;
+        bytes_done += this_file;
     }
-    Ok(())
+    Ok(expected.len() as u64)
+}
+
+/// Opens one ISO file or fails with the same message every caller here
+/// wants ("listed but could not be reopened").
+fn open_iso_file<'a>(iso: &'a WindowsIso, path: &str) -> Result<Box<dyn Read + 'a>> {
+    iso.open_file(path).map_err(ArgosError::Io)?.ok_or_else(|| {
+        ArgosError::Io(std::io::Error::other(format!(
+            "{path} listed but could not be reopened"
+        )))
+    })
+}
+
+/// Runs the WIM splitter over `source_path` inside the ISO, hashing each
+/// `.swm` part instead of writing it anywhere. Used by the verify path to
+/// recompute what the write should have produced (the splitter is
+/// deterministic), so no split state has to survive between the two runs.
+fn split_wim_part_hashes(
+    iso: &WindowsIso,
+    source_path: &str,
+    part_paths: &[String],
+    mut on_bytes: impl FnMut(u64),
+) -> Result<Vec<(String, String)>> {
+    let mut reader = iso
+        .open_file_seekable(source_path)
+        .map_err(ArgosError::Io)?
+        .ok_or_else(|| {
+            ArgosError::Io(std::io::Error::other(format!(
+                "{source_path} listed but could not be reopened for splitting"
+            )))
+        })?;
+    let image = wim::WimImage::open(&mut reader).map_err(ArgosError::Io)?;
+
+    let hashers = std::cell::RefCell::new(Vec::<Sha256>::new());
+    wim::split(
+        &mut reader,
+        &image,
+        SWM_PART_TARGET_BYTES,
+        |_| {
+            hashers.borrow_mut().push(Sha256::new());
+            Ok(HashingSink(&hashers))
+        },
+        &mut on_bytes,
+    )
+    .map_err(ArgosError::Io)?;
+
+    let digests: Vec<String> = hashers
+        .into_inner()
+        .into_iter()
+        .map(|h| format!("{:x}", h.finalize()))
+        .collect();
+    if digests.len() != part_paths.len() {
+        return Err(ArgosError::Io(std::io::Error::other(format!(
+            "splitting {source_path} produced {} parts, expected {}",
+            digests.len(),
+            part_paths.len()
+        ))));
+    }
+    Ok(part_paths.iter().cloned().zip(digests).collect())
+}
+
+/// A `Write` sink that only hashes, feeding whichever hasher was most
+/// recently pushed -- `wim::split` writes each part to completion before
+/// asking for the next, so "the last one" is always the current part.
+struct HashingSink<'a>(&'a std::cell::RefCell<Vec<Sha256>>);
+
+impl Write for HashingSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .borrow_mut()
+            .last_mut()
+            .expect("a hasher is pushed before the sink is handed out")
+            .update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Builds and writes the single-partition GPT: a protective MBR plus one
@@ -304,57 +492,215 @@ fn read_observed_fat32_partition<H: Read + Seek>(device: &mut H) -> Result<Obser
 fn copy_files_fat32<H: Read + Write + Seek>(
     fs: &fatfs::FileSystem<H>,
     iso: &WindowsIso,
-    files: &[IsoFileEntry],
+    actions: &[CopyAction],
     progress: &dyn ProgressSink,
 ) -> Result<Fat32WriteOutcome> {
     progress.on_phase(Phase::CopyingFiles);
 
-    let total_bytes: u64 = files.iter().map(|f| f.size).sum();
+    let total_bytes: u64 = actions.iter().map(CopyAction::bytes_on_target).sum();
     let mut bytes_done = 0u64;
-    let mut hashes = Vec::with_capacity(files.len());
+    let mut hashes = Vec::new();
+    let mut files_copied = 0u64;
 
-    for entry in files {
-        let source = iso
-            .open_file(&entry.path)
-            .map_err(ArgosError::Io)?
-            .ok_or_else(|| {
-                ArgosError::Io(std::io::Error::other(format!(
-                    "{} listed but could not be reopened",
-                    entry.path
-                )))
-            })?;
-
-        // `fatfs`'s create_file/create_dir only auto-handle the *final*
-        // path component, so walk the parents one component at a time
-        // (create_dir opens an already-existing directory rather than
-        // failing, which is exactly what repeated prefixes need).
-        let mut dir = fs.root_dir();
-        let mut components: Vec<&str> = entry.path.split('/').collect();
-        let file_name = components
-            .pop()
-            .expect("IsoFileEntry paths are never empty");
-        for component in components {
-            dir = dir.create_dir(component).map_err(ArgosError::Io)?;
+    for action in actions {
+        match action {
+            CopyAction::Direct { path, size } => {
+                let source = open_iso_file(iso, path)?;
+                let mut dest = create_file_at(fs, path)?;
+                // One pass: every byte read from the ISO is both hashed and
+                // written, same as the NTFS path's copy_files.
+                let hash = copy_and_hash(source, &mut dest, |chunk_done| {
+                    progress.on_progress(bytes_done + chunk_done, total_bytes);
+                })
+                .map_err(ArgosError::Io)?;
+                dest.flush().map_err(ArgosError::Io)?;
+                bytes_done += size;
+                files_copied += 1;
+                hashes.push((path.clone(), hash));
+            }
+            CopyAction::SplitWim {
+                source_path,
+                part_paths,
+                part_sizes,
+            } => {
+                let written = split_wim_onto_fat32(
+                    fs,
+                    iso,
+                    source_path,
+                    part_paths,
+                    part_sizes,
+                    bytes_done,
+                    total_bytes,
+                    progress,
+                )?;
+                bytes_done += part_sizes.iter().sum::<u64>();
+                files_copied += part_paths.len() as u64;
+                hashes.extend(written);
+            }
         }
-        let mut dest = dir.create_file(file_name).map_err(ArgosError::Io)?;
-
-        // One pass: every byte read from the ISO is both hashed and
-        // written, same as the NTFS path's copy_files.
-        let hash = copy_and_hash(source, &mut dest, |chunk_done| {
-            progress.on_progress(bytes_done + chunk_done, total_bytes);
-        })
-        .map_err(ArgosError::Io)?;
-        dest.flush().map_err(ArgosError::Io)?;
-
-        bytes_done += entry.size;
-        hashes.push((entry.path.clone(), hash));
     }
 
     Ok(Fat32WriteOutcome {
-        files_copied: files.len() as u64,
+        files_copied,
         bytes_copied: bytes_done,
         file_hashes: hashes,
     })
+}
+
+/// Creates a file at a `/`-separated path inside the FAT32 filesystem,
+/// creating parent directories as needed.
+///
+/// `fatfs`'s create_file/create_dir only auto-handle the *final* path
+/// component, so parents are walked one component at a time (create_dir
+/// opens an already-existing directory rather than failing, which is
+/// exactly what repeated prefixes need).
+fn create_file_at<'a, H: Read + Write + Seek>(
+    fs: &'a fatfs::FileSystem<H>,
+    path: &str,
+) -> Result<fatfs::File<'a, H>> {
+    let mut dir = fs.root_dir();
+    let mut components: Vec<&str> = path.split('/').collect();
+    let file_name = components.pop().expect("ISO paths are never empty");
+    for component in components {
+        dir = dir.create_dir(component).map_err(ArgosError::Io)?;
+    }
+    dir.create_file(file_name).map_err(ArgosError::Io)
+}
+
+/// Streams one oversized WIM out of the ISO and straight into `.swm` parts
+/// on the FAT32 filesystem (phase 3 M2.3): UDF stream -> splitter -> FAT32
+/// writer, hashing each part in the same pass, never materializing a part
+/// in memory.
+#[allow(clippy::too_many_arguments)]
+fn split_wim_onto_fat32<H: Read + Write + Seek>(
+    fs: &fatfs::FileSystem<H>,
+    iso: &WindowsIso,
+    source_path: &str,
+    part_paths: &[String],
+    part_sizes: &[u64],
+    bytes_done_before: u64,
+    total_bytes: u64,
+    progress: &dyn ProgressSink,
+) -> Result<Vec<(String, String)>> {
+    let mut reader = iso
+        .open_file_seekable(source_path)
+        .map_err(ArgosError::Io)?
+        .ok_or_else(|| {
+            ArgosError::Io(std::io::Error::other(format!(
+                "{source_path} listed but could not be reopened for splitting"
+            )))
+        })?;
+    let image = wim::WimImage::open(&mut reader).map_err(ArgosError::Io)?;
+
+    // Each part is written to completion before the next is requested, so
+    // one "current part" slot is all the bookkeeping this needs.
+    let mut hashes: Vec<(String, String)> = Vec::with_capacity(part_paths.len());
+    let mut part_index = 0usize;
+
+    {
+        // A sink that writes into the current .swm file while hashing it.
+        struct PartSink<'a, H: Read + Write + Seek> {
+            file: fatfs::File<'a, H>,
+            hasher: Sha256,
+        }
+        impl<H: Read + Write + Seek> Write for PartSink<'_, H> {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let n = self.file.write(buf)?;
+                self.hasher.update(&buf[..n]);
+                Ok(n)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.file.flush()
+            }
+        }
+
+        // `wim::split` hands each sink out by value and drops it before
+        // asking for the next, so the finished hash has to be collected on
+        // drop -- shared through a RefCell the loop below drains.
+        let finished = std::cell::RefCell::new(Vec::<String>::new());
+
+        struct Finishing<'a, H: Read + Write + Seek> {
+            sink: Option<PartSink<'a, H>>,
+            finished: &'a std::cell::RefCell<Vec<String>>,
+        }
+        impl<H: Read + Write + Seek> Write for Finishing<'_, H> {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.sink
+                    .as_mut()
+                    .expect("sink is only taken on drop")
+                    .write(buf)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.sink
+                    .as_mut()
+                    .expect("sink is only taken on drop")
+                    .flush()
+            }
+        }
+        impl<H: Read + Write + Seek> Drop for Finishing<'_, H> {
+            fn drop(&mut self) {
+                if let Some(mut sink) = self.sink.take() {
+                    let _ = sink.file.flush();
+                    self.finished
+                        .borrow_mut()
+                        .push(format!("{:x}", sink.hasher.finalize()));
+                }
+            }
+        }
+
+        let mut resource_bytes_seen = 0u64;
+        wim::split(
+            &mut reader,
+            &image,
+            SWM_PART_TARGET_BYTES,
+            |part_number| {
+                let path = part_paths
+                    .get(part_number as usize - 1)
+                    .ok_or_else(|| {
+                        std::io::Error::other(format!(
+                            "splitting {source_path} produced more parts than planned"
+                        ))
+                    })?
+                    .clone();
+                let file =
+                    create_file_at(fs, &path).map_err(|e| std::io::Error::other(e.to_string()))?;
+                Ok(Finishing {
+                    sink: Some(PartSink {
+                        file,
+                        hasher: Sha256::new(),
+                    }),
+                    finished: &finished,
+                })
+            },
+            |copied| {
+                // Resource bytes are the bulk of a part; reporting them
+                // against the on-target total is close enough for a
+                // progress bar and stays monotonic.
+                resource_bytes_seen = copied;
+                progress.on_progress(bytes_done_before + copied, total_bytes);
+            },
+        )
+        .map_err(ArgosError::Io)?;
+
+        for digest in finished.into_inner() {
+            let path = part_paths
+                .get(part_index)
+                .expect("part count was checked against the plan")
+                .clone();
+            hashes.push((path, digest));
+            part_index += 1;
+        }
+    }
+
+    if hashes.len() != part_paths.len() {
+        return Err(ArgosError::Io(std::io::Error::other(format!(
+            "splitting {source_path} produced {} parts, expected {}",
+            hashes.len(),
+            part_paths.len()
+        ))));
+    }
+    debug_assert_eq!(part_sizes.len(), part_paths.len());
+    Ok(hashes)
 }
 
 #[cfg(test)]
@@ -389,25 +735,28 @@ mod tests {
     #[test]
     fn write_then_verify_round_trips_on_a_plain_file() {
         let (iso, files, _guard) = synthetic_iso();
-        let layout = fat32_layout_for(&files);
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = fat32_layout_for(&actions);
         let mut device = device_file_for(&layout);
 
-        let outcome = write_fat32_media(&mut device, &layout, &iso, &files, &NoopProgress).unwrap();
+        let outcome =
+            write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
         assert_eq!(outcome.files_copied, files.len() as u64);
         assert_eq!(
             outcome.bytes_copied,
             files.iter().map(|f| f.size).sum::<u64>()
         );
 
-        verify_fat32_media(&mut device, &layout, &iso, &files, &NoopProgress).unwrap();
+        verify_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
     }
 
     #[test]
     fn the_written_gpt_has_exactly_one_basic_data_partition_where_planned() {
         let (iso, files, _guard) = synthetic_iso();
-        let layout = fat32_layout_for(&files);
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = fat32_layout_for(&actions);
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &files, &NoopProgress).unwrap();
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
         let observed = read_observed_fat32_partition(&mut device).unwrap();
         assert_eq!(
@@ -433,9 +782,10 @@ mod tests {
     #[test]
     fn the_filesystem_is_actually_fat32_not_a_smaller_fat() {
         let (iso, files, _guard) = synthetic_iso();
-        let layout = fat32_layout_for(&files);
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = fat32_layout_for(&actions);
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &files, &NoopProgress).unwrap();
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
         let window = PartitionWindow::new(&mut device, layout.windows_partition);
         let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
@@ -445,9 +795,10 @@ mod tests {
     #[test]
     fn verify_fails_when_a_written_file_is_corrupted() {
         let (iso, files, _guard) = synthetic_iso();
-        let layout = fat32_layout_for(&files);
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = fat32_layout_for(&actions);
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &files, &NoopProgress).unwrap();
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
         // Corrupt the first byte of the largest file's content by finding it
         // through the filesystem itself (window + fatfs, read-write).
@@ -467,7 +818,7 @@ mod tests {
         }
 
         let err =
-            verify_fat32_media(&mut device, &layout, &iso, &files, &NoopProgress).unwrap_err();
+            verify_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap_err();
         assert!(
             matches!(err, ArgosError::WindowsFileMismatch { ref path, .. } if *path == largest.path)
         );
@@ -476,29 +827,217 @@ mod tests {
     #[test]
     fn verify_fails_when_the_device_has_no_gpt_at_all() {
         let (iso, files, _guard) = synthetic_iso();
-        let layout = fat32_layout_for(&files);
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = fat32_layout_for(&actions);
         let mut blank = Cursor::new(vec![0u8; 4 * 1024 * 1024]);
-        assert!(verify_fat32_media(&mut blank, &layout, &iso, &files, &NoopProgress).is_err());
+        assert!(verify_fat32_media(&mut blank, &layout, &iso, &actions, &NoopProgress).is_err());
     }
 
     #[test]
-    fn a_file_over_4gib_is_refused_with_the_dedicated_error() {
-        let files = vec![IsoFileEntry {
-            path: "sources/install.wim".into(),
-            size: FAT32_MAX_FILE_BYTES + 1,
-        }];
-        let err = ensure_files_fit_fat32(&files).unwrap_err();
-        assert!(
-            matches!(err, ArgosError::WindowsFileTooLargeForFat32 { ref path, size_bytes } if path == "sources/install.wim" && size_bytes == FAT32_MAX_FILE_BYTES + 1)
+    fn files_within_the_fat32_limit_are_planned_as_direct_copies() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        assert_eq!(actions.len(), files.len());
+        assert!(actions
+            .iter()
+            .all(|a| matches!(a, CopyAction::Direct { .. })));
+        assert_eq!(
+            actions.iter().map(CopyAction::bytes_on_target).sum::<u64>(),
+            files.iter().map(|f| f.size).sum::<u64>()
         );
     }
 
     #[test]
-    fn files_at_exactly_the_fat32_limit_are_allowed() {
+    fn swm_part_paths_follow_windows_setups_naming() {
+        assert_eq!(
+            swm_part_path("sources/install.wim", 1),
+            "sources/install.swm"
+        );
+        assert_eq!(
+            swm_part_path("sources/install.wim", 2),
+            "sources/install2.swm"
+        );
+        assert_eq!(
+            swm_part_path("sources/install.wim", 13),
+            "sources/install13.swm"
+        );
+        // Uppercase media keeps its case.
+        assert_eq!(
+            swm_part_path("SOURCES/INSTALL.WIM", 2),
+            "SOURCES/INSTALL2.SWM"
+        );
+    }
+
+    /// A file too big for FAT32 that *isn't* a splittable WIM has no way
+    /// out, and must say so rather than being silently truncated or split.
+    #[test]
+    fn an_oversized_non_wim_file_is_refused() {
+        // The synthetic ISO's files are small, so drive the check directly
+        // with a listing that claims an oversized non-WIM file.
+        let (iso, _files, _guard) = synthetic_iso();
+        let files = vec![IsoFileEntry {
+            path: "sources/huge.dat".into(),
+            size: FAT32_MAX_FILE_BYTES + 1,
+        }];
+        let err = plan_copy_actions(&iso, &files).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ArgosError::WindowsFileTooLargeForFat32 { ref path, size_bytes }
+                    if path == "sources/huge.dat" && size_bytes == FAT32_MAX_FILE_BYTES + 1
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn files_at_exactly_the_fat32_limit_are_copied_whole() {
+        let (iso, _files, _guard) = synthetic_iso();
         let files = vec![IsoFileEntry {
             path: "sources/install.swm".into(),
             size: FAT32_MAX_FILE_BYTES,
         }];
-        assert!(ensure_files_fit_fat32(&files).is_ok());
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        assert!(matches!(actions[0], CopyAction::Direct { .. }));
+    }
+
+    /// End-to-end for M2.3, with the 4GiB threshold lowered so a synthetic
+    /// WIM can exercise it: an oversized WIM is split into `.swm` parts on
+    /// the FAT32 filesystem, and each part is a real WIM part wimlib-style
+    /// numbering agrees with. (The real-size path is covered by
+    /// `argos-core`'s wimlib oracle harness.)
+    #[test]
+    fn an_oversized_wim_is_split_into_swm_parts_on_the_filesystem() {
+        use argos_core::image::wim::{WimHeader, WimImage, HEADER_SIZE};
+
+        // Build a WIM big enough that SWM_PART_TARGET_BYTES would be silly
+        // to test against, then split it directly at a small limit through
+        // the same code path the copy uses.
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = fat32_layout_for(&actions);
+        let mut device = device_file_for(&layout);
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+
+        // Write a synthetic multi-resource WIM into the FAT32 filesystem by
+        // splitting it, exactly as split_wim_onto_fat32 does, and read the
+        // parts back with our own header parser.
+        let window = PartitionWindow::new(&mut device, layout.windows_partition);
+        let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
+
+        let wim_bytes = tiny_multi_resource_wim();
+        let mut source = Cursor::new(wim_bytes);
+        let image = WimImage::open(&mut source).unwrap();
+        let part_sizes = argos_core::image::wim::plan_part_sizes(&image, 900);
+        assert!(
+            part_sizes.len() > 1,
+            "the fixture should need several parts"
+        );
+        let part_paths: Vec<String> = (1..=part_sizes.len() as u16)
+            .map(|n| swm_part_path("sources/install.wim", n))
+            .collect();
+
+        argos_core::image::wim::split(
+            &mut source,
+            &image,
+            900,
+            |part_number| {
+                let path = &part_paths[part_number as usize - 1];
+                create_file_at(&fs, path).map_err(|e| std::io::Error::other(e.to_string()))
+            },
+            |_| {},
+        )
+        .unwrap();
+
+        // Every part exists on the filesystem and parses as the part it
+        // claims to be.
+        for (idx, path) in part_paths.iter().enumerate() {
+            let mut file = fs.root_dir().open_file(path).unwrap();
+            let mut header_bytes = [0u8; HEADER_SIZE];
+            file.read_exact(&mut header_bytes).unwrap();
+            let header = WimHeader::parse(&header_bytes).unwrap();
+            assert_eq!(header.part_number, idx as u16 + 1);
+            assert_eq!(header.total_parts, part_paths.len() as u16);
+            assert_ne!(
+                header.flags & argos_core::image::wim::FLAG_HEADER_SPANNED,
+                0
+            );
+        }
+        fs.unmount().unwrap();
+    }
+
+    /// A minimal but structurally valid WIM with several file resources --
+    /// enough for the splitter to have real boundaries to choose between.
+    fn tiny_multi_resource_wim() -> Vec<u8> {
+        use argos_core::image::wim::{
+            LookupEntry, ResourceHeader, WimHeader, HEADER_SIZE, LOOKUP_ENTRY_SIZE,
+            RESHDR_FLAG_METADATA, WIM_VERSION,
+        };
+
+        let resources: Vec<(Vec<u8>, bool)> = vec![
+            (vec![0xEE; 100], true),
+            (vec![0x11; 400], false),
+            (vec![0x22; 400], false),
+            (vec![0x33; 400], false),
+        ];
+        let mut body = Vec::new();
+        let mut entries = Vec::new();
+        let mut cursor = HEADER_SIZE as u64;
+        for (i, (content, is_metadata)) in resources.iter().enumerate() {
+            entries.push(LookupEntry {
+                resource: ResourceHeader {
+                    size_in_wim: content.len() as u64,
+                    flags: if *is_metadata {
+                        RESHDR_FLAG_METADATA
+                    } else {
+                        0
+                    },
+                    offset: cursor,
+                    original_size: content.len() as u64,
+                },
+                part_number: 1,
+                ref_count: 1,
+                sha1: [i as u8 + 1; 20],
+            });
+            body.extend_from_slice(content);
+            cursor += content.len() as u64;
+        }
+        let table_offset = cursor;
+        let table_len = LOOKUP_ENTRY_SIZE * entries.len() as u64;
+        let xml: Vec<u8> = vec![0xFF, 0xFE];
+
+        let header = WimHeader {
+            version: WIM_VERSION,
+            flags: 0,
+            compression_size: 32768,
+            guid: [0x5A; 16],
+            part_number: 1,
+            total_parts: 1,
+            image_count: 1,
+            offset_table: ResourceHeader {
+                size_in_wim: table_len,
+                flags: 0,
+                offset: table_offset,
+                original_size: table_len,
+            },
+            xml_data: ResourceHeader {
+                size_in_wim: xml.len() as u64,
+                flags: 0,
+                offset: table_offset + table_len,
+                original_size: xml.len() as u64,
+            },
+            boot_metadata: entries[0].resource,
+            boot_index: 1,
+            integrity: ResourceHeader::default(),
+        };
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&header.serialize());
+        out.extend_from_slice(&body);
+        for e in &entries {
+            out.extend_from_slice(&e.serialize());
+        }
+        out.extend_from_slice(&xml);
+        out
     }
 }
