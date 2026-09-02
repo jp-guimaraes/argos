@@ -41,6 +41,7 @@ sha2 = { workspace = true }
 # what File::sync_all maps to on macOS. See partition_io::sync_device.
 libc = "0.2"
 fatfs = "0.3.6"
+mbrman = "0.6.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 argos-platform-linux = { workspace = true }
