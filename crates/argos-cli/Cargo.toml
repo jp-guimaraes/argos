@@ -26,3 +26,10 @@ argos-platform-linux = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 argos-platform-macos = { workspace = true }
+
+[dev-dependencies]
+# Builds a synthetic Windows-installer ISO for the fat32 planning
+# regression test -- the same fixture builder the other crates' tests use,
+# never enabled in a production build.
+argos-core = { workspace = true, features = ["test-fixtures"] }
+tempfile = "3"

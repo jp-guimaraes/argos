@@ -19,11 +19,15 @@
 //! a splittable WIM (or is a solid `.esd`) is still refused with a clear
 //! error rather than truncated.
 //!
-//! Linux-only for now, matching `crate::windows` -- but only by the explicit
-//! gate at the top of each `execute_*` function, kept until M4 (#34) flips
-//! it: everything below the gate is already platform-neutral.
+//! **Runs on Linux and macOS** (phase 3 M4, backlog #34). Nothing in this
+//! path is platform-specific: with no `mkfs`, no mount and no partition
+//! device nodes, the only OS interaction left is the pre-write unmount,
+//! which `PlatformOps` already provides on both. That is precisely why the
+//! phase-3 plan replaced the NTFS layout -- the macFUSE/`ntfs-3g`
+//! dependency #34 was originally scoped around simply has no counterpart
+//! here. `--layout ntfs` keeps its Linux-only gate.
 
-use crate::partition_io::PartitionWindow;
+use crate::partition_io::{PartitionWindow, SizedDevice};
 use crate::protocol::{
     validate_refreshed_device_for_windows_write, VerifyWindowsPlan, WriteWindowsPlan,
 };
@@ -41,7 +45,6 @@ use argos_core::verify::{
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 /// FAT32's hard per-file ceiling: sizes are 32-bit, so 4GiB-1.
@@ -63,13 +66,6 @@ pub fn execute_write_windows_fat32(
     plan: &WriteWindowsPlan,
     progress: &dyn ProgressSink,
 ) -> Result<Fat32WriteOutcome> {
-    // The gate M4 (#34) lifts; see this module's doc comment.
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::NotImplemented(
-            "Windows installer write support (non-Linux)",
-        ));
-    }
-
     let platform = crate::platform_select::current_platform();
 
     let refreshed = platform.refresh(&plan.device_path, plan.expected_serial.as_deref())?;
@@ -99,13 +95,22 @@ pub fn execute_write_windows_fat32(
     progress.on_phase(Phase::Unmounting);
     platform.unmount(&device)?;
 
-    let mut device_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&plan.device_path)
-        .map_err(ArgosError::Io)?;
-    let outcome = write_fat32_media(&mut device_file, &layout, &iso, &actions, progress)?;
-    device_file.sync_all().map_err(ArgosError::Io)?;
+    // Exclusive: once format_volume makes the partition recognizable, macOS
+    // would otherwise auto-mount it mid-copy and the write would die with
+    // EBUSY. See partition_io::open_device_exclusive.
+    let mut device_file =
+        crate::partition_io::open_device_exclusive(&plan.device_path).map_err(ArgosError::Io)?;
+    // SizedDevice, not the bare file: macOS device nodes can't answer
+    // SEEK_END, which gptman needs to lay out a new GPT. See its doc
+    // comment -- without it this panics before writing a byte, on any real
+    // macOS disk.
+    let outcome = {
+        let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
+        write_fat32_media(&mut sized, &layout, &iso, &actions, progress)?
+    };
+    // Not sync_all(): macOS device nodes reject F_FULLFSYNC. See
+    // partition_io::sync_device.
+    crate::partition_io::sync_device(&device_file).map_err(ArgosError::Io)?;
     Ok(outcome)
 }
 
@@ -117,14 +122,8 @@ pub fn execute_verify_windows_fat32(
     plan: &VerifyWindowsPlan,
     progress: &dyn ProgressSink,
 ) -> Result<crate::windows::WindowsVerifyOutcome> {
-    if !cfg!(target_os = "linux") {
-        return Err(ArgosError::NotImplemented(
-            "Windows installer verify support (non-Linux)",
-        ));
-    }
-
     let platform = crate::platform_select::current_platform();
-    platform
+    let device = platform
         .refresh(&plan.device_path, None)?
         .ok_or_else(|| ArgosError::DeviceNotFound(plan.device_path.clone()))?;
 
@@ -136,8 +135,18 @@ pub fn execute_verify_windows_fat32(
     let actions = plan_copy_actions(&iso, &files)?;
     let layout = fat32_layout_for(&actions);
 
-    let mut device_file = File::open(&plan.device_path).map_err(ArgosError::Io)?;
-    let files_verified = verify_fat32_media(&mut device_file, &layout, &iso, &actions, progress)?;
+    // Unmount first, then open exclusively -- the same treatment the write
+    // path gets, for two reasons: a freshly written stick has its FAT32
+    // partition auto-mounted by macOS (so a plain open fails with EBUSY),
+    // and reading the device under a live mount could serve the mounted
+    // filesystem's cached view rather than what is actually on the medium,
+    // which is precisely what verification must not do.
+    progress.on_phase(Phase::Unmounting);
+    platform.unmount(&device)?;
+    let mut device_file =
+        crate::partition_io::open_device_exclusive(&plan.device_path).map_err(ArgosError::Io)?;
+    let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
+    let files_verified = verify_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
 
     Ok(crate::windows::WindowsVerifyOutcome { files_verified })
 }
@@ -150,8 +159,16 @@ pub const SWM_PART_TARGET_BYTES: u64 = 3_800 * 1024 * 1024;
 
 /// What to do with one file from the ISO when populating the FAT32
 /// partition (phase 3 M2.3, backlog #42).
+///
+/// Public because `argos-cli` builds the very same plan before elevating,
+/// to size the partition and show the layout in its confirmation prompt.
+/// It is deliberately the *same* function, not a parallel copy: an earlier
+/// version had the CLI reimplement "does every file fit FAT32?", which
+/// silently went stale the moment the splitter landed and made `argos
+/// write --layout fat32` refuse real Windows media the helper could
+/// handle perfectly well.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CopyAction {
+pub enum CopyAction {
     /// Copy the ISO file through verbatim, under its own name.
     Direct { path: String, size: u64 },
     /// Split this WIM into `.swm` parts (it doesn't fit FAT32 whole).
@@ -165,7 +182,7 @@ enum CopyAction {
 
 impl CopyAction {
     /// Bytes this action will occupy on the FAT32 filesystem.
-    fn bytes_on_target(&self) -> u64 {
+    pub fn bytes_on_target(&self) -> u64 {
         match self {
             CopyAction::Direct { size, .. } => *size,
             CopyAction::SplitWim { part_sizes, .. } => part_sizes.iter().sum(),
@@ -177,7 +194,7 @@ impl CopyAction {
 /// ... -- the naming Windows Setup looks for, and what `wimsplit` produces.
 /// Case is taken from the source path so media that uses uppercase names
 /// keeps them.
-fn swm_part_path(source_path: &str, part_number: u16) -> String {
+pub fn swm_part_path(source_path: &str, part_number: u16) -> String {
     let stem = source_path
         .strip_suffix(".wim")
         .or_else(|| source_path.strip_suffix(".WIM"))
@@ -202,7 +219,7 @@ fn swm_part_path(source_path: &str, part_number: u16) -> String {
 /// LZMS blocks can't be split at resource boundaries) still fails with
 /// [`ArgosError::WindowsFileTooLargeForFat32`], now carrying the splitter's
 /// own explanation.
-fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<CopyAction>> {
+pub fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<CopyAction>> {
     let mut actions = Vec::with_capacity(files.len());
     for entry in files {
         if entry.size <= FAT32_MAX_FILE_BYTES {
@@ -249,7 +266,7 @@ fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec<Cop
     Ok(actions)
 }
 
-fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
+pub fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
     WindowsFat32Plan::new(actions.iter().map(CopyAction::bytes_on_target).sum())
 }
 

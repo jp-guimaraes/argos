@@ -78,6 +78,31 @@ jobs:
           sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
             --features test-overrides --test write_windows_image \
             -- --ignored --nocapture --test-threads=1
+      # Phase 3 M3.6 (#43): the FAT32 layout's counterpart. Deliberately a
+      # separate step, not extra cases in the job above: it needs neither
+      # ntfs-3g nor --partscan, and keeping it distinct means a failure here
+      # points at the pure-Rust path rather than at the NTFS tooling.
+      - run: |
+          sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
+            --features test-overrides --test write_windows_fat32 \
+            -- --ignored --nocapture --test-threads=1
+
+  wim-split-oracle-tests:
+    name: WIM splitter validation against wimlib (oracle)
+    # Phase 3 M2.4 (#42): cross-checks image::wim's .swm output against
+    # wimlib, an independent implementation -- wimlib is run as a
+    # subprocess only (it is GPL; never linked or vendored). Its own job
+    # because it is the only one needing the wimtools package, and because
+    # a failure here means the split format is wrong, which is a different
+    # kind of problem from a device-I/O failure.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y wimtools
+      - run: |
+          cargo test -p argos-core --release --test wim_split_oracle \
+            -- --ignored --nocapture --test-threads=1
 
   dm-resolution-tests:
     name: device-mapper resolution integration tests (root)
@@ -112,3 +137,11 @@ jobs:
       - run: |
           cargo test -p argos-privileged --features test-overrides \
             --test hdiutil_image_write -- --ignored --nocapture
+      # Phase 3 M4.2 (#34): the FAT32 Windows write path on macOS. Needs no
+      # macFUSE, no ntfs-3g and no root -- which is the whole point of the
+      # layout change, and is why this can run in CI at all, unlike the
+      # macFUSE route #34 originally planned.
+      - run: |
+          cargo test -p argos-privileged --features test-overrides \
+            --test hdiutil_windows_fat32 --test automount_regression \
+            -- --ignored --nocapture --test-threads=1

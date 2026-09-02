@@ -10,12 +10,13 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum LayoutArg {
     /// Two partitions: UEFI:NTFS boot + NTFS data (backlog #27). Needs
-    /// mkfs.ntfs and ntfs-3g on the host. The default until the FAT32
-    /// layout is validated on real hardware (phase 3 M5).
+    /// mkfs.ntfs and ntfs-3g, so Linux-only. Still the default until the
+    /// FAT32 layout is validated on real hardware (phase 3 M5).
     Ntfs,
-    /// One pure-Rust FAT32 partition (phase 3 M3, backlog #43): no external
-    /// programs, no mounting. Refuses ISOs whose install.wim exceeds
-    /// FAT32's 4GiB file limit until the WIM splitter (M2) lands.
+    /// One pure-Rust FAT32 partition (phase 3 M3/M2, backlog #43/#42): no
+    /// external programs, no mounting. An install.wim over FAT32's 4GiB
+    /// file limit is split into install.swm parts automatically. Works on
+    /// Linux and macOS.
     Fat32,
 }
 
