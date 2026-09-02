@@ -1108,6 +1108,52 @@ pub fn write_mbr_partition_table_for_test<H: Read + Write + Seek>(
     write_mbr_partition_table(device, layout)
 }
 
+/// How many sectors a GPT occupies at each end of a disk: one header plus the
+/// 32 sectors that hold 128 entries of 128 bytes.
+const GPT_SECTORS_PER_COPY: u64 = 33;
+
+/// Erases any GPT the device carried before this MBR write.
+///
+/// `mbrman` writes sector 0 and nothing else, so a stick previously written
+/// with the GPT layout keeps its primary header at LBA 1, its entry array
+/// behind that, and its backup header in the device's last sector -- all with
+/// CRCs that still validate. What is left is a disk that contradicts itself: a
+/// structurally valid GPT whose sector 0 is not the protective 0xEE entry a
+/// GPT requires, but a real bootable FAT32 entry.
+///
+/// Windows does not hand a volume a drive letter off a disk in that state. The
+/// symptom is nasty because the media still *boots*: our MBR and VBR chain
+/// through to `bootmgr`, WinPE starts, and only then does Setup report that it
+/// cannot find the installation source.
+///
+/// Found on real hardware, and it is also why emulation never reproduced the
+/// failure -- the QEMU harness builds its media in a freshly truncated file,
+/// which has no stale GPT to leave behind, while a lab stick gets recycled
+/// from one layout to the other.
+fn erase_any_gpt<H: Read + Write + Seek>(device: &mut H) -> Result<()> {
+    let device_size = device.seek(SeekFrom::End(0)).map_err(ArgosError::Io)?;
+    let zeros = vec![0u8; (GPT_SECTORS_PER_COPY * SECTOR_SIZE) as usize];
+
+    // The primary copy: LBA 1 through 33. Our partition starts at LBA 2048, so
+    // this never reaches the filesystem.
+    device
+        .seek(SeekFrom::Start(SECTOR_SIZE))
+        .map_err(ArgosError::Io)?;
+    device.write_all(&zeros).map_err(ArgosError::Io)?;
+
+    // The backup copy lives in the last sectors of the *device*, past the end
+    // of a partition that is sized to its contents.
+    if device_size >= (GPT_SECTORS_PER_COPY + 1) * SECTOR_SIZE {
+        device
+            .seek(SeekFrom::End(-((zeros.len()) as i64)))
+            .map_err(ArgosError::Io)?;
+        device.write_all(&zeros).map_err(ArgosError::Io)?;
+    }
+
+    device.flush().map_err(ArgosError::Io)?;
+    Ok(())
+}
+
 fn write_mbr_partition_table<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsMbrPlan,
@@ -1117,6 +1163,8 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
             "the partition is larger than an MBR entry's 32-bit LBA fields can describe (>2TiB)",
         ))
     })?;
+
+    erase_any_gpt(device)?;
 
     let sector_size = u32::try_from(SECTOR_SIZE).expect("SECTOR_SIZE is 512");
     // A random disk signature, like the GPT path's GUIDs: Windows uses it to
@@ -1173,6 +1221,19 @@ fn verify_mbr_layout<H: Read + Seek>(device: &mut H, plan: &WindowsMbrPlan) -> R
     }
     if sector[..MBR_BOOT_CODE.len()] != *MBR_BOOT_CODE {
         return Err(mismatch("the MBR boot code is missing or does not match"));
+    }
+
+    // A GPT surviving underneath an MBR is the hybrid state erase_any_gpt
+    // exists to prevent; media in it boots and then gets no drive letter.
+    let mut lba1 = [0u8; 512];
+    device
+        .seek(SeekFrom::Start(SECTOR_SIZE))
+        .map_err(ArgosError::Io)?;
+    device.read_exact(&mut lba1).map_err(ArgosError::Io)?;
+    if &lba1[..8] == b"EFI PART" {
+        return Err(mismatch(
+            "a GPT header is still present at LBA 1, so the disk claims both schemes",
+        ));
     }
 
     let entry = &sector[0x1BE..0x1BE + 16];
@@ -1570,6 +1631,70 @@ mod tests {
     /// The BPB and the MBR partition entry describe the same disk, so they had
     /// better agree on its geometry. fatfs defaults to 32x64; chs_for_lba uses
     /// 255x63; Windows-made media carries 63/255.
+    /// A stick recycled from `--layout fat32` to `--layout fat32-bios` used to
+    /// keep its entire GPT -- primary header at LBA 1, entry array behind it,
+    /// backup header in the device's last sector, all CRCs still valid --
+    /// underneath an MBR whose first entry is a bootable FAT32 partition
+    /// rather than the protective 0xEE a GPT requires.
+    ///
+    /// Media in that state boots: the MBR and VBR chain through to `bootmgr`
+    /// and WinPE starts. Windows then declines to give the volume a drive
+    /// letter, and Setup reports it cannot find the installation source.
+    ///
+    /// Emulation never caught it because the QEMU harness builds its media in
+    /// a freshly truncated file. Only a recycled device reproduces it, which is
+    /// what this test is.
+    #[test]
+    fn writing_the_mbr_layout_erases_a_gpt_left_by_a_previous_write() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let gpt_layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mbr_plan = WindowsMbrPlan::new(actions.iter().map(CopyAction::bytes_on_target).sum());
+        let mbr_layout = TargetLayout::MbrBios(mbr_plan);
+
+        let mut device = tempfile::tempfile().unwrap();
+        device
+            .set_len(
+                gpt_layout
+                    .total_bytes_required()
+                    .max(mbr_layout.total_bytes_required()),
+            )
+            .unwrap();
+
+        write_fat32_media(&mut device, &gpt_layout, &iso, &actions, &NoopProgress).unwrap();
+
+        // The premise: the first write really does leave a GPT behind. If this
+        // ever stops holding, the test below stops testing anything.
+        let mut lba1 = [0u8; 512];
+        device.seek(SeekFrom::Start(SECTOR_SIZE)).unwrap();
+        device.read_exact(&mut lba1).unwrap();
+        assert_eq!(&lba1[..8], b"EFI PART");
+
+        write_fat32_media(&mut device, &mbr_layout, &iso, &actions, &NoopProgress).unwrap();
+
+        device.seek(SeekFrom::Start(SECTOR_SIZE)).unwrap();
+        device.read_exact(&mut lba1).unwrap();
+        assert_ne!(
+            &lba1[..8],
+            b"EFI PART",
+            "the MBR write left the primary GPT header behind"
+        );
+
+        let mut last = [0u8; 512];
+        device
+            .seek(SeekFrom::End(-(SECTOR_SIZE as i64)))
+            .unwrap();
+        device.read_exact(&mut last).unwrap();
+        assert_ne!(
+            &last[..8],
+            b"EFI PART",
+            "the MBR write left the backup GPT header behind"
+        );
+
+        // And the layout check now refuses media in the hybrid state.
+        verify_mbr_layout(&mut device, &mbr_plan).unwrap();
+    }
+
     #[test]
     fn the_bpb_geometry_matches_the_one_the_partition_entries_are_built_from() {
         let (iso, files, _guard) = synthetic_iso();
