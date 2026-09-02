@@ -501,11 +501,22 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
 /// then this is deliberately not wired into any CLI path: it would build media
 /// that partitions and formats correctly and then fails to boot with no
 /// explanation.
-// Not yet reachable from any write path, and that is deliberate: without
-// M6.3/M6.4's boot records this produces media that partitions and formats
-// correctly and then refuses to boot, with nothing to point at why. Wired in
-// when the boot code lands; exercised by this module's tests until then.
-#[allow(dead_code)]
+/// Test-only re-export of [`write_mbr_partition_table`], so the QEMU
+/// boot-chain test (M6.5) builds its disk image with the very same
+/// partition-table code a real write would use -- testing a hand-rolled
+/// approximation of it would prove nothing about the real thing.
+pub fn write_mbr_partition_table_for_test<H: Read + Write + Seek>(
+    device: &mut H,
+    layout: &WindowsMbrPlan,
+) -> Result<()> {
+    write_mbr_partition_table(device, layout)
+}
+
+// Not yet reachable from a *write path*, and that is deliberate: without
+// M6.4's FAT32 VBR this produces media that partitions, formats and
+// chain-loads correctly and then finds no `bootmgr` loader. Wired into the
+// CLI when M6.4 lands; exercised by this module's tests and the QEMU
+// boot-chain test until then.
 fn write_mbr_partition_table<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsMbrPlan,

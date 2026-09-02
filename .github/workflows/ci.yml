@@ -104,6 +104,23 @@ jobs:
           cargo test -p argos-core --release --test wim_split_oracle \
             -- --ignored --nocapture --test-threads=1
 
+  bios-boot-chain-tests:
+    name: BIOS boot chain under QEMU (M6.5)
+    # Phase 3 M6.5 (#45): boots Argos-written media under SeaBIOS and asserts
+    # the MBR finds the active partition and hands off correctly. Boot records
+    # are the highest-risk code here -- a wrong byte gives "no bootable
+    # device" on hardware that cannot be single-stepped -- so they get an
+    # emulator in CI rather than only a lab machine nobody can debug.
+    # No root and no real hardware: qemu and nasm are ordinary packages.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 nasm
+      - run: |
+          cargo test -p argos-privileged --test bios_boot_chain \
+            -- --ignored --nocapture --test-threads=1
+
   dm-resolution-tests:
     name: device-mapper resolution integration tests (root)
     # Backlog E2: exercises the LVM/RAID/dm-crypt resolver against a real
