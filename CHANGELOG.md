@@ -3,6 +3,69 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Phase 3: **self-contained Windows installer media**, on Linux *and* macOS,
+for **UEFI *and* legacy BIOS** machines. See
+[`docs/plan-phase3-self-contained.md`](docs/plan-phase3-self-contained.md)
+for the plan this delivers against.
+
+The headline: producing Windows install media no longer requires a Windows
+machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob.
+
+### Added
+
+- **`image::udf`** — Argos's own streaming UDF reader (M1, #40). Official
+  Windows ISOs are UDF bridges, and the previous dependency read whole files
+  into memory, which OOMed on a 5GB `install.wim`. Copying now runs in
+  constant memory: **3 MiB peak RSS** streaming a 7.58GB file, with a digest
+  byte-identical to macOS's own UDF driver reading the same file.
+- **`image::wim`** — Argos's own WIM reader and splitter (M2, #42). Splits
+  `install.wim` into `install.swm` parts under FAT32's 4GiB limit by
+  redistributing whole stored resources verbatim: nothing is decompressed or
+  re-encoded, so the lookup table's SHA-1s stay valid by construction and no
+  XPRESS/LZX codec is needed. Validated against wimlib as an external oracle
+  (including `wimlib-imagex apply` reproducing a source tree byte for byte
+  from our parts) and, ultimately, by Windows Setup itself on real hardware.
+- **`--layout fat32`** — a single pure-Rust FAT32 partition (M3, #43),
+  written directly into the partition's byte range of the open device: no
+  `mkfs`, no mount, no partition device nodes, no kernel filesystem driver.
+  GPT-partitioned; boots UEFI firmware via the ISO's own `bootx64.efi`.
+- **`--layout fat32-bios`** — the same media, MBR-partitioned and carrying
+  **Argos's own boot records** (M6, #45): an MBR bootstrap in 279 of the 440
+  bytes available, and a FAT32 volume boot record in 418 of 420, both written
+  from scratch in 16-bit assembly under MIT/Apache rather than porting
+  `ms-sys`'s GPL binary blobs. Boots legacy BIOS machines.
+- **Windows write support on macOS** (M4, #34) — enabled by the FAT32 route,
+  which superseded the original macFUSE/`ntfs-3g` plan entirely.
+- **`tools/mediadiff.py`** — dumps a written device's full structure (MBR,
+  GPT, BPB, FAT, directory tree) and diffs two dumps, with ~25 conformance
+  checks. Written to run a differential diagnosis against Rufus-made media;
+  it is what found the stale-GPT bug below.
+
+### Fixed
+
+- A stale GPT surviving underneath the MBR layout (#59). `mbrman` writes
+  sector 0 and nothing else, so a stick recycled from `--layout fat32` kept
+  its entire GPT — primary header, entry array, and backup header in the
+  device's last sector, CRCs intact — under a non-protective MBR. Windows
+  refuses to assign a drive letter to a volume on a disk in that state,
+  while the media still boots, which made it hard to localize.
+- Directory entries `fatfs` writes that violate the FAT specification: long
+  filename entries placed before `.` and `..`, and `..` pointing at the
+  root's cluster instead of 0 (#56, confirmed upstream).
+- `BPB_HiddSec` left at 0 on the GPT path, and a BPB CHS geometry (32×64)
+  that contradicted the 255×63 the MBR partition entries are built from.
+- A fixed volume serial number, so every medium Argos wrote claimed the same
+  identity; and a previous bootloader surviving in sector 0 across a GPT
+  write.
+- Media writes now cost roughly **8× fewer I/O operations**.
+
+### Removed
+
+- `hadris-udf`, and with it the `check_windows_memory` preflight that existed
+  only to refuse writes it would have OOMed on.
+
 ## [1.0.0] - 2026-08-30
 
 Initial release. Argos creates bootable Linux installer USB drives on

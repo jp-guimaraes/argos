@@ -16,14 +16,23 @@ wide range of Linux distributions and, ideally, on macOS as well.
 
 ## Status
 
-Argos has reached v1.0. The v1 scope:
+Argos has reached v1.0, and **phase 3 (Windows installer media) is
+implemented and validated on real hardware** — see `[Unreleased]` in the
+changelog.
 
-- **Images**: Linux ISOs only (including isohybrid images), written
-  byte-for-byte in "DD mode". Windows image support is a planned future phase.
-- **Hosts**: Linux and macOS, both implemented. Windows-as-host is out of
-  scope for now.
+- **Images**: Linux ISOs (including isohybrid images), written byte-for-byte
+  in "DD mode"; and Windows 10/11 installer ISOs, written as a FAT32 volume
+  with `install.wim` split into `install.swm` parts where it exceeds FAT32's
+  4 GiB file limit.
+- **Targets**: UEFI firmware (`--layout fat32`) and legacy BIOS machines
+  (`--layout fat32-bios`, which carries Argos's own MBR and FAT32 boot
+  records). Both confirmed to reach Windows Setup's disk selection on real
+  machines.
+- **Hosts**: Linux and macOS, both implemented — including for Windows media,
+  which needs no `mkfs`, no FUSE and no Windows machine anywhere in the
+  process. Windows-as-host is out of scope for now.
 - **Interface**: a CLI (`argos`), architected so a GUI can be added later
-  without reworking the core logic.
+  without reworking the core logic. No GUI exists today.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and a
 per-area status table, [`CHANGELOG.md`](CHANGELOG.md) for what shipped in
