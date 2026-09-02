@@ -229,11 +229,31 @@ reaching real hardware.
 
 | ID | Task | Diff. | Host |
 |---|---|---|---|
-| M6.2 | MBR partition plan variant: `mbrman` instead of `gptman`, single FAT32 partition marked active/bootable, matching what the GPT plan already computes. | H | any |
-| M6.3 | MBR boot code (~446 bytes, 16-bit x86): scan the partition table for the active entry, load its first sector to 0x7C00, jump. The simpler of the two — the algorithm is fully specified and has no filesystem knowledge. | **C** | any |
-| M6.4 | FAT32 VBR: parse the BPB, walk the FAT and root directory to locate `bootmgr`, load it, hand off per the documented boot protocol. The hard piece. | **C** | any |
-| M6.5 | Emulation harness: boot the produced media under QEMU with a legacy BIOS (SeaBIOS) in CI, asserting it reaches `bootmgr` — so boot-record regressions are caught by a test rather than by a dead lab machine. | H | any |
+| M6.2 | ✅ MBR partition plan variant: `mbrman` instead of `gptman`, single FAT32 partition marked active/bootable, matching what the GPT plan already computes. | H | any |
+| M6.3 | ✅ MBR boot code (279 of 440 bytes, 16-bit x86): scan the partition table for the active entry, load its first sector to 0x7C00, jump. The simpler of the two — the algorithm is fully specified and has no filesystem knowledge. | **C** | any |
+| M6.4 | ✅ FAT32 VBR (418 of 420 bytes): parse the BPB, walk the FAT and root directory to locate `bootmgr`, load it, hand off per the documented boot protocol. The hard piece. | **C** | any |
+| M6.5 | ✅ Emulation harness: boot the produced media under QEMU with a legacy BIOS (SeaBIOS) in CI, asserting it reaches `bootmgr` — so boot-record regressions are caught by a test rather than by a dead lab machine. | H | any |
 | M6.6 | Real pre-UEFI hardware validation: Windows 10 media written from macOS and from Linux, booted on an actual lab machine, taken past disk selection. | human | real hw (pre-UEFI) |
+
+**Status (2026-09-02): M6.2, M6.3, M6.4 and M6.5 are done and the full chain
+boots under emulation** -- MBR, FAT32 VBR and `bootmgr` handoff, on media
+built exactly as a real write builds it. Only M6.6, on physical pre-UEFI
+hardware, remains.
+
+**Two decisions M6.4 forced, both recorded in the code:**
+
+- *The root directory search covers its first cluster only.* Following the
+  chain does not fit the 420 bytes available. The writer compensates by
+  verifying after the copy that `bootmgr`'s entry landed in that cluster and
+  refusing the media otherwise -- moving the complexity to Rust, where it is
+  cheap and testable, rather than spending a boot sector's last bytes on it.
+- *The installer patches the BPB's hidden-sectors field.* `fatfs` formats
+  through a partition window, so it writes 0 there -- correct for a volume
+  starting at offset 0, and fatal for a boot record, which addresses the disk
+  in absolute LBAs. Found by the emulator: the first full-chain run reported
+  geometry computed, `bootmgr` not found, because the search had run against
+  the start of the *disk*. Exactly the class of bug M6.5 exists to catch, and
+  caught before any hardware was involved.
 
 ### M7 — Shell-out reduction + robustness (independent; good simple-model work)
 

@@ -166,6 +166,173 @@ impl WindowsPartitionPlan {
     }
 }
 
+/// MBR partition type for "FAT32 with LBA addressing" (`0x0C`), the type
+/// Windows Setup and Rufus both use for FAT32 install media. The non-LBA
+/// FAT32 type (`0x0B`) exists for CHS-addressed disks that no USB stick this
+/// tool targets has been for decades; using it would only limit addressing.
+pub const MBR_FAT32_LBA_PARTITION_TYPE: u8 = 0x0C;
+
+/// The MBR partition entry's "active"/bootable status byte. A legacy BIOS's
+/// MBR boot code scans the four entries for exactly this value to decide
+/// which partition's boot sector to load, so the FAT32 partition must carry
+/// it or nothing boots -- there is no other signal.
+pub const MBR_BOOTABLE_FLAG: u8 = 0x80;
+
+/// Bytes at the very start of the device reserved for the MBR itself: one
+/// 512-byte sector holding boot code (0..=445), the four 16-byte partition
+/// entries (446..=509) and the `0x55AA` signature (510..=511).
+///
+/// Far smaller than [`PRIMARY_GPT_OVERHEAD_BYTES`], but the partition start
+/// is 1 MiB-aligned regardless, so in practice this changes nothing about
+/// where data lands -- it only means MBR media has no *trailing* reserved
+/// region, unlike GPT's backup header.
+const MBR_OVERHEAD_BYTES: u64 = SECTOR_SIZE;
+
+/// FAT32's defining minimum: a volume with fewer clusters than this is a
+/// FAT16 volume by definition, whatever its boot sector claims.
+pub const FAT32_MIN_CLUSTERS: u64 = 65_525;
+
+/// The largest cluster size worth using. Bigger clusters mean fewer
+/// clusters, and the cluster count is what drives the write cost: one write
+/// per cluster of file data, plus a FAT entry update per cluster in each
+/// FAT. 32 KiB is where Windows itself tops out for FAT32, so it is the
+/// well-travelled value rather than a clever one.
+pub const FAT32_MAX_BYTES_PER_CLUSTER: u32 = 32 * 1024;
+
+/// Chooses the cluster size to format a FAT32 volume of `partition_bytes`
+/// with: the largest power of two up to [`FAT32_MAX_BYTES_PER_CLUSTER`]
+/// that still leaves comfortably more than [`FAT32_MIN_CLUSTERS`] clusters.
+///
+/// Both ends of that range matter. Too small and the write becomes millions
+/// of tiny operations -- profiling a 6.1 GB write at 4 KiB clusters found
+/// 7.7 million writes, 80% of them a single sector. Too large and the volume
+/// drops below FAT32's cluster minimum and is no longer a valid FAT32
+/// filesystem at all, which a fixed 32 KiB does to any volume under ~2 GiB.
+///
+/// The cost of larger clusters is slack -- up to one cluster wasted per
+/// file. Windows install media is ~900 files, mostly large, so at 32 KiB
+/// that is about 29 MB against 6 GB: irrelevant next to the time saved.
+pub fn fat32_bytes_per_cluster_for(partition_bytes: u64) -> u32 {
+    // 2x headroom over the bare minimum: the usable area is smaller than the
+    // partition (reserved sectors, two FATs), so sizing against the raw
+    // partition size would sail too close to the limit.
+    let required_clusters = FAT32_MIN_CLUSTERS * 2;
+    let mut bytes_per_cluster = FAT32_MAX_BYTES_PER_CLUSTER;
+    while bytes_per_cluster > 512 {
+        if partition_bytes / u64::from(bytes_per_cluster) >= required_clusters {
+            break;
+        }
+        bytes_per_cluster /= 2;
+    }
+    bytes_per_cluster
+}
+
+/// The BIOS translation geometry every partitioning tool assumes when it
+/// fills in an MBR entry's CHS fields: 255 heads, 63 sectors per track.
+/// Nothing physical has looked like this in decades -- it is a convention,
+/// and being *the* convention is exactly why it matters.
+pub const CHS_HEADS: u32 = 255;
+pub const CHS_SECTORS_PER_TRACK: u32 = 63;
+
+/// The value written when an address is past what CHS can express
+/// (cylinder 1023, head 254, sector 63): the standard "use the LBA fields
+/// instead" marker.
+pub const CHS_MAX: (u16, u8, u8) = (1023, 254, 63);
+
+/// Converts an LBA to the `(cylinder, head, sector)` triple an MBR
+/// partition entry stores, saturating at [`CHS_MAX`].
+///
+/// Why bother, when everything that reads this media addresses it by LBA:
+/// **because Windows validates these fields.** Leaving them zero produces a
+/// partition table that a BIOS boots and that Linux and macOS mount happily,
+/// while Windows declines to mount the volume -- which surfaces as install
+/// media that starts Setup and then reports that a media driver is missing,
+/// with nothing to connect the message to its cause.
+pub fn chs_for_lba(lba: u32) -> (u16, u8, u8) {
+    let sectors_per_cylinder = CHS_HEADS * CHS_SECTORS_PER_TRACK;
+    let cylinder = lba / sectors_per_cylinder;
+    if cylinder > u32::from(CHS_MAX.0) {
+        return CHS_MAX;
+    }
+    let within_cylinder = lba % sectors_per_cylinder;
+    let head = within_cylinder / CHS_SECTORS_PER_TRACK;
+    // Sectors are numbered from 1, not 0 -- the one off-by-one this format
+    // is famous for.
+    let sector = within_cylinder % CHS_SECTORS_PER_TRACK + 1;
+    (cylinder as u16, head as u8, sector as u8)
+}
+
+/// The single-partition MBR layout for a BIOS-bootable FAT32 Windows
+/// installer write (phase 3 M6.2, backlog #45).
+///
+/// Same shape as [`WindowsFat32Plan`] -- one FAT32 partition holding the
+/// whole installer file tree -- differing only in the partition table that
+/// describes it, and in two consequences of that:
+///
+/// - **No backup structure at the end of the device.** GPT mirrors its
+///   header and entry array at the tail; MBR has nothing there, so a device
+///   of a given size fits a slightly larger partition.
+/// - **The partition is marked active** ([`MBR_BOOTABLE_FLAG`]), and sector
+///   0 carries boot code. A legacy BIOS loads that code, which finds the
+///   active partition and chain-loads its boot sector; neither step has any
+///   equivalent in the UEFI path, where firmware reads the filesystem
+///   itself. Writing those two boot records is M6.3/M6.4 -- this type only
+///   decides geometry.
+///
+/// Why MBR rather than GPT for BIOS: some legacy BIOSes will boot a GPT disk
+/// through its protective MBR, but many will not, and the failure is silent.
+/// MBR is what every BIOS understands, and Windows 10 -- the only Windows
+/// that runs on such machines at all, since 11 requires UEFI -- installs from
+/// it happily.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsMbrPlan {
+    pub windows_partition: PartitionRegion,
+}
+
+impl WindowsMbrPlan {
+    /// Lays out the single FAT32 partition from the total size the installer
+    /// files will occupy on the target -- the same input
+    /// [`WindowsFat32Plan::new`] takes, with `install.wim` already counted at
+    /// its split `.swm` size where the splitter applies.
+    pub fn new(windows_files_total_size_bytes: u64) -> Self {
+        let start = align_up(MBR_OVERHEAD_BYTES, ALIGNMENT_BYTES);
+        let size = align_up(
+            (windows_files_total_size_bytes + FAT32_OVERHEAD_MARGIN_BYTES)
+                .max(FAT32_MIN_PARTITION_BYTES),
+            SECTOR_SIZE,
+        );
+        Self {
+            windows_partition: PartitionRegion {
+                start_offset_bytes: start,
+                size_bytes: size,
+            },
+        }
+    }
+
+    /// The smallest device this plan fits on. Unlike GPT's, this is just the
+    /// end of the partition: MBR reserves nothing at the tail.
+    pub fn total_bytes_required(&self) -> u64 {
+        align_up(self.windows_partition.end_offset_bytes(), SECTOR_SIZE)
+    }
+
+    /// The partition's placement in 512-byte sectors, which is the unit MBR
+    /// partition entries store (`lba_start` and `sectors`, both `u32`).
+    ///
+    /// Returns `None` if either value overflows 32 bits -- an MBR simply
+    /// cannot describe a partition starting or extending beyond 2 TiB, and
+    /// silently truncating would produce a table pointing at the wrong place.
+    /// Not reachable with any USB stick this tool targets, but the check is
+    /// what makes that a fact rather than an assumption.
+    pub fn partition_sectors(&self) -> Option<(u32, u32)> {
+        let start = self.windows_partition.start_offset_bytes / SECTOR_SIZE;
+        let count = self.windows_partition.size_bytes / SECTOR_SIZE;
+        match (u32::try_from(start), u32::try_from(count)) {
+            (Ok(start), Ok(count)) => Some((start, count)),
+            _ => None,
+        }
+    }
+}
+
 /// The single-partition layout for a FAT32 Windows installer write (phase 3
 /// M3, backlog #43): one Microsoft Basic Data partition holding the whole
 /// Windows installer file tree on FAT32, booted directly by the firmware via
@@ -349,6 +516,179 @@ mod tests {
         let required = plan.total_bytes_required();
         assert!(required - plan.windows_partition.end_offset_bytes() >= BACKUP_GPT_OVERHEAD_BYTES);
         assert_eq!(required % SECTOR_SIZE, 0);
+    }
+
+    #[test]
+    fn mbr_partition_starts_at_the_first_1mib_aligned_lba() {
+        let plan = WindowsMbrPlan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert_eq!(plan.windows_partition.start_offset_bytes, ALIGNMENT_BYTES);
+    }
+
+    /// The MBR occupies only sector 0, so the partition must not start at
+    /// sector 1 -- alignment, not the table's size, is what places it.
+    #[test]
+    fn mbr_partition_clears_sector_zero_by_a_full_alignment_unit() {
+        let plan = WindowsMbrPlan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert!(plan.windows_partition.start_offset_bytes >= MBR_OVERHEAD_BYTES);
+        assert_eq!(
+            plan.windows_partition.start_offset_bytes % ALIGNMENT_BYTES,
+            0
+        );
+    }
+
+    #[test]
+    fn mbr_partition_size_includes_the_overhead_margin_and_is_sector_rounded() {
+        let plan = WindowsMbrPlan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert!(
+            plan.windows_partition.size_bytes
+                >= WINDOWS_FILES_TOTAL_SIZE + FAT32_OVERHEAD_MARGIN_BYTES
+        );
+        assert_eq!(plan.windows_partition.size_bytes % SECTOR_SIZE, 0);
+    }
+
+    #[test]
+    fn mbr_partition_never_shrinks_below_the_forced_fat32_floor() {
+        let plan = WindowsMbrPlan::new(1_000_000);
+        assert_eq!(plan.windows_partition.size_bytes, FAT32_MIN_PARTITION_BYTES);
+    }
+
+    /// MBR reserves nothing at the tail, unlike GPT's mirrored header --
+    /// so for identical inputs it needs strictly less device than the GPT
+    /// plan, and the difference is exactly the backup GPT.
+    #[test]
+    fn mbr_needs_less_device_than_gpt_for_the_same_files() {
+        let mbr = WindowsMbrPlan::new(WINDOWS_FILES_TOTAL_SIZE);
+        let gpt = WindowsFat32Plan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert!(mbr.total_bytes_required() < gpt.total_bytes_required());
+        assert_eq!(
+            gpt.total_bytes_required() - mbr.total_bytes_required(),
+            BACKUP_GPT_OVERHEAD_BYTES
+        );
+    }
+
+    #[test]
+    fn mbr_total_bytes_required_is_exactly_the_partition_end() {
+        let plan = WindowsMbrPlan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert_eq!(
+            plan.total_bytes_required(),
+            plan.windows_partition.end_offset_bytes()
+        );
+    }
+
+    #[test]
+    fn partition_sectors_reports_the_lba_start_and_count_an_mbr_entry_stores() {
+        let plan = WindowsMbrPlan::new(WINDOWS_FILES_TOTAL_SIZE);
+        let (start, count) = plan.partition_sectors().expect("a normal plan fits u32");
+        assert_eq!(
+            u64::from(start) * SECTOR_SIZE,
+            plan.windows_partition.start_offset_bytes
+        );
+        assert_eq!(
+            u64::from(count) * SECTOR_SIZE,
+            plan.windows_partition.size_bytes
+        );
+    }
+
+    /// An MBR entry stores LBAs in 32 bits, so it cannot describe a partition
+    /// past 2 TiB. Refusing beats silently truncating into a table that
+    /// points somewhere else entirely.
+    #[test]
+    fn partition_sectors_refuses_a_partition_beyond_what_an_mbr_entry_can_hold() {
+        // Over 2 TiB of files: the sector count alone overflows u32.
+        let plan = WindowsMbrPlan::new(3 * 1024 * 1024 * 1024 * 1024);
+        assert!(plan.partition_sectors().is_none());
+    }
+
+    #[test]
+    fn cluster_size_grows_with_the_volume_and_caps_where_windows_caps() {
+        // A real Windows-media partition: big enough for the maximum.
+        assert_eq!(
+            fat32_bytes_per_cluster_for(6 * 1024 * 1024 * 1024),
+            FAT32_MAX_BYTES_PER_CLUSTER
+        );
+        // The plan's 512 MiB floor cannot afford 32 KiB clusters.
+        assert!(
+            fat32_bytes_per_cluster_for(FAT32_MIN_PARTITION_BYTES) < FAT32_MAX_BYTES_PER_CLUSTER
+        );
+    }
+
+    /// The property that actually matters: whatever size is chosen, the
+    /// volume must still have enough clusters to *be* FAT32. A fixed 32 KiB
+    /// fails this for every volume under about 2 GiB.
+    #[test]
+    fn the_chosen_cluster_size_always_leaves_a_valid_fat32_volume() {
+        let sizes = [
+            FAT32_MIN_PARTITION_BYTES,
+            600 * 1024 * 1024,
+            1024 * 1024 * 1024,
+            2 * 1024 * 1024 * 1024,
+            6 * 1024 * 1024 * 1024,
+            32 * 1024 * 1024 * 1024,
+        ];
+        for size in sizes {
+            let bytes_per_cluster = fat32_bytes_per_cluster_for(size);
+            assert!(
+                bytes_per_cluster.is_power_of_two() && bytes_per_cluster >= 512,
+                "{bytes_per_cluster} is not a usable cluster size"
+            );
+            let clusters = size / u64::from(bytes_per_cluster);
+            assert!(
+                clusters >= FAT32_MIN_CLUSTERS,
+                "a {size}-byte volume at {bytes_per_cluster} bytes/cluster has only {clusters} \
+                 clusters, below FAT32's {FAT32_MIN_CLUSTERS} minimum"
+            );
+        }
+    }
+
+    #[test]
+    fn chs_conversion_matches_the_classic_255x63_geometry() {
+        // LBA 0 is cylinder 0, head 0, sector 1 -- sectors count from one.
+        assert_eq!(chs_for_lba(0), (0, 0, 1));
+        // The 1 MiB partition start every plan here uses.
+        assert_eq!(chs_for_lba(2048), (0, 32, 33));
+        // Last address of the first cylinder, then the first of the second.
+        assert_eq!(chs_for_lba(255 * 63 - 1), (0, 254, 63));
+        assert_eq!(chs_for_lba(255 * 63), (1, 0, 1));
+    }
+
+    #[test]
+    fn chs_saturates_instead_of_wrapping_past_what_it_can_express() {
+        let last_expressible = 1024 * 255 * 63 - 1;
+        assert_eq!(chs_for_lba(last_expressible), (1023, 254, 63));
+        // One past it, and anything beyond, must clamp rather than wrap --
+        // a wrapped value would point the entry at the wrong place entirely.
+        assert_eq!(chs_for_lba(last_expressible + 1), CHS_MAX);
+        assert_eq!(chs_for_lba(u32::MAX), CHS_MAX);
+    }
+
+    /// Every field of a CHS triple has to fit its byte; a conversion that
+    /// produced head 255 or sector 64 would silently corrupt the entry.
+    #[test]
+    fn chs_fields_always_fit_their_on_disk_widths() {
+        for lba in [
+            0u32,
+            1,
+            63,
+            2048,
+            100_000,
+            16_064,
+            16_065,
+            1 << 20,
+            u32::MAX,
+        ] {
+            let (c, h, s) = chs_for_lba(lba);
+            assert!(c <= 1023, "cylinder {c} for lba {lba}");
+            assert!(h <= 254, "head {h} for lba {lba}");
+            assert!((1..=63).contains(&s), "sector {s} for lba {lba}");
+        }
+    }
+
+    #[test]
+    fn mbr_partition_type_and_bootable_flag_match_the_documented_values() {
+        // 0x0C = FAT32 (LBA); 0x80 = active. Spelled out here so a typo in
+        // the constants is caught by the value, not by a dead lab machine.
+        assert_eq!(MBR_FAT32_LBA_PARTITION_TYPE, 0x0C);
+        assert_eq!(MBR_BOOTABLE_FLAG, 0x80);
     }
 
     #[test]

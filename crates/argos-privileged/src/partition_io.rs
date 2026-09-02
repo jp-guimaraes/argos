@@ -170,6 +170,167 @@ impl<H: Seek> Seek for SizedDevice<H> {
     }
 }
 
+/// Coalesces the many tiny writes a filesystem makes into few large ones,
+/// and stops seeking a handle that is already in the right place.
+///
+/// Profiling a real 6.1 GB media write found **7.7 million writes averaging
+/// 796 bytes** -- 80% of them a single sector -- and **22 million seeks**,
+/// roughly three per write. Against a local file the OS absorbs that; against
+/// a USB device node each small write is a round trip to the device, which is
+/// where the minutes go.
+///
+/// Two independent savings, both from the same wrapper:
+///
+/// - **Seeks become free.** The logical position is tracked here and the
+///   underlying handle is only moved when it is actually somewhere else.
+///   Filesystem code re-seeks to where it already is constantly.
+/// - **Sequential writes coalesce.** File data is written in order, so runs
+///   accumulate in one buffer and reach the device as a single large write.
+///   A write that is not contiguous flushes and starts a new run, which is
+///   what keeps FAT and directory updates correct.
+///
+/// Reads that overlap buffered-but-unwritten bytes flush first, so a reader
+/// can never observe stale data -- the simple rule, rather than a
+/// read-through cache that would have to merge the two.
+pub struct BufferedDevice<H> {
+    inner: H,
+    /// Where `inner`'s own file position actually is, so it can be left
+    /// alone when it already matches.
+    inner_position: u64,
+    buffer: Vec<u8>,
+    /// Absolute offset that `buffer[0]` belongs at.
+    buffer_start: u64,
+    /// The position this wrapper presents, which may be nowhere near
+    /// `inner_position`.
+    position: u64,
+}
+
+impl<H: Read + Write + Seek> BufferedDevice<H> {
+    /// 4 MiB: large enough that a run of sector-sized writes reaches the
+    /// device as one transfer, small enough to not matter against the
+    /// gigabytes being copied.
+    pub const DEFAULT_CAPACITY: usize = 4 * 1024 * 1024;
+
+    pub fn new(inner: H) -> io::Result<Self> {
+        Self::with_capacity(inner, Self::DEFAULT_CAPACITY)
+    }
+
+    pub fn with_capacity(mut inner: H, capacity: usize) -> io::Result<Self> {
+        let position = inner.stream_position()?;
+        Ok(Self {
+            inner,
+            inner_position: position,
+            buffer: Vec::with_capacity(capacity),
+            buffer_start: position,
+            position,
+        })
+    }
+
+    /// Unwraps the handle. Anything still buffered is written first.
+    pub fn into_inner(mut self) -> H {
+        let _ = self.flush_buffer();
+        self.inner
+    }
+
+    fn capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
+    /// Moves `inner` only if it is not already where it needs to be.
+    fn position_inner(&mut self, at: u64) -> io::Result<()> {
+        if self.inner_position != at {
+            self.inner.seek(SeekFrom::Start(at))?;
+            self.inner_position = at;
+        }
+        Ok(())
+    }
+
+    fn flush_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        self.position_inner(self.buffer_start)?;
+        // `write_all` rather than `write`: a short write here would silently
+        // lose the tail of a run.
+        self.inner.write_all(&self.buffer)?;
+        self.inner_position += self.buffer.len() as u64;
+        self.buffer.clear();
+        Ok(())
+    }
+
+    fn buffered_range(&self) -> std::ops::Range<u64> {
+        self.buffer_start..self.buffer_start + self.buffer.len() as u64
+    }
+}
+
+impl<H: Read + Write + Seek> Read for BufferedDevice<H> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // Anything pending must reach the device before it can be read back.
+        let wanted = self.position..self.position + buf.len() as u64;
+        let buffered = self.buffered_range();
+        if wanted.start < buffered.end && buffered.start < wanted.end {
+            self.flush_buffer()?;
+        }
+        self.position_inner(self.position)?;
+        let n = self.inner.read(buf)?;
+        self.inner_position += n as u64;
+        self.position += n as u64;
+        Ok(n)
+    }
+}
+
+impl<H: Read + Write + Seek> Write for BufferedDevice<H> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        // A write that does not continue the current run cannot join it.
+        if !self.buffer.is_empty() && self.position != self.buffered_range().end {
+            self.flush_buffer()?;
+        }
+        if self.buffer.is_empty() {
+            self.buffer_start = self.position;
+        }
+
+        let room = self.capacity() - self.buffer.len();
+        if room == 0 {
+            self.flush_buffer()?;
+            self.buffer_start = self.position;
+        }
+        let take = buf.len().min(self.capacity() - self.buffer.len());
+        self.buffer.extend_from_slice(&buf[..take]);
+        self.position += take as u64;
+        Ok(take)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buffer()?;
+        self.inner.flush()
+    }
+}
+
+impl<H: Read + Write + Seek> Seek for BufferedDevice<H> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        // Seeking is free: only the logical position moves. The handle is
+        // repositioned when an actual read or write needs it.
+        let target = match pos {
+            SeekFrom::Start(offset) => Some(offset),
+            SeekFrom::Current(delta) => self.position.checked_add_signed(delta),
+            SeekFrom::End(delta) => {
+                // The only case needing the real end, so pay for it here.
+                self.flush_buffer()?;
+                let end = self.inner.seek(SeekFrom::End(0))?;
+                self.inner_position = end;
+                end.checked_add_signed(delta)
+            }
+        };
+        self.position = target.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "seek to a negative position")
+        })?;
+        Ok(self.position)
+    }
+}
+
 /// A bounded view of `inner` covering exactly `region`'s byte range.
 /// Position 0 of the window is `region.start_offset_bytes` of the device;
 /// reads past the window's end return EOF, writes past it fail (a filesystem
@@ -365,6 +526,121 @@ mod tests {
                 SeekFrom::End(_) => Ok(0),
                 other => self.0.seek(other),
             }
+        }
+    }
+
+    /// A counting handle: the point of buffering is fewer operations, so the
+    /// tests assert on the count, not just on correctness.
+    struct Counting {
+        inner: Cursor<Vec<u8>>,
+        writes: usize,
+        seeks: usize,
+    }
+    impl Counting {
+        fn new(size: usize) -> Self {
+            Self {
+                inner: Cursor::new(vec![0u8; size]),
+                writes: 0,
+                seeks: 0,
+            }
+        }
+    }
+    impl Read for Counting {
+        fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+            self.inner.read(b)
+        }
+    }
+    impl Write for Counting {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            self.inner.write(b)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+    impl Seek for Counting {
+        fn seek(&mut self, p: SeekFrom) -> io::Result<u64> {
+            self.seeks += 1;
+            self.inner.seek(p)
+        }
+    }
+
+    #[test]
+    fn buffering_turns_a_run_of_small_writes_into_one() {
+        let mut device = BufferedDevice::with_capacity(Counting::new(8192), 4096).unwrap();
+        for _ in 0..8 {
+            device.write_all(&[0xAB; 512]).unwrap();
+        }
+        device.flush().unwrap();
+        assert_eq!(
+            device.inner.writes, 1,
+            "eight sector-sized sequential writes should reach the device as one"
+        );
+    }
+
+    #[test]
+    fn buffering_makes_redundant_seeks_free() {
+        let mut device = BufferedDevice::with_capacity(Counting::new(8192), 4096).unwrap();
+        for _ in 0..100 {
+            device.seek(SeekFrom::Start(0)).unwrap();
+        }
+        device.write_all(&[1u8; 16]).unwrap();
+        device.flush().unwrap();
+        // One seek total: the position query at construction. The hundred
+        // seeks the caller made cost nothing.
+        assert_eq!(
+            device.inner.seeks, 1,
+            "seeking to where the handle already is must not touch it"
+        );
+    }
+
+    #[test]
+    fn a_non_contiguous_write_flushes_rather_than_merging() {
+        let mut cursor = Cursor::new(vec![0u8; 4096]);
+        {
+            let mut device = BufferedDevice::with_capacity(&mut cursor, 4096).unwrap();
+            device.write_all(&[0xAA; 8]).unwrap();
+            device.seek(SeekFrom::Start(2048)).unwrap();
+            device.write_all(&[0xBB; 8]).unwrap();
+            device.flush().unwrap();
+        }
+        let bytes = cursor.into_inner();
+        assert_eq!(&bytes[..8], &[0xAA; 8]);
+        assert!(
+            bytes[8..2048].iter().all(|&b| b == 0),
+            "the gap between two runs must stay untouched"
+        );
+        assert_eq!(&bytes[2048..2056], &[0xBB; 8]);
+    }
+
+    #[test]
+    fn reads_see_writes_that_are_still_buffered() {
+        let mut device = BufferedDevice::with_capacity(Cursor::new(vec![0u8; 4096]), 4096).unwrap();
+        device.write_all(&[0xCD; 16]).unwrap();
+        device.seek(SeekFrom::Start(0)).unwrap();
+        let mut back = [0u8; 16];
+        device.read_exact(&mut back).unwrap();
+        assert_eq!(back, [0xCD; 16], "a read must never serve stale bytes");
+    }
+
+    #[test]
+    fn writes_past_the_buffer_capacity_still_land_in_order() {
+        let mut cursor = Cursor::new(vec![0u8; 8192]);
+        {
+            let mut device = BufferedDevice::with_capacity(&mut cursor, 1024).unwrap();
+            for i in 0..8u8 {
+                device.write_all(&[i; 512]).unwrap();
+            }
+            device.flush().unwrap();
+        }
+        let bytes = cursor.into_inner();
+        for i in 0..8usize {
+            assert_eq!(
+                bytes[i * 512],
+                i as u8,
+                "block {i} landed at the wrong offset"
+            );
         }
     }
 

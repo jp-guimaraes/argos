@@ -50,14 +50,18 @@ fn run() -> i32 {
                 files_copied: outcome.files_copied,
                 bytes_copied: outcome.bytes_copied,
             }),
-            WindowsLayout::Fat32 => argos_privileged::windows_fat32::execute_write_windows_fat32(
-                &windows_plan,
-                &JsonlProgress,
-            )
-            .map(|outcome| Event::WindowsDone {
-                files_copied: outcome.files_copied,
-                bytes_copied: outcome.bytes_copied,
-            }),
+            // Both FAT32 schemes go to the same executor; the plan's layout
+            // is what selects GPT/UEFI or MBR/BIOS inside it.
+            WindowsLayout::Fat32 | WindowsLayout::Fat32Bios => {
+                argos_privileged::windows_fat32::execute_write_windows_fat32(
+                    &windows_plan,
+                    &JsonlProgress,
+                )
+                .map(|outcome| Event::WindowsDone {
+                    files_copied: outcome.files_copied,
+                    bytes_copied: outcome.bytes_copied,
+                })
+            }
         },
         Plan::VerifyWindowsImage(verify_windows_plan) => match verify_windows_plan.layout {
             WindowsLayout::Ntfs => argos_privileged::windows::execute_verify_windows_image(
@@ -67,13 +71,15 @@ fn run() -> i32 {
             .map(|outcome| Event::WindowsVerifyOk {
                 files_verified: outcome.files_verified,
             }),
-            WindowsLayout::Fat32 => argos_privileged::windows_fat32::execute_verify_windows_fat32(
-                &verify_windows_plan,
-                &JsonlProgress,
-            )
-            .map(|outcome| Event::WindowsVerifyOk {
-                files_verified: outcome.files_verified,
-            }),
+            WindowsLayout::Fat32 | WindowsLayout::Fat32Bios => {
+                argos_privileged::windows_fat32::execute_verify_windows_fat32(
+                    &verify_windows_plan,
+                    &JsonlProgress,
+                )
+                .map(|outcome| Event::WindowsVerifyOk {
+                    files_verified: outcome.files_verified,
+                })
+            }
         },
     };
 

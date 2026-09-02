@@ -74,6 +74,12 @@ pub enum WindowsLayout {
     #[default]
     Ntfs,
     Fat32,
+    /// Phase 3 M6 (#45): the same FAT32 filesystem as [`Self::Fat32`], but
+    /// described by an MBR and carrying Argos's own boot records, so a
+    /// legacy BIOS can boot it. The UEFI files are copied either way, so
+    /// this media also boots UEFI firmware that accepts MBR-partitioned
+    /// removable disks -- which is most of it.
+    Fat32Bios,
 }
 
 /// Unlike [`WritePlan`], carries no `expected_serial`/`expected_size_bytes`:
