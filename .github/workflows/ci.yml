@@ -117,6 +117,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 nasm
+      # --test-threads=1: each case boots its own QEMU, and running them
+      # concurrently makes the wall-clock timeouts unreliable.
       - run: |
           cargo test -p argos-privileged --test bios_boot_chain \
             -- --ignored --nocapture --test-threads=1

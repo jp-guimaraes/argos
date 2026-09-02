@@ -501,6 +501,81 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
 /// then this is deliberately not wired into any CLI path: it would build media
 /// that partitions and formats correctly and then fails to boot with no
 /// explanation.
+/// Argos's FAT32 volume boot record (phase 3 M6.4, backlog #45), assembled
+/// from `asm/vbr_fat32.asm`. Installed into the partition's first sector so
+/// a legacy BIOS can chain from the MBR through to `bootmgr`.
+const VBR_FAT32_CODE: &[u8] = include_bytes!("../asm/vbr_fat32.bin");
+
+/// Where the BPB `fatfs` writes ends and our boot code begins. Bytes 0..3
+/// are the jump to that code, 3..90 the BPB itself.
+const VBR_CODE_OFFSET: usize = 90;
+
+/// BPB offset of "hidden sectors": the number of sectors before this volume
+/// on the disk, i.e. the partition's start LBA.
+const BPB_HIDDEN_SECTORS_OFFSET: usize = 0x1C;
+
+/// BPB offset of "bytes per sector".
+const BPB_BYTES_PER_SECTOR_OFFSET: usize = 0x0B;
+
+/// Installs [`VBR_FAT32_CODE`] into an already-formatted FAT32 partition,
+/// **preserving the BPB** and patching its hidden-sectors field.
+///
+/// Two things happen here, and both are load-bearing:
+///
+/// 1. Only bytes 0..3 (the jump) and 90..512 (code and signature) are
+///    replaced. The boot code reads its geometry -- cluster size, FAT
+///    location, root directory cluster -- out of the BPB at runtime rather
+///    than assuming any, so overwriting the BPB would leave it computing
+///    addresses from zeros.
+///
+/// 2. `partition_start_lba` is written into the hidden-sectors field.
+///    `fatfs` formats through a [`PartitionWindow`], so it only ever sees a
+///    volume starting at offset 0 and writes 0 there -- correct from its
+///    point of view, and fatal for a boot sector: INT 13h takes absolute
+///    disk LBAs, so a VBR that trusts a zero here reads from the start of
+///    the *disk* instead of the start of the partition. Found exactly that
+///    way, by a boot that produced no output at all.
+#[allow(dead_code)]
+fn install_fat32_vbr<H: Read + Write + Seek>(
+    window: &mut H,
+    partition_start_lba: u32,
+) -> Result<()> {
+    let mut sector = [0u8; 512];
+    window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    window.read_exact(&mut sector).map_err(ArgosError::Io)?;
+
+    // The boot code's addressing arithmetic is written for 512-byte sectors;
+    // refuse rather than produce media that miscomputes every LBA.
+    let bytes_per_sector = u16::from_le_bytes([
+        sector[BPB_BYTES_PER_SECTOR_OFFSET],
+        sector[BPB_BYTES_PER_SECTOR_OFFSET + 1],
+    ]);
+    if u64::from(bytes_per_sector) != SECTOR_SIZE {
+        return Err(ArgosError::Io(std::io::Error::other(format!(
+            "the filesystem reports {bytes_per_sector}-byte sectors; the boot record requires {SECTOR_SIZE}"
+        ))));
+    }
+
+    sector[..3].copy_from_slice(&VBR_FAT32_CODE[..3]);
+    sector[VBR_CODE_OFFSET..].copy_from_slice(&VBR_FAT32_CODE[VBR_CODE_OFFSET..]);
+    sector[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
+        .copy_from_slice(&partition_start_lba.to_le_bytes());
+
+    window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    window.write_all(&sector).map_err(ArgosError::Io)?;
+    window.flush().map_err(ArgosError::Io)?;
+    Ok(())
+}
+
+/// Test-only re-export of [`install_fat32_vbr`], so the QEMU boot-chain test
+/// installs the boot record exactly the way a real write would.
+pub fn install_fat32_vbr_for_test<H: Read + Write + Seek>(
+    window: &mut H,
+    partition_start_lba: u32,
+) -> Result<()> {
+    install_fat32_vbr(window, partition_start_lba)
+}
+
 /// Test-only re-export of [`write_mbr_partition_table`], so the QEMU
 /// boot-chain test (M6.5) builds its disk image with the very same
 /// partition-table code a real write would use -- testing a hand-rolled
@@ -924,6 +999,81 @@ mod tests {
         let layout = fat32_layout_for(&actions);
         let mut blank = Cursor::new(vec![0u8; 4 * 1024 * 1024]);
         assert!(verify_fat32_media(&mut blank, &layout, &iso, &actions, &NoopProgress).is_err());
+    }
+
+    /// Regression guard for a bug that was invisible outside an actual boot:
+    /// `fatfs` formats through a PartitionWindow, so it writes 0 into the
+    /// BPB's hidden-sectors field -- correct for a volume that begins at
+    /// offset 0, and fatal for a boot record, which addresses the disk with
+    /// absolute LBAs. The first QEMU run of the full chain reported exactly
+    /// this: geometry computed, bootmgr not found, because the search ran
+    /// against the start of the disk instead of the partition.
+    #[test]
+    fn installing_the_vbr_patches_the_partition_start_into_the_bpb() {
+        let layout = WindowsMbrPlan::new(600_000_000);
+        let (start_lba, _) = layout.partition_sectors().unwrap();
+        let mut device = tempfile::tempfile().unwrap();
+        device.set_len(layout.total_bytes_required()).unwrap();
+
+        let mut window = PartitionWindow::new(&mut device, layout.windows_partition);
+        fatfs::format_volume(
+            &mut window,
+            fatfs::FormatVolumeOptions::new()
+                .fat_type(fatfs::FatType::Fat32)
+                .volume_label(*b"ARGOS-WIN  "),
+        )
+        .unwrap();
+
+        // What fatfs leaves behind, and why the boot record cannot trust it.
+        let mut before = [0u8; 512];
+        window.seek(SeekFrom::Start(0)).unwrap();
+        window.read_exact(&mut before).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(before[0x1C..0x20].try_into().unwrap()),
+            0,
+            "fatfs is expected to write 0 here; if it ever stops, this test's premise changed"
+        );
+
+        install_fat32_vbr(&mut window, start_lba).unwrap();
+
+        let mut after = [0u8; 512];
+        window.seek(SeekFrom::Start(0)).unwrap();
+        window.read_exact(&mut after).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(after[0x1C..0x20].try_into().unwrap()),
+            start_lba,
+            "the boot record needs the partition's absolute start LBA here"
+        );
+
+        // The rest of the BPB must be exactly as fatfs left it: the boot code
+        // reads its geometry from these fields at runtime.
+        assert_eq!(&after[3..0x1C], &before[3..0x1C]);
+        assert_eq!(&after[0x20..90], &before[0x20..90]);
+
+        // And the sector must still be a boot sector.
+        assert_eq!(&after[510..], &[0x55, 0xAA]);
+    }
+
+    #[test]
+    fn installing_the_vbr_refuses_a_filesystem_that_is_not_512_byte_sectored() {
+        let layout = WindowsMbrPlan::new(600_000_000);
+        let mut device = tempfile::tempfile().unwrap();
+        device.set_len(layout.total_bytes_required()).unwrap();
+        let mut window = PartitionWindow::new(&mut device, layout.windows_partition);
+        fatfs::format_volume(
+            &mut window,
+            fatfs::FormatVolumeOptions::new()
+                .fat_type(fatfs::FatType::Fat32)
+                .volume_label(*b"ARGOS-WIN  "),
+        )
+        .unwrap();
+
+        // Claim 4096-byte sectors; the boot code's arithmetic assumes 512.
+        window.seek(SeekFrom::Start(0x0B)).unwrap();
+        window.write_all(&4096u16.to_le_bytes()).unwrap();
+
+        let err = install_fat32_vbr(&mut window, 2048).unwrap_err();
+        assert!(err.to_string().contains("4096"), "got: {err}");
     }
 
     /// Reads sector 0 back and decodes the MBR fields by hand, from raw

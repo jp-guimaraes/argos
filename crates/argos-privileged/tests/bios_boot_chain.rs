@@ -24,7 +24,8 @@
 //! ```
 
 use argos_core::partition::windows::{WindowsMbrPlan, SECTOR_SIZE};
-use std::io::{Seek, SeekFrom, Write};
+use argos_privileged::partition_io::PartitionWindow;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -219,4 +220,245 @@ fn the_mbr_code_fits_the_bootstrap_area() {
         440,
         "the MBR bootstrap area is exactly 440 bytes"
     );
+}
+
+/// Size the test's stand-in `bootmgr` is padded to. Deliberately larger than
+/// any cluster `fatfs` will choose here, so the file spans several clusters
+/// and the VBR has a real chain to follow rather than a single lucky read.
+const STUB_BOOTMGR_SIZE: usize = 40960;
+
+/// The marker the stub checks for at its own end -- see
+/// `asm/bootmgr_test_stub.asm`.
+const END_MARKER: &[u8; 8] = b"ARGOSEND";
+
+/// Builds media the way a real BIOS-mode write would: MBR code and partition
+/// table, a genuine FAT32 filesystem written by `fatfs`, our VBR installed
+/// over its boot sector, and `bootmgr` present as a file in the root
+/// directory.
+fn build_bios_media(dir: &Path, bootmgr: &[u8]) -> std::path::PathBuf {
+    build_bios_media_with_vbr(dir, bootmgr, None)
+}
+
+/// As [`build_bios_media`], but optionally installing `vbr_override` (the
+/// diagnostic build) instead of the shipped boot record.
+fn build_bios_media_with_vbr(
+    dir: &Path,
+    bootmgr: &[u8],
+    vbr_override: Option<&[u8]>,
+) -> std::path::PathBuf {
+    let layout = WindowsMbrPlan::new(600_000_000);
+    let path = dir.join("bios.img");
+    let mut disk = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .unwrap();
+    disk.set_len(layout.total_bytes_required()).unwrap();
+
+    argos_privileged::windows_fat32::write_mbr_partition_table_for_test(&mut disk, &layout)
+        .unwrap();
+    disk.seek(SeekFrom::Start(0)).unwrap();
+    disk.write_all(MBR_CODE).unwrap();
+
+    {
+        let mut window = PartitionWindow::new(&mut disk, layout.windows_partition);
+        fatfs::format_volume(
+            &mut window,
+            fatfs::FormatVolumeOptions::new()
+                .fat_type(fatfs::FatType::Fat32)
+                .volume_label(*b"ARGOS-WIN  "),
+        )
+        .unwrap();
+
+        window.seek(SeekFrom::Start(0)).unwrap();
+        let fs = fatfs::FileSystem::new(&mut window, fatfs::FsOptions::new()).unwrap();
+        {
+            let mut file = fs.root_dir().create_file("bootmgr").unwrap();
+            file.write_all(bootmgr).unwrap();
+            file.flush().unwrap();
+        }
+        fs.unmount().unwrap();
+
+        // After the filesystem exists, not before: installing the VBR is what
+        // replaces fatfs's boot sector code while keeping its BPB.
+        match vbr_override {
+            None => argos_privileged::windows_fat32::install_fat32_vbr_for_test(
+                &mut window,
+                layout.partition_sectors().unwrap().0,
+            )
+            .unwrap(),
+            Some(code) => {
+                // Same merge the installer does: keep the BPB, replace the
+                // jump and the code.
+                let mut sector = [0u8; 512];
+                window.seek(SeekFrom::Start(0)).unwrap();
+                window.read_exact(&mut sector).unwrap();
+                sector[..3].copy_from_slice(&code[..3]);
+                sector[90..].copy_from_slice(&code[90..]);
+                // The same hidden-sectors patch the real installer applies.
+                sector[0x1C..0x20]
+                    .copy_from_slice(&layout.partition_sectors().unwrap().0.to_le_bytes());
+                window.seek(SeekFrom::Start(0)).unwrap();
+                window.write_all(&sector).unwrap();
+                window.flush().unwrap();
+            }
+        }
+    }
+    disk.flush().unwrap();
+    path
+}
+
+/// Pads the assembled stub to [`STUB_BOOTMGR_SIZE`] and stamps the end
+/// marker, so the stub can prove the whole file reached memory.
+fn stub_bootmgr(dir: &Path) -> Vec<u8> {
+    let mut content = assemble("bootmgr_test_stub", dir);
+    assert!(
+        content.len() < STUB_BOOTMGR_SIZE - END_MARKER.len(),
+        "the stub outgrew the file it is padded into"
+    );
+    content.resize(STUB_BOOTMGR_SIZE - END_MARKER.len(), 0);
+    content.extend_from_slice(END_MARKER);
+    assert_eq!(content.len(), STUB_BOOTMGR_SIZE);
+    content
+}
+
+/// The M6.4 acceptance test: a full legacy-BIOS boot, from the MBR through
+/// the FAT32 VBR into `bootmgr`, on media built exactly as a real write
+/// builds it.
+#[test]
+#[ignore = "needs qemu-system-x86_64 and nasm; see module docs"]
+fn the_full_chain_boots_from_mbr_through_the_vbr_into_bootmgr() {
+    if !tools_available() {
+        eprintln!("skipping: qemu-system-x86_64 and/or nasm not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let disk = build_bios_media(dir.path(), &stub_bootmgr(dir.path()));
+
+    let output = boot_with_timeout(dir.path(), &disk, 20);
+    eprintln!("serial: {output:?}");
+
+    assert!(
+        output.contains("BOOTMGR_LOADED"),
+        "the VBR never reached bootmgr: it either failed to find the entry in the root \
+         directory or never transferred control; serial was {output:?}"
+    );
+    assert!(
+        !output.contains("TRUNCATED"),
+        "bootmgr was entered but the file was not fully in memory -- the VBR lost the \
+         cluster chain partway; serial was {output:?}"
+    );
+    assert!(
+        output.contains("FULL_LOAD_OK"),
+        "the whole-file check did not pass; serial was {output:?}"
+    );
+}
+
+/// Negative control: with no `bootmgr` in the root directory, the VBR must
+/// say so rather than jumping into whatever happens to sit at 0x20000.
+#[test]
+#[ignore = "needs qemu-system-x86_64 and nasm; see module docs"]
+fn the_vbr_reports_when_bootmgr_is_missing() {
+    if !tools_available() {
+        eprintln!("skipping: qemu-system-x86_64 and/or nasm not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let layout = WindowsMbrPlan::new(600_000_000);
+    let path = dir.path().join("empty.img");
+    let mut disk = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .unwrap();
+    disk.set_len(layout.total_bytes_required()).unwrap();
+    argos_privileged::windows_fat32::write_mbr_partition_table_for_test(&mut disk, &layout)
+        .unwrap();
+    disk.seek(SeekFrom::Start(0)).unwrap();
+    disk.write_all(MBR_CODE).unwrap();
+    {
+        let mut window = PartitionWindow::new(&mut disk, layout.windows_partition);
+        fatfs::format_volume(
+            &mut window,
+            fatfs::FormatVolumeOptions::new()
+                .fat_type(fatfs::FatType::Fat32)
+                .volume_label(*b"ARGOS-WIN  "),
+        )
+        .unwrap();
+        argos_privileged::windows_fat32::install_fat32_vbr_for_test(
+            &mut window,
+            layout.partition_sectors().unwrap().0,
+        )
+        .unwrap();
+    }
+    disk.flush().unwrap();
+
+    let output = boot_with_timeout(dir.path(), &path, 15);
+    eprintln!("serial: {output:?}");
+    assert!(
+        !output.contains("BOOTMGR_LOADED"),
+        "the VBR jumped to 0x20000 with no bootmgr on the volume"
+    );
+}
+
+/// The committed `asm/vbr_fat32.bin` must match its source, same as the MBR's.
+#[test]
+#[ignore = "needs nasm; see module docs"]
+fn the_committed_vbr_binary_matches_its_source() {
+    if !have("nasm") {
+        eprintln!("skipping: nasm not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = assemble("vbr_fat32", dir.path());
+    let committed: &[u8] = include_bytes!("../asm/vbr_fat32.bin");
+    assert_eq!(
+        fresh.as_slice(),
+        committed,
+        "asm/vbr_fat32.bin is stale -- re-run: nasm -f bin \
+         crates/argos-privileged/asm/vbr_fat32.asm -o crates/argos-privileged/asm/vbr_fat32.bin"
+    );
+}
+
+/// Diagnostic run: installs the `-DSERIAL_DIAG` build of the VBR, which
+/// reports progress and failures over the serial port. Not an assertion --
+/// it exists so a failing boot says *where* it stopped instead of leaving an
+/// empty log, which is otherwise indistinguishable from never having run.
+///
+/// Markers: `G` geometry computed, `F` bootmgr's directory entry found,
+/// `L` whole file loaded; `N` bootmgr not found, `R` disk read error.
+#[test]
+#[ignore = "diagnostic aid, not an assertion; needs qemu and nasm"]
+fn diagnose_the_vbr_over_serial() {
+    if !tools_available() {
+        eprintln!("skipping: qemu-system-x86_64 and/or nasm not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("asm/vbr_fat32.asm");
+    let out = dir.path().join("vbr_diag.bin");
+    assert!(Command::new("nasm")
+        .args(["-f", "bin", "-DSERIAL_DIAG"])
+        .arg(&src)
+        .arg("-o")
+        .arg(&out)
+        .status()
+        .expect("nasm should run")
+        .success());
+    let mut diag = std::fs::read(&out).unwrap();
+    assert!(
+        diag.len() <= 510,
+        "the diagnostic build outgrew a boot sector"
+    );
+    diag.resize(510, 0);
+    diag.extend_from_slice(&[0x55, 0xAA]);
+
+    let disk = build_bios_media_with_vbr(dir.path(), &stub_bootmgr(dir.path()), Some(&diag));
+    let output = boot_with_timeout(dir.path(), &disk, 20);
+    eprintln!("VBR diagnostic serial output: {output:?}");
 }
