@@ -45,6 +45,9 @@ test-fixtures = ["dep:hadris-udf"]
 
 [dev-dependencies]
 tempfile = "3"
+# Only for getrusage() in tests/real_windows_iso.rs -- the RSS-watermark
+# assertion of phase 3 M1.5.
+libc = "0.2"
 # Only for building synthetic UDF fixtures in tests -- argos-core itself
 # never writes a UDF filesystem.
 hadris-udf = { version = "2.2.0", features = ["write"] }
