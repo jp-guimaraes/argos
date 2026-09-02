@@ -38,8 +38,8 @@ use argos_core::image::wim;
 use argos_core::image::windows::{IsoFileEntry, WindowsIso};
 use argos_core::partition::windows::{
     chs_for_lba, fat32_bytes_per_cluster_for, WindowsFat32Plan, WindowsMbrPlan, CHS_HEADS,
-    CHS_SECTORS_PER_TRACK, MBR_BOOTABLE_FLAG,
-    MBR_FAT32_LBA_PARTITION_TYPE, MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
+    CHS_SECTORS_PER_TRACK, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
+    MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
 use argos_core::progress::{Phase, ProgressSink};
 use argos_core::verify::{
@@ -1600,16 +1600,21 @@ mod tests {
         write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
         let expected = layout.start_lba().unwrap();
-        assert_ne!(expected, 0, "the test is vacuous if the partition starts at 0");
+        assert_ne!(
+            expected, 0,
+            "the test is vacuous if the partition starts at 0"
+        );
 
         let mut window = PartitionWindow::new(&mut device, layout.region());
         let mut boot = [0u8; 512];
         window.seek(SeekFrom::Start(0)).unwrap();
         window.read_exact(&mut boot).unwrap();
         assert_eq!(
-            u32::from_le_bytes(boot[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
-                .try_into()
-                .unwrap()),
+            u32::from_le_bytes(
+                boot[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
+                    .try_into()
+                    .unwrap()
+            ),
             expected,
         );
 
@@ -1681,9 +1686,7 @@ mod tests {
         );
 
         let mut last = [0u8; 512];
-        device
-            .seek(SeekFrom::End(-(SECTOR_SIZE as i64)))
-            .unwrap();
+        device.seek(SeekFrom::End(-(SECTOR_SIZE as i64))).unwrap();
         device.read_exact(&mut last).unwrap();
         assert_ne!(
             &last[..8],
