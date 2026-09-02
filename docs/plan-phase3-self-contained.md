@@ -11,6 +11,13 @@ bootable installer USB drives for **both Linux and Windows 10/11 ISOs**,
 targeting **both MBR/BIOS and GPT/UEFI** machines — with as little dependence
 on third-party software as possible.
 
+Concretely, what motivated the project: producing Windows install media for
+the **old machines in the maintainer's teaching labs**, written from a modern
+Mac or from the labs' own Linux machines, with no Windows host involved
+anywhere. That matters for prioritisation and is easy to lose sight of when
+reading the milestone list — "MBR/BIOS" above is not a completeness item, it
+is the target hardware. See M6.
+
 What is already met, and holds up well:
 
 - Linux ISOs (isohybrid, DD mode) from both hosts, verified on real hardware
@@ -103,7 +110,8 @@ platform-neutral Rust unless noted):
 - **real hw** — needs physical USB drives and/or a physical boot-test
   machine; human-executed by definition.
 
-Dependency order: M1 → (M2 ∥ M3) → M4 → M5; M6 (BIOS) after M4; M7 anytime.
+Dependency order: M1 → (M2 ∥ M3) → M4 → M5; M6 (BIOS) after M5; M7 anytime.
+M6 is sequenced last but is **not** optional — see the priority note there.
 
 Each milestone below is synchronized to a GitHub issue (see §5).
 
@@ -160,15 +168,72 @@ Each milestone below is synchronized to a GitHub issue (see §5).
 | M5.2 | macOS host: same, written from the Mac. Boot-testing still happens on the same PC target (Apple Silicon can't boot Windows installers — #34 already recorded this). | human | macOS + real hw |
 | M5.3 | Secure Boot on: confirm the FAT32 media boots with Secure Boot enabled (expected to, via Microsoft's own `bootx64.efi`). | human | real hw |
 
-### M6 — Windows on BIOS/MBR (fixes P3 — optional, last)
+### M6 — Windows on BIOS/MBR (fixes P3)
 
-Only relevant for Windows 10 on pre-UEFI machines; Windows 11 requires UEFI.
-Do not start before M5 passes.
+**Priority corrected (2026-09-01).** This milestone was originally filed as
+"optional, last", on the reasoning that BIOS-only machines are pre-2012 and
+Windows 10 is out of support. That reasoning is sound in general and *wrong
+for this project*: the maintainer's motivating use case is producing Windows
+install media **for the old machines in the teaching labs he runs**, written
+from a modern Mac or from the labs' own Linux machines, without needing a
+Windows host anywhere. Those old machines are the target, not an edge case.
+So M6 is not a nice-to-have — it is what makes the tool serve the purpose it
+was built for. (It stays sequenced after M5, which is about not building on
+an unvalidated foundation, not about M6 being optional.)
+
+Scope note unchanged: Windows 11 requires UEFI and TPM 2.0, so BIOS-only
+hardware means Windows 10 media specifically.
+
+**Cheap check before building any of this**: many 2012–2015 machines expose
+UEFI with a legacy CSM, and boot legacy only by default. If the lab machines
+offer a `UEFI:`-prefixed entry in their boot menu, the existing FAT32 layout
+already serves them and M6 is unnecessary. Confirm before investing.
+
+#### M6.1 — decision: **write our own boot records** (settled 2026-09-01)
+
+BIOS boot of Windows media needs two pieces of native x86 code that no ISO
+ships and that this project does not yet have: MBR boot code (~446 bytes)
+that finds the active partition and loads its boot sector, and a FAT32
+PBR/VBR that parses FAT32 well enough to find and load `bootmgr`.
+
+The three options were (a) write both from scratch, (b) adopt a
+permissively-licensed implementation, (c) declare Windows-on-BIOS out of
+scope.
+
+- **(b) does not exist in practice.** The field implementations are all
+  copyleft: Rufus (GPLv3) and its boot records, [`ms-sys`](https://ms-sys.sourceforge.net/)
+  (GPL, same author, and the one that carries exactly the needed "FAT32
+  partition PE boot record — for USB install and recovery"), Syslinux,
+  FreeDOS, GRUB, Ventoy. Permissively-licensed boot code exists but boots
+  BSD, not `bootmgr`.
+- **(c) is ruled out by the use case above.**
+- **Relicensing to GPL was explicitly considered and declined.** The
+  maintainer is sole copyright holder of every commit, so it was legally
+  available, and it would have reduced M6 from "write boot sector assembly"
+  to "port field-tested code". It was declined to keep the crates
+  permissively reusable — `argos-core` carries the streaming UDF reader and
+  the pure-Rust WIM splitter, which have value beyond Argos — and because
+  `ms-sys`'s boot records are **binary blobs**, so adopting them would
+  reintroduce exactly the vendored-blob problem (P4) that replacing the
+  UEFI:NTFS layout just eliminated.
+
+**Decision: (a).** Argos writes its own boot records, from source, under
+MIT/Apache. This keeps the project's defining property — everything on the
+media is built from code in this repository — intact for the BIOS path too.
+
+Accepted cost: this is the highest-risk code in the project. A wrong byte in
+a boot sector produces "no bootable device" with no diagnostic, on hardware
+that cannot be single-stepped. It must be developed against emulation
+(QEMU/Bochs with a BIOS, where the boot process *can* be traced) before ever
+reaching real hardware.
 
 | ID | Task | Diff. | Host |
 |---|---|---|---|
-| M6.1 | Decision: BIOS boot needs MBR boot code + a FAT32 PBR that chain-loads `bootmgr`. Rufus's own boot records are GPL (license-incompatible with MIT/Apache — cannot be copied). Options: (a) write our own ~446-byte MBR + FAT32 PBR from scratch against the published boot protocol, (b) find a permissively-licensed implementation, (c) declare Windows/BIOS out of scope and document it. Human decision with license review. | **C** / human | any |
-| M6.2 | If (a)/(b): MBR partition plan variant (`mbrman`), boot-record writing, `bootmgr` BIOS path validation on real pre-UEFI hardware. | **C** | Linux + real hw (pre-UEFI) |
+| M6.2 | MBR partition plan variant: `mbrman` instead of `gptman`, single FAT32 partition marked active/bootable, matching what the GPT plan already computes. | H | any |
+| M6.3 | MBR boot code (~446 bytes, 16-bit x86): scan the partition table for the active entry, load its first sector to 0x7C00, jump. The simpler of the two — the algorithm is fully specified and has no filesystem knowledge. | **C** | any |
+| M6.4 | FAT32 VBR: parse the BPB, walk the FAT and root directory to locate `bootmgr`, load it, hand off per the documented boot protocol. The hard piece. | **C** | any |
+| M6.5 | Emulation harness: boot the produced media under QEMU with a legacy BIOS (SeaBIOS) in CI, asserting it reaches `bootmgr` — so boot-record regressions are caught by a test rather than by a dead lab machine. | H | any |
+| M6.6 | Real pre-UEFI hardware validation: Windows 10 media written from macOS and from Linux, booted on an actual lab machine, taken past disk selection. | human | real hw (pre-UEFI) |
 
 ### M7 — Shell-out reduction + robustness (independent; good simple-model work)
 
