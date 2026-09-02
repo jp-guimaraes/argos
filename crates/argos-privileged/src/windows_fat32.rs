@@ -37,8 +37,8 @@ use argos_core::image::checksum::{copy_and_hash, sha256_stream};
 use argos_core::image::wim;
 use argos_core::image::windows::{IsoFileEntry, WindowsIso};
 use argos_core::partition::windows::{
-    chs_for_lba, WindowsFat32Plan, WindowsMbrPlan, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
-    MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
+    chs_for_lba, fat32_bytes_per_cluster_for, WindowsFat32Plan, WindowsMbrPlan, MBR_BOOTABLE_FLAG,
+    MBR_FAT32_LBA_PARTITION_TYPE, MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
 use argos_core::progress::{Phase, ProgressSink};
 use argos_core::verify::{
@@ -106,8 +106,16 @@ pub fn execute_write_windows_fat32(
     // comment -- without it this panics before writing a byte, on any real
     // macOS disk.
     let outcome = {
-        let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
-        write_fat32_media(&mut sized, &layout, &iso, &actions, progress)?
+        // Buffered under SizedDevice: the filesystem's writes are tiny and
+        // its seeks are mostly redundant, and against a USB device node each
+        // one is a round trip. See BufferedDevice.
+        let buffered =
+            crate::partition_io::BufferedDevice::new(&mut device_file).map_err(ArgosError::Io)?;
+        let mut sized = SizedDevice::new(buffered, device.size_bytes);
+        let outcome = write_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
+        // The buffer must reach the medium before the handle is dropped.
+        sized.flush().map_err(ArgosError::Io)?;
+        outcome
     };
     // Not sync_all(): macOS device nodes reject F_FULLFSYNC. See
     // partition_io::sync_device.
@@ -146,7 +154,9 @@ pub fn execute_verify_windows_fat32(
     platform.unmount(&device)?;
     let mut device_file =
         crate::partition_io::open_device_exclusive(&plan.device_path).map_err(ArgosError::Io)?;
-    let mut sized = SizedDevice::new(&mut device_file, device.size_bytes);
+    let buffered =
+        crate::partition_io::BufferedDevice::new(&mut device_file).map_err(ArgosError::Io)?;
+    let mut sized = SizedDevice::new(buffered, device.size_bytes);
     let files_verified = verify_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
 
     Ok(crate::windows::WindowsVerifyOutcome { files_verified })
@@ -373,6 +383,10 @@ fn write_fat32_media<H: Read + Write + Seek>(
             // volume would default to) is far less universally bootable,
             // and WindowsFat32Plan's size floor guarantees FAT32 is valid.
             .fat_type(fatfs::FatType::Fat32)
+            // Sized from the volume: large clusters make the write cheap,
+            // but a fixed large value would push a small volume below
+            // FAT32's cluster minimum. See fat32_bytes_per_cluster_for.
+            .bytes_per_cluster(fat32_bytes_per_cluster_for(layout.region().size_bytes))
             .volume_label(*b"ARGOS-WIN  "),
     )
     .map_err(ArgosError::Io)?;

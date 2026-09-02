@@ -188,6 +188,45 @@ pub const MBR_BOOTABLE_FLAG: u8 = 0x80;
 /// region, unlike GPT's backup header.
 const MBR_OVERHEAD_BYTES: u64 = SECTOR_SIZE;
 
+/// FAT32's defining minimum: a volume with fewer clusters than this is a
+/// FAT16 volume by definition, whatever its boot sector claims.
+pub const FAT32_MIN_CLUSTERS: u64 = 65_525;
+
+/// The largest cluster size worth using. Bigger clusters mean fewer
+/// clusters, and the cluster count is what drives the write cost: one write
+/// per cluster of file data, plus a FAT entry update per cluster in each
+/// FAT. 32 KiB is where Windows itself tops out for FAT32, so it is the
+/// well-travelled value rather than a clever one.
+pub const FAT32_MAX_BYTES_PER_CLUSTER: u32 = 32 * 1024;
+
+/// Chooses the cluster size to format a FAT32 volume of `partition_bytes`
+/// with: the largest power of two up to [`FAT32_MAX_BYTES_PER_CLUSTER`]
+/// that still leaves comfortably more than [`FAT32_MIN_CLUSTERS`] clusters.
+///
+/// Both ends of that range matter. Too small and the write becomes millions
+/// of tiny operations -- profiling a 6.1 GB write at 4 KiB clusters found
+/// 7.7 million writes, 80% of them a single sector. Too large and the volume
+/// drops below FAT32's cluster minimum and is no longer a valid FAT32
+/// filesystem at all, which a fixed 32 KiB does to any volume under ~2 GiB.
+///
+/// The cost of larger clusters is slack -- up to one cluster wasted per
+/// file. Windows install media is ~900 files, mostly large, so at 32 KiB
+/// that is about 29 MB against 6 GB: irrelevant next to the time saved.
+pub fn fat32_bytes_per_cluster_for(partition_bytes: u64) -> u32 {
+    // 2x headroom over the bare minimum: the usable area is smaller than the
+    // partition (reserved sectors, two FATs), so sizing against the raw
+    // partition size would sail too close to the limit.
+    let required_clusters = FAT32_MIN_CLUSTERS * 2;
+    let mut bytes_per_cluster = FAT32_MAX_BYTES_PER_CLUSTER;
+    while bytes_per_cluster > 512 {
+        if partition_bytes / u64::from(bytes_per_cluster) >= required_clusters {
+            break;
+        }
+        bytes_per_cluster /= 2;
+    }
+    bytes_per_cluster
+}
+
 /// The BIOS translation geometry every partitioning tool assumes when it
 /// fills in an MBR entry's CHS fields: 255 heads, 63 sectors per track.
 /// Nothing physical has looked like this in decades -- it is a convention,
@@ -558,6 +597,47 @@ mod tests {
         // Over 2 TiB of files: the sector count alone overflows u32.
         let plan = WindowsMbrPlan::new(3 * 1024 * 1024 * 1024 * 1024);
         assert!(plan.partition_sectors().is_none());
+    }
+
+    #[test]
+    fn cluster_size_grows_with_the_volume_and_caps_where_windows_caps() {
+        // A real Windows-media partition: big enough for the maximum.
+        assert_eq!(
+            fat32_bytes_per_cluster_for(6 * 1024 * 1024 * 1024),
+            FAT32_MAX_BYTES_PER_CLUSTER
+        );
+        // The plan's 512 MiB floor cannot afford 32 KiB clusters.
+        assert!(
+            fat32_bytes_per_cluster_for(FAT32_MIN_PARTITION_BYTES) < FAT32_MAX_BYTES_PER_CLUSTER
+        );
+    }
+
+    /// The property that actually matters: whatever size is chosen, the
+    /// volume must still have enough clusters to *be* FAT32. A fixed 32 KiB
+    /// fails this for every volume under about 2 GiB.
+    #[test]
+    fn the_chosen_cluster_size_always_leaves_a_valid_fat32_volume() {
+        let sizes = [
+            FAT32_MIN_PARTITION_BYTES,
+            600 * 1024 * 1024,
+            1024 * 1024 * 1024,
+            2 * 1024 * 1024 * 1024,
+            6 * 1024 * 1024 * 1024,
+            32 * 1024 * 1024 * 1024,
+        ];
+        for size in sizes {
+            let bytes_per_cluster = fat32_bytes_per_cluster_for(size);
+            assert!(
+                bytes_per_cluster.is_power_of_two() && bytes_per_cluster >= 512,
+                "{bytes_per_cluster} is not a usable cluster size"
+            );
+            let clusters = size / u64::from(bytes_per_cluster);
+            assert!(
+                clusters >= FAT32_MIN_CLUSTERS,
+                "a {size}-byte volume at {bytes_per_cluster} bytes/cluster has only {clusters} \
+                 clusters, below FAT32's {FAT32_MIN_CLUSTERS} minimum"
+            );
+        }
     }
 
     #[test]
