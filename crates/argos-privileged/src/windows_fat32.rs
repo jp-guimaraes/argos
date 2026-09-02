@@ -37,7 +37,7 @@ use argos_core::image::checksum::{copy_and_hash, sha256_stream};
 use argos_core::image::wim;
 use argos_core::image::windows::{IsoFileEntry, WindowsIso};
 use argos_core::partition::windows::{
-    WindowsFat32Plan, WindowsMbrPlan, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
+    chs_for_lba, WindowsFat32Plan, WindowsMbrPlan, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
     MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
 use argos_core::progress::{Phase, ProgressSink};
@@ -835,15 +835,19 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
     )
     .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
 
+    // CHS is obsolete for addressing -- our boot code and every modern
+    // firmware use the LBA fields below -- but the bytes are not optional.
+    // **Windows validates them.** Zeroed CHS produces a table a BIOS boots
+    // and that Linux and macOS mount, while Windows silently declines to
+    // mount the volume, surfacing as install media that starts Setup and
+    // then reports a missing media driver.
+    let (start_c, start_h, start_s) = chs_for_lba(starting_lba);
+    let (end_c, end_h, end_s) = chs_for_lba(starting_lba.saturating_add(sectors).saturating_sub(1));
     mbr[1] = mbrman::MBRPartitionEntry {
         boot: mbrman::BOOT_ACTIVE,
-        // CHS is dead on anything this tool writes to, and every BIOS that
-        // matters reads the LBA fields below. Zeroed rather than computed
-        // from a fictional geometry -- which is what Rufus and Windows Setup
-        // both do for LBA partitions.
-        first_chs: mbrman::CHS::empty(),
+        first_chs: mbrman::CHS::new(start_c, start_h, start_s),
         sys: MBR_FAT32_LBA_PARTITION_TYPE,
-        last_chs: mbrman::CHS::empty(),
+        last_chs: mbrman::CHS::new(end_c, end_h, end_s),
         starting_lba,
         sectors,
     };
@@ -1440,6 +1444,20 @@ mod tests {
         let entry = &sector0[0x1BE..0x1BE + 16];
         assert_eq!(entry[0], 0x80, "partition must be marked active/bootable");
         assert_eq!(entry[4], 0x0C, "partition type must be FAT32 (LBA)");
+
+        // CHS must be filled in, not left zero: Windows validates these and
+        // refuses to mount a volume whose entry has an all-zero geometry,
+        // even though the LBA fields below are what actually get used.
+        assert_ne!(
+            &entry[1..4],
+            &[0u8, 0, 0],
+            "first_chs is zeroed; Windows will not mount this volume"
+        );
+        assert_ne!(
+            &entry[5..8],
+            &[0u8, 0, 0],
+            "last_chs is zeroed; Windows will not mount this volume"
+        );
 
         let lba_start = u32::from_le_bytes(entry[8..12].try_into().unwrap());
         let sector_count = u32::from_le_bytes(entry[12..16].try_into().unwrap());

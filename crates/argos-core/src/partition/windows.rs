@@ -188,6 +188,41 @@ pub const MBR_BOOTABLE_FLAG: u8 = 0x80;
 /// region, unlike GPT's backup header.
 const MBR_OVERHEAD_BYTES: u64 = SECTOR_SIZE;
 
+/// The BIOS translation geometry every partitioning tool assumes when it
+/// fills in an MBR entry's CHS fields: 255 heads, 63 sectors per track.
+/// Nothing physical has looked like this in decades -- it is a convention,
+/// and being *the* convention is exactly why it matters.
+pub const CHS_HEADS: u32 = 255;
+pub const CHS_SECTORS_PER_TRACK: u32 = 63;
+
+/// The value written when an address is past what CHS can express
+/// (cylinder 1023, head 254, sector 63): the standard "use the LBA fields
+/// instead" marker.
+pub const CHS_MAX: (u16, u8, u8) = (1023, 254, 63);
+
+/// Converts an LBA to the `(cylinder, head, sector)` triple an MBR
+/// partition entry stores, saturating at [`CHS_MAX`].
+///
+/// Why bother, when everything that reads this media addresses it by LBA:
+/// **because Windows validates these fields.** Leaving them zero produces a
+/// partition table that a BIOS boots and that Linux and macOS mount happily,
+/// while Windows declines to mount the volume -- which surfaces as install
+/// media that starts Setup and then reports that a media driver is missing,
+/// with nothing to connect the message to its cause.
+pub fn chs_for_lba(lba: u32) -> (u16, u8, u8) {
+    let sectors_per_cylinder = CHS_HEADS * CHS_SECTORS_PER_TRACK;
+    let cylinder = lba / sectors_per_cylinder;
+    if cylinder > u32::from(CHS_MAX.0) {
+        return CHS_MAX;
+    }
+    let within_cylinder = lba % sectors_per_cylinder;
+    let head = within_cylinder / CHS_SECTORS_PER_TRACK;
+    // Sectors are numbered from 1, not 0 -- the one off-by-one this format
+    // is famous for.
+    let sector = within_cylinder % CHS_SECTORS_PER_TRACK + 1;
+    (cylinder as u16, head as u8, sector as u8)
+}
+
 /// The single-partition MBR layout for a BIOS-bootable FAT32 Windows
 /// installer write (phase 3 M6.2, backlog #45).
 ///
@@ -523,6 +558,49 @@ mod tests {
         // Over 2 TiB of files: the sector count alone overflows u32.
         let plan = WindowsMbrPlan::new(3 * 1024 * 1024 * 1024 * 1024);
         assert!(plan.partition_sectors().is_none());
+    }
+
+    #[test]
+    fn chs_conversion_matches_the_classic_255x63_geometry() {
+        // LBA 0 is cylinder 0, head 0, sector 1 -- sectors count from one.
+        assert_eq!(chs_for_lba(0), (0, 0, 1));
+        // The 1 MiB partition start every plan here uses.
+        assert_eq!(chs_for_lba(2048), (0, 32, 33));
+        // Last address of the first cylinder, then the first of the second.
+        assert_eq!(chs_for_lba(255 * 63 - 1), (0, 254, 63));
+        assert_eq!(chs_for_lba(255 * 63), (1, 0, 1));
+    }
+
+    #[test]
+    fn chs_saturates_instead_of_wrapping_past_what_it_can_express() {
+        let last_expressible = 1024 * 255 * 63 - 1;
+        assert_eq!(chs_for_lba(last_expressible), (1023, 254, 63));
+        // One past it, and anything beyond, must clamp rather than wrap --
+        // a wrapped value would point the entry at the wrong place entirely.
+        assert_eq!(chs_for_lba(last_expressible + 1), CHS_MAX);
+        assert_eq!(chs_for_lba(u32::MAX), CHS_MAX);
+    }
+
+    /// Every field of a CHS triple has to fit its byte; a conversion that
+    /// produced head 255 or sector 64 would silently corrupt the entry.
+    #[test]
+    fn chs_fields_always_fit_their_on_disk_widths() {
+        for lba in [
+            0u32,
+            1,
+            63,
+            2048,
+            100_000,
+            16_064,
+            16_065,
+            1 << 20,
+            u32::MAX,
+        ] {
+            let (c, h, s) = chs_for_lba(lba);
+            assert!(c <= 1023, "cylinder {c} for lba {lba}");
+            assert!(h <= 254, "head {h} for lba {lba}");
+            assert!((1..=63).contains(&s), "sector {s} for lba {lba}");
+        }
     }
 
     #[test]
