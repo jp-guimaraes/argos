@@ -387,6 +387,11 @@ fn write_fat32_media<H: Read + Write + Seek>(
             // but a fixed large value would push a small volume below
             // FAT32's cluster minimum. See fat32_bytes_per_cluster_for.
             .bytes_per_cluster(fat32_bytes_per_cluster_for(layout.region().size_bytes))
+            // fatfs writes a fixed 0x12345678 otherwise, so every volume
+            // Argos ever wrote would share one identity. Windows keys
+            // volumes off this serial; two media that claim to be the same
+            // volume is not a state worth handing anyone.
+            .volume_id(random_volume_id()?)
             .volume_label(*b"ARGOS-WIN  "),
     )
     .map_err(ArgosError::Io)?;
@@ -916,6 +921,15 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
 /// then this is deliberately not wired into any CLI path: it would build media
 /// that partitions and formats correctly and then fails to boot with no
 /// explanation.
+/// A volume serial number, from the same `/dev/urandom` the GUIDs come
+/// from. Real formatters derive one from the clock; either way the point is
+/// that two volumes must not claim the same identity.
+fn random_volume_id() -> Result<u32> {
+    let bytes = crate::windows::random_guid()?;
+    // Never zero: some tools treat an all-zero serial as "unset".
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) | 1)
+}
+
 /// Bytes of sector 0 reserved for boot code, before the disk signature at
 /// 440 and the partition table at 446.
 const MBR_BOOTSTRAP_BYTES: usize = 440;
@@ -1502,6 +1516,34 @@ mod tests {
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut blank = Cursor::new(vec![0u8; 4 * 1024 * 1024]);
         assert!(verify_fat32_media(&mut blank, &layout, &iso, &actions, &NoopProgress).is_err());
+    }
+
+    /// Every volume must have its own serial: fatfs writes a fixed
+    /// 0x12345678, so without this every stick Argos ever wrote would claim
+    /// the same identity, and Windows keys volumes off exactly this field.
+    #[test]
+    fn each_written_volume_gets_its_own_serial_number() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+
+        let mut serials = Vec::new();
+        for _ in 0..2 {
+            let mut device = device_file_for(&layout);
+            write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+            let mut boot = [0u8; 512];
+            device
+                .seek(SeekFrom::Start(layout.region().start_offset_bytes))
+                .unwrap();
+            device.read_exact(&mut boot).unwrap();
+            serials.push(u32::from_le_bytes(boot[0x43..0x47].try_into().unwrap()));
+        }
+        assert_ne!(serials[0], serials[1], "two writes shared a volume serial");
+        assert_ne!(
+            serials[0], 0x1234_5678,
+            "fatfs's placeholder serial was kept"
+        );
+        assert_ne!(serials[0], 0, "an all-zero serial reads as unset");
     }
 
     /// Regression guard for a bug that was invisible outside an actual boot:
