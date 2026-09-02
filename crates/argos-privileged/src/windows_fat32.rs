@@ -632,6 +632,19 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsFat32Plan,
 ) -> Result<()> {
+    // Clear the bootstrap area first. `gptman` writes the protective MBR
+    // "starting at byte 446", so bytes 0..446 survive untouched -- and on a
+    // stick that previously held, say, an isohybrid Linux ISO, that means a
+    // stale bootloader stays behind. A legacy BIOS then finds and runs it,
+    // producing errors from software that is no longer on the medium at all
+    // ("isolinux.bin missing or corrupt", reported from real hardware). This
+    // media is UEFI-only by design; leaving executable remnants that claim
+    // otherwise is worse than leaving nothing.
+    device.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    device
+        .write_all(&[0u8; MBR_BOOTSTRAP_BYTES])
+        .map_err(ArgosError::Io)?;
+
     let mut gpt = gptman::GPT::new_from(device, SECTOR_SIZE, crate::windows::random_guid()?)
         .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
 
@@ -670,6 +683,10 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
 /// then this is deliberately not wired into any CLI path: it would build media
 /// that partitions and formats correctly and then fails to boot with no
 /// explanation.
+/// Bytes of sector 0 reserved for boot code, before the disk signature at
+/// 440 and the partition table at 446.
+const MBR_BOOTSTRAP_BYTES: usize = 440;
+
 /// Argos's MBR boot code (phase 3 M6.3, backlog #45), assembled from
 /// `asm/mbr.asm`. Occupies the 440-byte bootstrap area that
 /// [`write_mbr_partition_table`] leaves untouched.
@@ -1364,6 +1381,41 @@ mod tests {
 
         let err = install_fat32_vbr(&mut window, 2048).unwrap_err();
         assert!(err.to_string().contains("4096"), "got: {err}");
+    }
+
+    /// A GPT write must not leave a previous bootloader executable in sector
+    /// 0. `gptman` only writes from byte 446 on, so without clearing it, a
+    /// stick that once held an isohybrid Linux ISO keeps its bootloader --
+    /// and a legacy BIOS runs it, reporting errors about files that are not
+    /// on the medium any more. Seen on real hardware as "isolinux.bin
+    /// missing or corrupt" from media Argos had since rewritten.
+    #[test]
+    fn the_gpt_write_clears_a_previous_bootloader_from_sector_zero() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mut device = device_file_for(&layout);
+
+        // Stand in for a leftover bootloader: recognisable bytes across the
+        // whole bootstrap area.
+        device.seek(SeekFrom::Start(0)).unwrap();
+        device.write_all(&[0xE9u8; 440]).unwrap();
+
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+
+        let mut bootstrap = [0u8; 440];
+        device.seek(SeekFrom::Start(0)).unwrap();
+        device.read_exact(&mut bootstrap).unwrap();
+        assert!(
+            bootstrap.iter().all(|&b| b == 0),
+            "a previous bootloader survived a GPT write; a legacy BIOS would execute it"
+        );
+
+        // The protective MBR itself must still be intact.
+        let mut signature = [0u8; 2];
+        device.seek(SeekFrom::Start(510)).unwrap();
+        device.read_exact(&mut signature).unwrap();
+        assert_eq!(signature, [0x55, 0xAA]);
     }
 
     /// Reads sector 0 back and decodes the MBR fields by hand, from raw
