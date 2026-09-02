@@ -16,8 +16,13 @@ enum LayoutArg {
     /// One pure-Rust FAT32 partition (phase 3 M3/M2, backlog #43/#42): no
     /// external programs, no mounting. An install.wim over FAT32's 4GiB
     /// file limit is split into install.swm parts automatically. Works on
-    /// Linux and macOS.
+    /// Linux and macOS. GPT-partitioned, so it boots UEFI firmware only.
     Fat32,
+    /// The same FAT32 media, but MBR-partitioned and carrying Argos's own
+    /// boot records, so it boots on **legacy BIOS machines too** (phase 3
+    /// M6, backlog #45). Windows 10 only -- Windows 11 requires UEFI.
+    #[value(name = "fat32-bios")]
+    Fat32Bios,
 }
 
 impl From<LayoutArg> for WindowsLayout {
@@ -25,6 +30,7 @@ impl From<LayoutArg> for WindowsLayout {
         match arg {
             LayoutArg::Ntfs => WindowsLayout::Ntfs,
             LayoutArg::Fat32 => WindowsLayout::Fat32,
+            LayoutArg::Fat32Bios => WindowsLayout::Fat32Bios,
         }
     }
 }

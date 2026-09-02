@@ -29,21 +29,21 @@
 
 use crate::partition_io::{PartitionWindow, SizedDevice};
 use crate::protocol::{
-    validate_refreshed_device_for_windows_write, VerifyWindowsPlan, WriteWindowsPlan,
+    validate_refreshed_device_for_windows_write, VerifyWindowsPlan, WindowsLayout, WriteWindowsPlan,
 };
 use argos_core::error::{ArgosError, Result};
+use argos_core::image;
 use argos_core::image::checksum::{copy_and_hash, sha256_stream};
 use argos_core::image::wim;
 use argos_core::image::windows::{IsoFileEntry, WindowsIso};
 use argos_core::partition::windows::{
-    WindowsFat32Plan, WindowsMbrPlan, MBR_FAT32_LBA_PARTITION_TYPE,
+    WindowsFat32Plan, WindowsMbrPlan, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
     MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
 use argos_core::progress::{Phase, ProgressSink};
 use argos_core::verify::{
     verify_windows_fat32_layout, verify_windows_file_hash, ObservedPartition,
 };
-use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -84,8 +84,8 @@ pub fn execute_write_windows_fat32(
     let files = iso.list_files()?;
     let actions = plan_copy_actions(&iso, &files)?;
 
-    let layout = fat32_layout_for(&actions);
-    preflight::check_windows_fat32_capacity(
+    let layout = TargetLayout::for_layout(plan.layout, total_bytes_on_target(&actions));
+    check_capacity(
         &plan.device_path,
         plan.expected_size_bytes,
         &plan.iso_path,
@@ -134,7 +134,7 @@ pub fn execute_verify_windows_fat32(
     let iso = WindowsIso::open(&plan.iso_path)?;
     let files = iso.list_files()?;
     let actions = plan_copy_actions(&iso, &files)?;
-    let layout = fat32_layout_for(&actions);
+    let layout = TargetLayout::for_layout(plan.layout, total_bytes_on_target(&actions));
 
     // Unmount first, then open exclusively -- the same treatment the write
     // path gets, for two reasons: a freshly written stick has its FAT32
@@ -150,6 +150,51 @@ pub fn execute_verify_windows_fat32(
     let files_verified = verify_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
 
     Ok(crate::windows::WindowsVerifyOutcome { files_verified })
+}
+
+/// Which partition scheme and boot records to put on the media. The
+/// filesystem, the file copy and the hashing are identical either way --
+/// only the table describing the partition, and whether boot records are
+/// installed, differ.
+#[derive(Debug, Clone, Copy)]
+pub enum TargetLayout {
+    /// GPT with a single Microsoft Basic Data partition; booted by UEFI
+    /// firmware reading `efi/boot/bootx64.efi` off the FAT32 volume.
+    Gpt(WindowsFat32Plan),
+    /// MBR with a single active FAT32 partition, plus Argos's MBR boot code
+    /// and FAT32 VBR, so a legacy BIOS can chain through to `bootmgr`.
+    MbrBios(WindowsMbrPlan),
+}
+
+impl TargetLayout {
+    /// The partition this layout describes, wherever it came from.
+    pub fn region(&self) -> argos_core::partition::windows::PartitionRegion {
+        match self {
+            TargetLayout::Gpt(p) => p.windows_partition,
+            TargetLayout::MbrBios(p) => p.windows_partition,
+        }
+    }
+
+    /// The smallest device this layout fits on.
+    pub fn total_bytes_required(&self) -> u64 {
+        match self {
+            TargetLayout::Gpt(p) => p.total_bytes_required(),
+            TargetLayout::MbrBios(p) => p.total_bytes_required(),
+        }
+    }
+
+    /// Builds the layout a given [`WindowsLayout`] asks for, from the total
+    /// size the files will occupy on the target.
+    pub fn for_layout(layout: WindowsLayout, files_total_bytes: u64) -> Self {
+        match layout {
+            WindowsLayout::Fat32Bios => {
+                TargetLayout::MbrBios(WindowsMbrPlan::new(files_total_bytes))
+            }
+            // Ntfs never reaches this module; the CLI and helper route it to
+            // `crate::windows` instead.
+            _ => TargetLayout::Gpt(WindowsFat32Plan::new(files_total_bytes)),
+        }
+    }
 }
 
 /// Target size for one `.swm` part: comfortably under FAT32's 4GiB-1
@@ -267,8 +312,33 @@ pub fn plan_copy_actions(iso: &WindowsIso, files: &[IsoFileEntry]) -> Result<Vec
     Ok(actions)
 }
 
+/// Bytes the planned copy will occupy on the target filesystem.
+pub fn total_bytes_on_target(actions: &[CopyAction]) -> u64 {
+    actions.iter().map(CopyAction::bytes_on_target).sum()
+}
+
 pub fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
-    WindowsFat32Plan::new(actions.iter().map(CopyAction::bytes_on_target).sum())
+    WindowsFat32Plan::new(total_bytes_on_target(actions))
+}
+
+/// Capacity preflight for whichever scheme was chosen -- the required size
+/// differs, since MBR reserves nothing at the end of the device.
+fn check_capacity(
+    device_label: &str,
+    device_size_bytes: u64,
+    image_path: &std::path::Path,
+    layout: &TargetLayout,
+) -> Result<()> {
+    let required = layout.total_bytes_required();
+    if device_size_bytes < required {
+        return Err(ArgosError::DeviceTooSmall(
+            device_label.to_string(),
+            image_path.to_path_buf(),
+            device_size_bytes,
+            required,
+        ));
+    }
+    Ok(())
 }
 
 /// Partitions, formats, and populates `device` per `layout` -- everything
@@ -277,16 +347,25 @@ pub fn fat32_layout_for(actions: &[CopyAction]) -> WindowsFat32Plan {
 /// file; no step in here knows or cares whether `device` is real hardware.
 fn write_fat32_media<H: Read + Write + Seek>(
     device: &mut H,
-    layout: &WindowsFat32Plan,
+    layout: &TargetLayout,
     iso: &WindowsIso,
     actions: &[CopyAction],
     progress: &dyn ProgressSink,
 ) -> Result<Fat32WriteOutcome> {
     progress.on_phase(Phase::Partitioning);
-    write_fat32_partition_table(device, layout)?;
+    match layout {
+        TargetLayout::Gpt(plan) => write_fat32_partition_table(device, plan)?,
+        TargetLayout::MbrBios(plan) => {
+            write_mbr_partition_table(device, plan)?;
+            // The MBR's boot code goes into the bootstrap area the partition
+            // table writer deliberately leaves alone.
+            device.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+            device.write_all(MBR_BOOT_CODE).map_err(ArgosError::Io)?;
+        }
+    }
 
     progress.on_phase(Phase::FormattingFat32);
-    let mut window = PartitionWindow::new(&mut *device, layout.windows_partition);
+    let mut window = PartitionWindow::new(&mut *device, layout.region());
     fatfs::format_volume(
         &mut window,
         fatfs::FormatVolumeOptions::new()
@@ -306,7 +385,92 @@ fn write_fat32_media<H: Read + Write + Seek>(
     let unmount_result = fs.unmount().map_err(ArgosError::Io);
     let copied = copy_result?;
     unmount_result?;
+
+    // Boot records last: the VBR install reads the BPB the format wrote, and
+    // the bootmgr check needs the directory the copy just populated.
+    if let TargetLayout::MbrBios(plan) = layout {
+        let (start_lba, _) = plan.partition_sectors().ok_or_else(|| {
+            ArgosError::Io(std::io::Error::other(
+                "the partition is larger than an MBR entry can describe",
+            ))
+        })?;
+        let mut window = PartitionWindow::new(&mut *device, layout.region());
+        install_fat32_vbr(&mut window, start_lba)?;
+        verify_bootmgr_reachable_by_the_vbr(&mut window)?;
+    }
+
     Ok(copied)
+}
+
+/// Confirms `bootmgr`'s directory entry sits in the **first cluster** of the
+/// root directory -- the one place [`VBR_FAT32_CODE`] looks.
+///
+/// The VBR searches only that cluster: following the root directory's
+/// cluster chain does not fit in the 420 bytes a boot sector leaves after
+/// the BPB. That is a deliberate trade -- the complexity moves here, where
+/// it is cheap and testable -- but it is only sound if this check actually
+/// runs. Without it, media whose root directory happened to spill would
+/// format and copy perfectly and then fail to boot with no diagnostic.
+///
+/// Scans the raw sectors exactly as the boot code does, matching the 8.3
+/// short name `BOOTMGR` and skipping long-filename and volume-label entries,
+/// so this validates what the VBR will really see rather than what a
+/// higher-level directory listing reports.
+fn verify_bootmgr_reachable_by_the_vbr<H: Read + Write + Seek>(window: &mut H) -> Result<()> {
+    let mut boot_sector = [0u8; 512];
+    window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    window
+        .read_exact(&mut boot_sector)
+        .map_err(ArgosError::Io)?;
+
+    let u16at = |o: usize| u16::from_le_bytes([boot_sector[o], boot_sector[o + 1]]);
+    let u32at = |o: usize| {
+        u32::from_le_bytes([
+            boot_sector[o],
+            boot_sector[o + 1],
+            boot_sector[o + 2],
+            boot_sector[o + 3],
+        ])
+    };
+    let sectors_per_cluster = u64::from(boot_sector[0x0D]);
+    let reserved_sectors = u64::from(u16at(0x0E));
+    let num_fats = u64::from(boot_sector[0x10]);
+    let sectors_per_fat = u64::from(u32at(0x24));
+    let root_cluster = u64::from(u32at(0x2C));
+
+    // Volume-relative, because that is what this window addresses; the boot
+    // code does the same arithmetic against absolute LBAs.
+    let data_start = reserved_sectors + num_fats * sectors_per_fat;
+    let root_start = data_start + (root_cluster - 2) * sectors_per_cluster;
+
+    for sector_index in 0..sectors_per_cluster {
+        let mut sector = [0u8; 512];
+        window
+            .seek(SeekFrom::Start((root_start + sector_index) * SECTOR_SIZE))
+            .map_err(ArgosError::Io)?;
+        window.read_exact(&mut sector).map_err(ArgosError::Io)?;
+
+        for entry in sector.as_chunks::<32>().0 {
+            match entry[0] {
+                0x00 => break,    // no further entries anywhere
+                0xE5 => continue, // deleted
+                _ => {}
+            }
+            // 0x08 covers volume labels and long-filename fragments alike:
+            // an LFN entry's attribute is 0x0F, which has 0x08 set.
+            if entry[11] & 0x08 != 0 {
+                continue;
+            }
+            if &entry[..11] == b"BOOTMGR    " {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(ArgosError::Io(std::io::Error::other(
+        "bootmgr's directory entry is not in the root directory's first cluster, which is the \
+         only place the BIOS boot record looks -- refusing to write media that would not boot",
+    )))
 }
 
 /// The read-back half: confirms the GPT matches `layout`, then per-file
@@ -314,14 +478,19 @@ fn write_fat32_media<H: Read + Write + Seek>(
 /// Same handle-generic posture as [`write_fat32_media`].
 fn verify_fat32_media<H: Read + Write + Seek>(
     device: &mut H,
-    layout: &WindowsFat32Plan,
+    layout: &TargetLayout,
     iso: &WindowsIso,
     actions: &[CopyAction],
     progress: &dyn ProgressSink,
 ) -> Result<u64> {
     progress.on_phase(Phase::Verifying);
-    let observed = read_observed_fat32_partition(device)?;
-    verify_windows_fat32_layout(layout, observed)?;
+    match layout {
+        TargetLayout::Gpt(plan) => {
+            let observed = read_observed_fat32_partition(device)?;
+            verify_windows_fat32_layout(plan, observed)?;
+        }
+        TargetLayout::MbrBios(plan) => verify_mbr_layout(device, plan)?,
+    }
 
     // Hash what *should* be on the device first, then compare each file
     // against what actually is -- same two-pass shape (and the same phase
@@ -353,7 +522,7 @@ fn verify_fat32_media<H: Read + Write + Seek>(
     }
 
     progress.on_phase(Phase::Verifying);
-    let mut window = PartitionWindow::new(&mut *device, layout.windows_partition);
+    let mut window = PartitionWindow::new(&mut *device, layout.region());
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).map_err(ArgosError::Io)?;
     let root = fs.root_dir();
@@ -501,6 +670,11 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
 /// then this is deliberately not wired into any CLI path: it would build media
 /// that partitions and formats correctly and then fails to boot with no
 /// explanation.
+/// Argos's MBR boot code (phase 3 M6.3, backlog #45), assembled from
+/// `asm/mbr.asm`. Occupies the 440-byte bootstrap area that
+/// [`write_mbr_partition_table`] leaves untouched.
+const MBR_BOOT_CODE: &[u8] = include_bytes!("../asm/mbr.bin");
+
 /// Argos's FAT32 volume boot record (phase 3 M6.4, backlog #45), assembled
 /// from `asm/vbr_fat32.asm`. Installed into the partition's first sector so
 /// a legacy BIOS can chain from the MBR through to `bootmgr`.
@@ -535,7 +709,6 @@ const BPB_BYTES_PER_SECTOR_OFFSET: usize = 0x0B;
 ///    disk LBAs, so a VBR that trusts a zero here reads from the start of
 ///    the *disk* instead of the start of the partition. Found exactly that
 ///    way, by a boot that produced no output at all.
-#[allow(dead_code)]
 fn install_fat32_vbr<H: Read + Write + Seek>(
     window: &mut H,
     partition_start_lba: u32,
@@ -567,6 +740,19 @@ fn install_fat32_vbr<H: Read + Write + Seek>(
     Ok(())
 }
 
+/// Test-only re-export of [`write_fat32_media`], so the QEMU boot-chain test
+/// can assert against media the product's own write path produced rather
+/// than an approximation of it assembled by the test.
+pub fn write_fat32_media_for_test<H: Read + Write + Seek>(
+    device: &mut H,
+    layout: &TargetLayout,
+    iso: &WindowsIso,
+    actions: &[CopyAction],
+    progress: &dyn ProgressSink,
+) -> Result<Fat32WriteOutcome> {
+    write_fat32_media(device, layout, iso, actions, progress)
+}
+
 /// Test-only re-export of [`install_fat32_vbr`], so the QEMU boot-chain test
 /// installs the boot record exactly the way a real write would.
 pub fn install_fat32_vbr_for_test<H: Read + Write + Seek>(
@@ -587,11 +773,6 @@ pub fn write_mbr_partition_table_for_test<H: Read + Write + Seek>(
     write_mbr_partition_table(device, layout)
 }
 
-// Not yet reachable from a *write path*, and that is deliberate: without
-// M6.4's FAT32 VBR this produces media that partitions, formats and
-// chain-loads correctly and then finds no `bootmgr` loader. Wired into the
-// CLI when M6.4 lands; exercised by this module's tests and the QEMU
-// boot-chain test until then.
 fn write_mbr_partition_table<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsMbrPlan,
@@ -630,6 +811,54 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
     mbr.write_into(device)
         .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
     device.flush().map_err(ArgosError::Io)?;
+    Ok(())
+}
+
+/// The MBR counterpart of [`verify_windows_fat32_layout`]: reads sector 0
+/// back and confirms it describes the partition the plan asked for, and that
+/// the boot code is actually there.
+///
+/// Checks the boot signature, the active flag, the FAT32 type byte and the
+/// LBA fields by raw offset -- the same way the tests do, and for the same
+/// reason: this must reflect what a BIOS will read, not what the library
+/// that wrote it would report back.
+fn verify_mbr_layout<H: Read + Seek>(device: &mut H, plan: &WindowsMbrPlan) -> Result<()> {
+    let mut sector = [0u8; 512];
+    device.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    device.read_exact(&mut sector).map_err(ArgosError::Io)?;
+
+    let mismatch = |what: &str| ArgosError::WindowsPartitionLayoutMismatch(what.to_string());
+
+    if sector[510..512] != [0x55, 0xAA] {
+        return Err(mismatch("sector 0 has no boot signature"));
+    }
+    if sector[..MBR_BOOT_CODE.len()] != *MBR_BOOT_CODE {
+        return Err(mismatch("the MBR boot code is missing or does not match"));
+    }
+
+    let entry = &sector[0x1BE..0x1BE + 16];
+    if entry[0] != MBR_BOOTABLE_FLAG {
+        return Err(mismatch("partition 1 is not marked active"));
+    }
+    if entry[4] != MBR_FAT32_LBA_PARTITION_TYPE {
+        return Err(mismatch("partition 1 is not a FAT32 (LBA) partition"));
+    }
+
+    let (expected_start, expected_sectors) = plan.partition_sectors().ok_or_else(|| {
+        mismatch("the expected partition is larger than an MBR entry can describe")
+    })?;
+    let start = u32::from_le_bytes(entry[8..12].try_into().expect("4 bytes"));
+    let sectors = u32::from_le_bytes(entry[12..16].try_into().expect("4 bytes"));
+    if start != expected_start {
+        return Err(ArgosError::WindowsPartitionLayoutMismatch(format!(
+            "partition 1 starts at LBA {start}, expected {expected_start}"
+        )));
+    }
+    if sectors < expected_sectors {
+        return Err(ArgosError::WindowsPartitionLayoutMismatch(format!(
+            "partition 1 is {sectors} sectors, expected at least {expected_sectors}"
+        )));
+    }
     Ok(())
 }
 
@@ -894,7 +1123,7 @@ mod tests {
     }
 
     /// A sparse temp file big enough for the layout -- the "device".
-    fn device_file_for(layout: &WindowsFat32Plan) -> std::fs::File {
+    fn device_file_for(layout: &TargetLayout) -> std::fs::File {
         let file = tempfile::tempfile().unwrap();
         file.set_len(layout.total_bytes_required()).unwrap();
         file
@@ -904,7 +1133,7 @@ mod tests {
     fn write_then_verify_round_trips_on_a_plain_file() {
         let (iso, files, _guard) = synthetic_iso();
         let actions = plan_copy_actions(&iso, &files).unwrap();
-        let layout = fat32_layout_for(&actions);
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
 
         let outcome =
@@ -922,7 +1151,7 @@ mod tests {
     fn the_written_gpt_has_exactly_one_basic_data_partition_where_planned() {
         let (iso, files, _guard) = synthetic_iso();
         let actions = plan_copy_actions(&iso, &files).unwrap();
-        let layout = fat32_layout_for(&actions);
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
         write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
@@ -933,12 +1162,9 @@ mod tests {
         );
         assert_eq!(
             observed.region.start_offset_bytes,
-            layout.windows_partition.start_offset_bytes
+            layout.region().start_offset_bytes
         );
-        assert_eq!(
-            observed.region.size_bytes,
-            layout.windows_partition.size_bytes
-        );
+        assert_eq!(observed.region.size_bytes, layout.region().size_bytes);
 
         let gpt = {
             device.seek(SeekFrom::Start(0)).unwrap();
@@ -951,11 +1177,11 @@ mod tests {
     fn the_filesystem_is_actually_fat32_not_a_smaller_fat() {
         let (iso, files, _guard) = synthetic_iso();
         let actions = plan_copy_actions(&iso, &files).unwrap();
-        let layout = fat32_layout_for(&actions);
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
         write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
-        let window = PartitionWindow::new(&mut device, layout.windows_partition);
+        let window = PartitionWindow::new(&mut device, layout.region());
         let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
         assert_eq!(fs.fat_type(), fatfs::FatType::Fat32);
     }
@@ -964,7 +1190,7 @@ mod tests {
     fn verify_fails_when_a_written_file_is_corrupted() {
         let (iso, files, _guard) = synthetic_iso();
         let actions = plan_copy_actions(&iso, &files).unwrap();
-        let layout = fat32_layout_for(&actions);
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
         write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
@@ -972,7 +1198,7 @@ mod tests {
         // through the filesystem itself (window + fatfs, read-write).
         let largest = files.iter().max_by_key(|f| f.size).unwrap();
         {
-            let window = PartitionWindow::new(&mut device, layout.windows_partition);
+            let window = PartitionWindow::new(&mut device, layout.region());
             let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
             {
                 let mut file = fs.root_dir().open_file(&largest.path).unwrap();
@@ -996,7 +1222,7 @@ mod tests {
     fn verify_fails_when_the_device_has_no_gpt_at_all() {
         let (iso, files, _guard) = synthetic_iso();
         let actions = plan_copy_actions(&iso, &files).unwrap();
-        let layout = fat32_layout_for(&actions);
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut blank = Cursor::new(vec![0u8; 4 * 1024 * 1024]);
         assert!(verify_fat32_media(&mut blank, &layout, &iso, &actions, &NoopProgress).is_err());
     }
@@ -1189,6 +1415,77 @@ mod tests {
         fs.unmount().unwrap();
     }
 
+    /// The BIOS path end to end at the unit level: MBR scheme, boot code in
+    /// the bootstrap area, VBR installed, and `bootmgr` where the boot code
+    /// will look. The QEMU test proves it boots; this proves the writer puts
+    /// every piece in place without needing an emulator.
+    #[test]
+    fn the_bios_layout_writes_boot_records_and_a_reachable_bootmgr() {
+        let (iso, files, _guard) = synthetic_iso();
+        let mut actions = plan_copy_actions(&iso, &files).unwrap();
+        // The synthetic ISO has no bootmgr file; add one, since the BIOS
+        // path refuses media without it -- which is the point.
+        actions.push(CopyAction::Direct {
+            path: "bootmgr".into(),
+            size: 0,
+        });
+        let layout =
+            TargetLayout::for_layout(WindowsLayout::Fat32Bios, total_bytes_on_target(&actions));
+        let mut device = device_file_for(&layout);
+
+        // `bootmgr` must come from somewhere the copy can read; the fixture
+        // ISO has `bootmgr` at its root, so the Direct action resolves.
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+
+        let mut sector0 = [0u8; 512];
+        device.seek(SeekFrom::Start(0)).unwrap();
+        device.read_exact(&mut sector0).unwrap();
+        assert_eq!(
+            &sector0[..MBR_BOOT_CODE.len()],
+            MBR_BOOT_CODE,
+            "MBR boot code"
+        );
+        assert_eq!(sector0[0x1BE], MBR_BOOTABLE_FLAG, "partition marked active");
+
+        let mut vbr = [0u8; 512];
+        device
+            .seek(SeekFrom::Start(layout.region().start_offset_bytes))
+            .unwrap();
+        device.read_exact(&mut vbr).unwrap();
+        assert_eq!(&vbr[90..], &VBR_FAT32_CODE[90..], "VBR code installed");
+        assert_eq!(
+            u32::from_le_bytes(vbr[0x1C..0x20].try_into().unwrap()),
+            layout.region().start_offset_bytes as u32 / 512,
+            "hidden sectors patched"
+        );
+
+        // And verify accepts what write produced.
+        verify_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+    }
+
+    /// The guarantee the VBR's single-cluster search depends on. Media whose
+    /// root directory does not carry `bootmgr` must be refused, not written.
+    #[test]
+    fn the_bios_layout_refuses_media_without_a_reachable_bootmgr() {
+        let (iso, files, _guard) = synthetic_iso();
+        // No bootmgr in the copy plan at all.
+        let actions: Vec<CopyAction> = plan_copy_actions(&iso, &files)
+            .unwrap()
+            .into_iter()
+            .filter(|a| !matches!(a, CopyAction::Direct { path, .. } if path.eq_ignore_ascii_case("bootmgr")))
+            .collect();
+        let layout =
+            TargetLayout::for_layout(WindowsLayout::Fat32Bios, total_bytes_on_target(&actions));
+        let mut device = device_file_for(&layout);
+
+        let err = write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress)
+            .expect_err("media with no bootmgr in the root directory must be refused");
+        assert!(
+            err.to_string().contains("bootmgr"),
+            "the refusal should name what is missing; got: {err}"
+        );
+    }
+
     #[test]
     fn files_within_the_fat32_limit_are_planned_as_direct_copies() {
         let (iso, files, _guard) = synthetic_iso();
@@ -1271,14 +1568,14 @@ mod tests {
         // the same code path the copy uses.
         let (iso, files, _guard) = synthetic_iso();
         let actions = plan_copy_actions(&iso, &files).unwrap();
-        let layout = fat32_layout_for(&actions);
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
         write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
 
         // Write a synthetic multi-resource WIM into the FAT32 filesystem by
         // splitting it, exactly as split_wim_onto_fat32 does, and read the
         // parts back with our own header parser.
-        let window = PartitionWindow::new(&mut device, layout.windows_partition);
+        let window = PartitionWindow::new(&mut device, layout.region());
         let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
 
         let wim_bytes = tiny_multi_resource_wim();

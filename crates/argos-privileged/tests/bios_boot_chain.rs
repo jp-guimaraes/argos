@@ -462,3 +462,83 @@ fn diagnose_the_vbr_over_serial() {
     let output = boot_with_timeout(dir.path(), &disk, 20);
     eprintln!("VBR diagnostic serial output: {output:?}");
 }
+
+/// The one that matters most: media produced by the **real write path**
+/// (`TargetLayout::MbrBios`, the same code `argos write --layout fat32-bios`
+/// runs) must boot. Everything above tests the boot records against media the
+/// test itself assembled; this tests them against media the product made.
+///
+/// The fixture ISO's `bootmgr` is a placeholder, so after the write its
+/// *contents* are replaced with the reporting stub -- the partition table,
+/// the MBR boot code, the VBR and the directory layout all remain exactly
+/// what the write path produced, which is what is under test.
+#[test]
+#[ignore = "needs qemu-system-x86_64 and nasm; see module docs"]
+fn media_from_the_real_write_path_boots_under_bios() {
+    if !tools_available() {
+        eprintln!("skipping: qemu-system-x86_64 and/or nasm not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+
+    let iso_path = dir.path().join("fixture.iso");
+    std::fs::write(
+        &iso_path,
+        argos_core::image::windows::fixtures::udf_windows_installer_iso(true, true),
+    )
+    .unwrap();
+
+    let iso = argos_core::image::windows::WindowsIso::open(&iso_path).unwrap();
+    let files = iso.list_files().unwrap();
+    let actions = argos_privileged::windows_fat32::plan_copy_actions(&iso, &files).unwrap();
+    let layout = argos_privileged::windows_fat32::TargetLayout::for_layout(
+        argos_privileged::protocol::WindowsLayout::Fat32Bios,
+        argos_privileged::windows_fat32::total_bytes_on_target(&actions),
+    );
+
+    let disk_path = dir.path().join("real.img");
+    let mut disk = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .open(&disk_path)
+        .unwrap();
+    disk.set_len(layout.total_bytes_required()).unwrap();
+
+    argos_privileged::windows_fat32::write_fat32_media_for_test(
+        &mut disk,
+        &layout,
+        &iso,
+        &actions,
+        &argos_core::progress::NoopProgress,
+    )
+    .expect("the real write path should produce BIOS media");
+
+    // Swap in a bootmgr that can report over serial.
+    {
+        let mut window = PartitionWindow::new(&mut disk, layout.region());
+        window.seek(SeekFrom::Start(0)).unwrap();
+        let fs = fatfs::FileSystem::new(&mut window, fatfs::FsOptions::new()).unwrap();
+        {
+            let mut f = fs.root_dir().open_file("bootmgr").unwrap();
+            f.truncate().unwrap();
+            f.write_all(&stub_bootmgr(dir.path())).unwrap();
+            f.flush().unwrap();
+        }
+        fs.unmount().unwrap();
+    }
+    disk.flush().unwrap();
+    drop(disk);
+
+    let output = boot_with_timeout(dir.path(), &disk_path, 20);
+    eprintln!("serial: {output:?}");
+    assert!(
+        output.contains("BOOTMGR_LOADED"),
+        "media built by the real write path did not reach bootmgr; serial was {output:?}"
+    );
+    assert!(
+        output.contains("FULL_LOAD_OK"),
+        "bootmgr was entered but not fully loaded; serial was {output:?}"
+    );
+}

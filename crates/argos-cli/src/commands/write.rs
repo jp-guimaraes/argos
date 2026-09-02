@@ -122,7 +122,7 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
             check_source_collision(platform, device, args)?;
             confirm_windows_write_or_abort(device, &args.iso, &layout)?;
         }
-        WindowsLayout::Fat32 => {
+        WindowsLayout::Fat32 | WindowsLayout::Fat32Bios => {
             let (layout, actions) = windows_fat32_plan_for(&args.iso)?;
             preflight::check_windows_fat32_capacity(
                 &device.platform_id,
@@ -131,7 +131,13 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
                 &layout,
             )?;
             check_source_collision(platform, device, args)?;
-            confirm_windows_fat32_write_or_abort(device, &args.iso, &layout, &actions)?;
+            confirm_windows_fat32_write_or_abort(
+                device,
+                &args.iso,
+                &layout,
+                &actions,
+                args.layout,
+            )?;
         }
     }
 
@@ -332,6 +338,7 @@ fn confirm_windows_fat32_write_or_abort(
     iso: &Path,
     layout: &WindowsFat32Plan,
     actions: &[CopyAction],
+    firmware: WindowsLayout,
 ) -> Result<()> {
     println!("About to overwrite:");
     println!(
@@ -351,6 +358,15 @@ fn confirm_windows_fat32_write_or_abort(
         helper::human_size(layout.windows_partition.size_bytes),
         helper::human_size(layout.windows_partition.start_offset_bytes)
     );
+    // Which firmware the result will boot is the single most consequential
+    // thing about this choice, and the partition sizes above do not show it.
+    match firmware {
+        WindowsLayout::Fat32Bios => println!(
+            "  boot: legacy BIOS (MBR + Argos boot records), and UEFI firmware \
+             that accepts MBR-partitioned removable media"
+        ),
+        _ => println!("  boot: UEFI only (GPT); use --layout fat32-bios for legacy BIOS machines"),
+    }
     // Splitting is invisible in the layout above but very visible on the
     // resulting media (install.wim becomes install.swm + install2.swm ...),
     // so say so before the user commits to the write.
