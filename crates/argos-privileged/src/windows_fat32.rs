@@ -37,8 +37,9 @@ use argos_core::image::checksum::{copy_and_hash, sha256_stream};
 use argos_core::image::wim;
 use argos_core::image::windows::{IsoFileEntry, WindowsIso};
 use argos_core::partition::windows::{
-    chs_for_lba, fat32_bytes_per_cluster_for, WindowsFat32Plan, WindowsMbrPlan, MBR_BOOTABLE_FLAG,
-    MBR_FAT32_LBA_PARTITION_TYPE, MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
+    chs_for_lba, fat32_bytes_per_cluster_for, WindowsFat32Plan, WindowsMbrPlan, CHS_HEADS,
+    CHS_SECTORS_PER_TRACK, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
+    MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
 use argos_core::progress::{Phase, ProgressSink};
 use argos_core::verify::{
@@ -183,6 +184,16 @@ impl TargetLayout {
             TargetLayout::Gpt(p) => p.windows_partition,
             TargetLayout::MbrBios(p) => p.windows_partition,
         }
+    }
+
+    /// The LBA the partition starts at -- what the BPB's hidden-sectors
+    /// field has to record, whichever scheme is in play.
+    pub fn start_lba(&self) -> Result<u32> {
+        u32::try_from(self.region().start_offset_bytes / SECTOR_SIZE).map_err(|_| {
+            ArgosError::Io(std::io::Error::other(
+                "the partition starts beyond the 2TiB a 32-bit LBA can address",
+            ))
+        })
     }
 
     /// The smallest device this layout fits on.
@@ -392,6 +403,13 @@ fn write_fat32_media<H: Read + Write + Seek>(
             // volumes off this serial; two media that claim to be the same
             // volume is not a state worth handing anyone.
             .volume_id(random_volume_id()?)
+            // fatfs defaults to 32 sectors/track and 64 heads. Our own MBR
+            // partition entry is built from 255x63 (see chs_for_lba), so
+            // without this the two layers of one medium described the same
+            // disk with two different geometries -- and neither matched the
+            // 63/255 that Windows-made media carries.
+            .sectors_per_track(CHS_SECTORS_PER_TRACK as u16)
+            .heads(CHS_HEADS as u16)
             .volume_label(*b"ARGOS-WIN  "),
     )
     .map_err(ArgosError::Io)?;
@@ -415,15 +433,19 @@ fn write_fat32_media<H: Read + Write + Seek>(
 
     // Boot records last: the VBR install reads the BPB the format wrote, and
     // the bootmgr check needs the directory the copy just populated.
-    if let TargetLayout::MbrBios(plan) = layout {
-        let (start_lba, _) = plan.partition_sectors().ok_or_else(|| {
-            ArgosError::Io(std::io::Error::other(
-                "the partition is larger than an MBR entry can describe",
-            ))
-        })?;
+    {
+        let start_lba = layout.start_lba()?;
         let mut window = PartitionWindow::new(&mut *device, layout.region());
-        install_fat32_vbr(&mut window, start_lba)?;
-        verify_bootmgr_reachable_by_the_vbr(&mut window)?;
+        match layout {
+            // UEFI firmware boots this volume by reading efi/boot/bootx64.efi
+            // off it, so there is no boot code to install -- but the BPB still
+            // has to say where on the disk the volume actually starts.
+            TargetLayout::Gpt(_) => record_partition_start(&mut window, start_lba)?,
+            TargetLayout::MbrBios(_) => {
+                install_fat32_vbr(&mut window, start_lba)?;
+                verify_bootmgr_reachable_by_the_vbr(&mut window)?;
+            }
+        }
     }
 
     Ok(copied)
@@ -959,59 +981,27 @@ const BPB_BYTES_PER_SECTOR_OFFSET: usize = 0x0B;
 /// (6 in practice).
 const BPB_BACKUP_BOOT_SECTOR_OFFSET: usize = 0x32;
 
-/// Installs [`VBR_FAT32_CODE`] into an already-formatted FAT32 partition,
-/// **preserving the BPB** and patching its hidden-sectors field.
+/// Reads the volume's boot sector, hands it to `edit`, and writes the result
+/// back to both the boot sector and FAT32's backup copy of it.
 ///
-/// Two things happen here, and both are load-bearing:
-///
-/// 1. Only bytes 0..3 (the jump) and 90..512 (code and signature) are
-///    replaced. The boot code reads its geometry -- cluster size, FAT
-///    location, root directory cluster -- out of the BPB at runtime rather
-///    than assuming any, so overwriting the BPB would leave it computing
-///    addresses from zeros.
-///
-/// 2. `partition_start_lba` is written into the hidden-sectors field.
-///    `fatfs` formats through a [`PartitionWindow`], so it only ever sees a
-///    volume starting at offset 0 and writes 0 there -- correct from its
-///    point of view, and fatal for a boot sector: INT 13h takes absolute
-///    disk LBAs, so a VBR that trusts a zero here reads from the start of
-///    the *disk* instead of the start of the partition. Found exactly that
-///    way, by a boot that produced no output at all.
-fn install_fat32_vbr<H: Read + Write + Seek>(
-    window: &mut H,
-    partition_start_lba: u32,
-) -> Result<()> {
+/// Keeping the two in step is not optional. Windows' own tools update both,
+/// chkdsk compares them, and a recovery that fell back to a stale copy would
+/// produce media that had booted once and then stopped. Cheap to keep
+/// consistent; expensive to debug if not.
+fn edit_boot_sector<H, F>(window: &mut H, edit: F) -> Result<()>
+where
+    H: Read + Write + Seek,
+    F: FnOnce(&mut [u8; 512]) -> Result<()>,
+{
     let mut sector = [0u8; 512];
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     window.read_exact(&mut sector).map_err(ArgosError::Io)?;
 
-    // The boot code's addressing arithmetic is written for 512-byte sectors;
-    // refuse rather than produce media that miscomputes every LBA.
-    let bytes_per_sector = u16::from_le_bytes([
-        sector[BPB_BYTES_PER_SECTOR_OFFSET],
-        sector[BPB_BYTES_PER_SECTOR_OFFSET + 1],
-    ]);
-    if u64::from(bytes_per_sector) != SECTOR_SIZE {
-        return Err(ArgosError::Io(std::io::Error::other(format!(
-            "the filesystem reports {bytes_per_sector}-byte sectors; the boot record requires {SECTOR_SIZE}"
-        ))));
-    }
-
-    sector[..3].copy_from_slice(&VBR_FAT32_CODE[..3]);
-    sector[VBR_CODE_OFFSET..].copy_from_slice(&VBR_FAT32_CODE[VBR_CODE_OFFSET..]);
-    sector[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
-        .copy_from_slice(&partition_start_lba.to_le_bytes());
+    edit(&mut sector)?;
 
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     window.write_all(&sector).map_err(ArgosError::Io)?;
 
-    // FAT32 keeps a copy of the boot sector, at the sector the BPB names
-    // (6 in practice). Leaving it as `fatfs` wrote it makes the volume
-    // self-contradictory: the copy would still claim the volume starts at
-    // sector 0 of the disk, and carry no boot code. Windows' own tools
-    // update both, chkdsk compares them, and a recovery that fell back to
-    // the stale copy would produce media that had booted once and then
-    // stopped. Cheap to keep consistent; expensive to debug if not.
     let backup_sector = u16::from_le_bytes([
         sector[BPB_BACKUP_BOOT_SECTOR_OFFSET],
         sector[BPB_BACKUP_BOOT_SECTOR_OFFSET + 1],
@@ -1025,6 +1015,64 @@ fn install_fat32_vbr<H: Read + Write + Seek>(
 
     window.flush().map_err(ArgosError::Io)?;
     Ok(())
+}
+
+/// Writes the partition's start LBA into the BPB's hidden-sectors field.
+///
+/// `fatfs` formats through a [`PartitionWindow`], so it only ever sees a
+/// volume starting at offset 0 and writes 0 here -- correct from its point of
+/// view, and untrue on the disk. Two separate consumers care:
+///
+/// * Our FAT32 VBR, on the MBR/BIOS path. INT 13h takes absolute disk LBAs,
+///   so a boot record that trusts a zero here reads from the start of the
+///   *disk* instead of the start of the partition. Found exactly that way, by
+///   a boot that produced no output at all.
+/// * Windows, on every path. This is why the call is not inside
+///   `install_fat32_vbr` any more: the GPT/UEFI path installs no boot code and
+///   so used to skip the patch entirely, shipping volumes that claimed to
+///   begin at sector 0 of the disk. A Rufus-written FAT32 stick that WinPE
+///   mounts without complaint carries the real offset here; ours carried 0.
+fn record_partition_start<H: Read + Write + Seek>(
+    window: &mut H,
+    partition_start_lba: u32,
+) -> Result<()> {
+    edit_boot_sector(window, |sector| {
+        sector[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
+            .copy_from_slice(&partition_start_lba.to_le_bytes());
+        Ok(())
+    })
+}
+
+/// Installs [`VBR_FAT32_CODE`] into an already-formatted FAT32 partition,
+/// **preserving the BPB** and recording the partition's start in it.
+///
+/// Only bytes 0..3 (the jump) and 90..512 (code and signature) are replaced.
+/// The boot code reads its geometry -- cluster size, FAT location, root
+/// directory cluster -- out of the BPB at runtime rather than assuming any, so
+/// overwriting the BPB would leave it computing addresses from zeros.
+fn install_fat32_vbr<H: Read + Write + Seek>(
+    window: &mut H,
+    partition_start_lba: u32,
+) -> Result<()> {
+    edit_boot_sector(window, |sector| {
+        // The boot code's addressing arithmetic is written for 512-byte
+        // sectors; refuse rather than produce media that miscomputes every LBA.
+        let bytes_per_sector = u16::from_le_bytes([
+            sector[BPB_BYTES_PER_SECTOR_OFFSET],
+            sector[BPB_BYTES_PER_SECTOR_OFFSET + 1],
+        ]);
+        if u64::from(bytes_per_sector) != SECTOR_SIZE {
+            return Err(ArgosError::Io(std::io::Error::other(format!(
+                "the filesystem reports {bytes_per_sector}-byte sectors; the boot record requires {SECTOR_SIZE}"
+            ))));
+        }
+
+        sector[..3].copy_from_slice(&VBR_FAT32_CODE[..3]);
+        sector[VBR_CODE_OFFSET..].copy_from_slice(&VBR_FAT32_CODE[VBR_CODE_OFFSET..]);
+        sector[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
+            .copy_from_slice(&partition_start_lba.to_le_bytes());
+        Ok(())
+    })
 }
 
 /// Test-only re-export of [`write_fat32_media`], so the QEMU boot-chain test
@@ -1060,6 +1108,52 @@ pub fn write_mbr_partition_table_for_test<H: Read + Write + Seek>(
     write_mbr_partition_table(device, layout)
 }
 
+/// How many sectors a GPT occupies at each end of a disk: one header plus the
+/// 32 sectors that hold 128 entries of 128 bytes.
+const GPT_SECTORS_PER_COPY: u64 = 33;
+
+/// Erases any GPT the device carried before this MBR write.
+///
+/// `mbrman` writes sector 0 and nothing else, so a stick previously written
+/// with the GPT layout keeps its primary header at LBA 1, its entry array
+/// behind that, and its backup header in the device's last sector -- all with
+/// CRCs that still validate. What is left is a disk that contradicts itself: a
+/// structurally valid GPT whose sector 0 is not the protective 0xEE entry a
+/// GPT requires, but a real bootable FAT32 entry.
+///
+/// Windows does not hand a volume a drive letter off a disk in that state. The
+/// symptom is nasty because the media still *boots*: our MBR and VBR chain
+/// through to `bootmgr`, WinPE starts, and only then does Setup report that it
+/// cannot find the installation source.
+///
+/// Found on real hardware, and it is also why emulation never reproduced the
+/// failure -- the QEMU harness builds its media in a freshly truncated file,
+/// which has no stale GPT to leave behind, while a lab stick gets recycled
+/// from one layout to the other.
+fn erase_any_gpt<H: Read + Write + Seek>(device: &mut H) -> Result<()> {
+    let device_size = device.seek(SeekFrom::End(0)).map_err(ArgosError::Io)?;
+    let zeros = vec![0u8; (GPT_SECTORS_PER_COPY * SECTOR_SIZE) as usize];
+
+    // The primary copy: LBA 1 through 33. Our partition starts at LBA 2048, so
+    // this never reaches the filesystem.
+    device
+        .seek(SeekFrom::Start(SECTOR_SIZE))
+        .map_err(ArgosError::Io)?;
+    device.write_all(&zeros).map_err(ArgosError::Io)?;
+
+    // The backup copy lives in the last sectors of the *device*, past the end
+    // of a partition that is sized to its contents.
+    if device_size >= (GPT_SECTORS_PER_COPY + 1) * SECTOR_SIZE {
+        device
+            .seek(SeekFrom::End(-((zeros.len()) as i64)))
+            .map_err(ArgosError::Io)?;
+        device.write_all(&zeros).map_err(ArgosError::Io)?;
+    }
+
+    device.flush().map_err(ArgosError::Io)?;
+    Ok(())
+}
+
 fn write_mbr_partition_table<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsMbrPlan,
@@ -1069,6 +1163,8 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
             "the partition is larger than an MBR entry's 32-bit LBA fields can describe (>2TiB)",
         ))
     })?;
+
+    erase_any_gpt(device)?;
 
     let sector_size = u32::try_from(SECTOR_SIZE).expect("SECTOR_SIZE is 512");
     // A random disk signature, like the GPT path's GUIDs: Windows uses it to
@@ -1125,6 +1221,19 @@ fn verify_mbr_layout<H: Read + Seek>(device: &mut H, plan: &WindowsMbrPlan) -> R
     }
     if sector[..MBR_BOOT_CODE.len()] != *MBR_BOOT_CODE {
         return Err(mismatch("the MBR boot code is missing or does not match"));
+    }
+
+    // A GPT surviving underneath an MBR is the hybrid state erase_any_gpt
+    // exists to prevent; media in it boots and then gets no drive letter.
+    let mut lba1 = [0u8; 512];
+    device
+        .seek(SeekFrom::Start(SECTOR_SIZE))
+        .map_err(ArgosError::Io)?;
+    device.read_exact(&mut lba1).map_err(ArgosError::Io)?;
+    if &lba1[..8] == b"EFI PART" {
+        return Err(mismatch(
+            "a GPT header is still present at LBA 1, so the disk claims both schemes",
+        ));
     }
 
     let entry = &sector[0x1BE..0x1BE + 16];
@@ -1475,6 +1584,149 @@ mod tests {
         let window = PartitionWindow::new(&mut device, layout.region());
         let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
         assert_eq!(fs.fat_type(), fatfs::FatType::Fat32);
+    }
+
+    /// The GPT/UEFI path installs no boot code, and for a long time that meant
+    /// it also skipped the hidden-sectors patch that lives with the VBR
+    /// install -- so it shipped volumes whose BPB claimed they began at sector
+    /// 0 of the disk. Found by dumping a Rufus-written FAT32 stick that WinPE
+    /// mounts without complaint (2048 there) beside one of ours (0).
+    #[test]
+    fn the_gpt_write_records_the_partition_start_in_the_bpb() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mut device = device_file_for(&layout);
+        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+
+        let expected = layout.start_lba().unwrap();
+        assert_ne!(
+            expected, 0,
+            "the test is vacuous if the partition starts at 0"
+        );
+
+        let mut window = PartitionWindow::new(&mut device, layout.region());
+        let mut boot = [0u8; 512];
+        window.seek(SeekFrom::Start(0)).unwrap();
+        window.read_exact(&mut boot).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(
+                boot[BPB_HIDDEN_SECTORS_OFFSET..BPB_HIDDEN_SECTORS_OFFSET + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            expected,
+        );
+
+        // And the backup copy has to agree, or chkdsk sees a volume that
+        // contradicts itself.
+        let backup = u16::from_le_bytes([
+            boot[BPB_BACKUP_BOOT_SECTOR_OFFSET],
+            boot[BPB_BACKUP_BOOT_SECTOR_OFFSET + 1],
+        ]);
+        assert_ne!(backup, 0);
+        let mut copy = [0u8; 512];
+        window
+            .seek(SeekFrom::Start(u64::from(backup) * SECTOR_SIZE))
+            .unwrap();
+        window.read_exact(&mut copy).unwrap();
+        assert_eq!(copy, boot);
+    }
+
+    /// The BPB and the MBR partition entry describe the same disk, so they had
+    /// better agree on its geometry. fatfs defaults to 32x64; chs_for_lba uses
+    /// 255x63; Windows-made media carries 63/255.
+    /// A stick recycled from `--layout fat32` to `--layout fat32-bios` used to
+    /// keep its entire GPT -- primary header at LBA 1, entry array behind it,
+    /// backup header in the device's last sector, all CRCs still valid --
+    /// underneath an MBR whose first entry is a bootable FAT32 partition
+    /// rather than the protective 0xEE a GPT requires.
+    ///
+    /// Media in that state boots: the MBR and VBR chain through to `bootmgr`
+    /// and WinPE starts. Windows then declines to give the volume a drive
+    /// letter, and Setup reports it cannot find the installation source.
+    ///
+    /// Emulation never caught it because the QEMU harness builds its media in
+    /// a freshly truncated file. Only a recycled device reproduces it, which is
+    /// what this test is.
+    #[test]
+    fn writing_the_mbr_layout_erases_a_gpt_left_by_a_previous_write() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let gpt_layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mbr_plan = WindowsMbrPlan::new(actions.iter().map(CopyAction::bytes_on_target).sum());
+        let mbr_layout = TargetLayout::MbrBios(mbr_plan);
+
+        let mut device = tempfile::tempfile().unwrap();
+        device
+            .set_len(
+                gpt_layout
+                    .total_bytes_required()
+                    .max(mbr_layout.total_bytes_required()),
+            )
+            .unwrap();
+
+        write_fat32_media(&mut device, &gpt_layout, &iso, &actions, &NoopProgress).unwrap();
+
+        // The premise: the first write really does leave a GPT behind. If this
+        // ever stops holding, the test below stops testing anything.
+        let mut lba1 = [0u8; 512];
+        device.seek(SeekFrom::Start(SECTOR_SIZE)).unwrap();
+        device.read_exact(&mut lba1).unwrap();
+        assert_eq!(&lba1[..8], b"EFI PART");
+
+        write_fat32_media(&mut device, &mbr_layout, &iso, &actions, &NoopProgress).unwrap();
+
+        device.seek(SeekFrom::Start(SECTOR_SIZE)).unwrap();
+        device.read_exact(&mut lba1).unwrap();
+        assert_ne!(
+            &lba1[..8],
+            b"EFI PART",
+            "the MBR write left the primary GPT header behind"
+        );
+
+        let mut last = [0u8; 512];
+        device.seek(SeekFrom::End(-(SECTOR_SIZE as i64))).unwrap();
+        device.read_exact(&mut last).unwrap();
+        assert_ne!(
+            &last[..8],
+            b"EFI PART",
+            "the MBR write left the backup GPT header behind"
+        );
+
+        // And the layout check now refuses media in the hybrid state.
+        verify_mbr_layout(&mut device, &mbr_plan).unwrap();
+    }
+
+    #[test]
+    fn the_bpb_geometry_matches_the_one_the_partition_entries_are_built_from() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        for layout in [
+            TargetLayout::Gpt(fat32_layout_for(&actions)),
+            TargetLayout::MbrBios(WindowsMbrPlan::new(
+                actions.iter().map(CopyAction::bytes_on_target).sum::<u64>(),
+            )),
+        ] {
+            let mut device = device_file_for(&layout);
+            write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+
+            let mut window = PartitionWindow::new(&mut device, layout.region());
+            let mut boot = [0u8; 512];
+            window.seek(SeekFrom::Start(0)).unwrap();
+            window.read_exact(&mut boot).unwrap();
+
+            assert_eq!(
+                u16::from_le_bytes(boot[0x18..0x1A].try_into().unwrap()),
+                CHS_SECTORS_PER_TRACK as u16,
+                "sectors per track"
+            );
+            assert_eq!(
+                u16::from_le_bytes(boot[0x1A..0x1C].try_into().unwrap()),
+                CHS_HEADS as u16,
+                "heads"
+            );
+        }
     }
 
     #[test]
