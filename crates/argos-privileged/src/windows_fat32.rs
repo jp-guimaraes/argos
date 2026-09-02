@@ -400,6 +400,14 @@ fn write_fat32_media<H: Read + Write + Seek>(
     let copied = copy_result?;
     unmount_result?;
 
+    // The filesystem is complete but not yet spec-conformant: fatfs puts
+    // long-filename entries in front of `.` and `..`, and points `..` at the
+    // root's cluster instead of zero. See repair_directory_entries.
+    {
+        let mut window = PartitionWindow::new(&mut *device, layout.region());
+        repair_directory_entries(&mut window)?;
+    }
+
     // Boot records last: the VBR install reads the BPB the format wrote, and
     // the bootmgr check needs the directory the copy just populated.
     if let TargetLayout::MbrBios(plan) = layout {
@@ -414,6 +422,217 @@ fn write_fat32_media<H: Read + Write + Seek>(
     }
 
     Ok(copied)
+}
+
+/// FAT32 geometry, read back out of a formatted volume's BPB.
+struct Fat32Geometry {
+    sectors_per_cluster: u64,
+    fat_start: u64,
+    data_start: u64,
+    root_cluster: u32,
+}
+
+impl Fat32Geometry {
+    fn read<H: Read + Seek>(window: &mut H) -> Result<Self> {
+        let mut boot = [0u8; 512];
+        window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+        window.read_exact(&mut boot).map_err(ArgosError::Io)?;
+        let u16at = |o: usize| u16::from_le_bytes([boot[o], boot[o + 1]]);
+        let u32at = |o: usize| u32::from_le_bytes([boot[o], boot[o + 1], boot[o + 2], boot[o + 3]]);
+        let reserved = u64::from(u16at(0x0E));
+        let num_fats = u64::from(boot[0x10]);
+        let sectors_per_fat = u64::from(u32at(0x24));
+        Ok(Self {
+            sectors_per_cluster: u64::from(boot[0x0D]),
+            fat_start: reserved,
+            data_start: reserved + num_fats * sectors_per_fat,
+            root_cluster: u32at(0x2C),
+        })
+    }
+
+    /// Volume-relative first sector of a cluster.
+    fn cluster_lba(&self, cluster: u32) -> u64 {
+        self.data_start + (u64::from(cluster) - 2) * self.sectors_per_cluster
+    }
+
+    fn next_cluster<H: Read + Seek>(&self, window: &mut H, cluster: u32) -> Result<Option<u32>> {
+        let byte = u64::from(cluster) * 4;
+        let mut sector = [0u8; 512];
+        window
+            .seek(SeekFrom::Start(
+                (self.fat_start + byte / SECTOR_SIZE) * SECTOR_SIZE,
+            ))
+            .map_err(ArgosError::Io)?;
+        window.read_exact(&mut sector).map_err(ArgosError::Io)?;
+        let at = (byte % SECTOR_SIZE) as usize;
+        let entry =
+            u32::from_le_bytes([sector[at], sector[at + 1], sector[at + 2], sector[at + 3]])
+                & 0x0FFF_FFFF;
+        Ok(if entry >= 0x0FFF_FFF8 {
+            None
+        } else {
+            Some(entry)
+        })
+    }
+}
+
+/// Repairs the `.` and `..` entries `fatfs` writes, which violate the FAT
+/// specification in two ways at once.
+///
+/// What `fatfs` produces for a directory:
+///
+/// ```text
+/// [0] long-filename entry for "."     <- should not exist
+/// [1] "."   attr 0x10  first = own cluster
+/// [2] long-filename entry for ".."    <- should not exist
+/// [3] ".."  attr 0x10  first = parent cluster
+/// ```
+///
+/// Two rules broken. **`.` and `..` must be the first two entries** of a
+/// directory -- `fatfs` pushes them to slots 1 and 3 behind long-filename
+/// entries it should never generate for names that are already valid 8.3.
+/// And **`..` must hold cluster 0 when the parent is the root**, not the
+/// root's real cluster number.
+///
+/// The OS's own checker names both:
+///
+/// ```text
+/// Warning: Item /sources does not appear to be a subdirectory
+/// Warning: `..' entry in /sources has non-zero start cluster
+/// ```
+///
+/// macOS mounts such a volume regardless. Windows does not: on real
+/// hardware `diskpart` listed the partition as FAT32 with no drive letter,
+/// and Setup -- unable to reach its own installation source -- reported that
+/// a media driver was missing, a message with no visible connection to
+/// directory layout.
+///
+/// Applied to every directory, recursively: the ordering is wrong in all of
+/// them, while the cluster-zero rule applies only to those whose parent is
+/// the root.
+fn repair_directory_entries<H: Read + Write + Seek>(window: &mut H) -> Result<u32> {
+    let geometry = Fat32Geometry::read(window)?;
+    let root = geometry.root_cluster;
+    let mut repaired = 0;
+    // (cluster, parent is the root)
+    let mut pending: Vec<(u32, bool)> = subdirectories_of(window, &geometry, root)?
+        .into_iter()
+        .map(|c| (c, true))
+        .collect();
+
+    while let Some((cluster, parent_is_root)) = pending.pop() {
+        if repair_one_directory(window, &geometry, cluster, parent_is_root)? {
+            repaired += 1;
+        }
+        for child in subdirectories_of(window, &geometry, cluster)? {
+            pending.push((child, false));
+        }
+    }
+    window.flush().map_err(ArgosError::Io)?;
+    Ok(repaired)
+}
+
+/// First clusters of every subdirectory of the directory at `cluster`,
+/// skipping `.`, `..`, long-filename fragments and volume labels.
+fn subdirectories_of<H: Read + Seek>(
+    window: &mut H,
+    geometry: &Fat32Geometry,
+    cluster: u32,
+) -> Result<Vec<u32>> {
+    let mut found = Vec::new();
+    let mut current = Some(cluster);
+    while let Some(this) = current {
+        for sector_index in 0..geometry.sectors_per_cluster {
+            let mut sector = [0u8; 512];
+            window
+                .seek(SeekFrom::Start(
+                    (geometry.cluster_lba(this) + sector_index) * SECTOR_SIZE,
+                ))
+                .map_err(ArgosError::Io)?;
+            window.read_exact(&mut sector).map_err(ArgosError::Io)?;
+            for entry in sector.as_chunks::<32>().0 {
+                match entry[0] {
+                    0x00 => break,
+                    0xE5 | b'.' => continue,
+                    _ => {}
+                }
+                if entry[11] & 0x08 != 0 || entry[11] & 0x10 == 0 {
+                    continue;
+                }
+                let first = (u32::from(u16::from_le_bytes([entry[0x14], entry[0x15]])) << 16)
+                    | u32::from(u16::from_le_bytes([entry[0x1A], entry[0x1B]]));
+                if first >= 2 {
+                    found.push(first);
+                }
+            }
+        }
+        current = geometry.next_cluster(window, this)?;
+    }
+    Ok(found)
+}
+
+/// Rewrites one directory's first sector so `.` and `..` are entries 0 and
+/// 1, dropping the long-filename entries `fatfs` put in front of them and
+/// zeroing `..`'s cluster when the parent is the root. Returns whether
+/// anything changed.
+fn repair_one_directory<H: Read + Write + Seek>(
+    window: &mut H,
+    geometry: &Fat32Geometry,
+    cluster: u32,
+    parent_is_root: bool,
+) -> Result<bool> {
+    let lba = geometry.cluster_lba(cluster);
+    let mut sector = [0u8; 512];
+    window
+        .seek(SeekFrom::Start(lba * SECTOR_SIZE))
+        .map_err(ArgosError::Io)?;
+    window.read_exact(&mut sector).map_err(ArgosError::Io)?;
+
+    // Locate the real (non-long-filename) `.` and `..` entries.
+    let mut dot = None;
+    let mut dotdot = None;
+    for (index, entry) in sector.as_chunks::<32>().0.iter().enumerate() {
+        if entry[11] & 0x08 != 0 || entry[0] != b'.' {
+            continue;
+        }
+        if &entry[..11] == b".          " {
+            dot = Some((index, *entry));
+        } else if &entry[..11] == b"..         " {
+            dotdot = Some((index, *entry));
+        }
+    }
+    let (Some((dot_index, dot_entry)), Some((dotdot_index, mut dotdot_entry))) = (dot, dotdot)
+    else {
+        // Not a directory laid out the way fatfs lays them out; leave it be
+        // rather than guess.
+        return Ok(false);
+    };
+
+    if parent_is_root {
+        dotdot_entry[0x14] = 0;
+        dotdot_entry[0x15] = 0;
+        dotdot_entry[0x1A] = 0;
+        dotdot_entry[0x1B] = 0;
+    }
+
+    let already_correct = dot_index == 0 && dotdot_index == 1 && sector[32..64] == dotdot_entry[..];
+    if already_correct {
+        return Ok(false);
+    }
+
+    sector[..32].copy_from_slice(&dot_entry);
+    sector[32..64].copy_from_slice(&dotdot_entry);
+    // Free whatever those two used to sit behind. Only slots up to the old
+    // `..` are touched, so real file entries after it are left alone.
+    for index in 2..=dotdot_index.max(dot_index) {
+        sector[index * 32] = 0xE5;
+    }
+
+    window
+        .seek(SeekFrom::Start(lba * SECTOR_SIZE))
+        .map_err(ArgosError::Io)?;
+    window.write_all(&sector).map_err(ArgosError::Io)?;
+    Ok(true)
 }
 
 /// Confirms `bootmgr`'s directory entry sits in the **first cluster** of the
