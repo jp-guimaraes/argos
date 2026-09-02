@@ -691,6 +691,10 @@ const BPB_HIDDEN_SECTORS_OFFSET: usize = 0x1C;
 /// BPB offset of "bytes per sector".
 const BPB_BYTES_PER_SECTOR_OFFSET: usize = 0x0B;
 
+/// BPB offset of the sector holding FAT32's backup copy of the boot sector
+/// (6 in practice).
+const BPB_BACKUP_BOOT_SECTOR_OFFSET: usize = 0x32;
+
 /// Installs [`VBR_FAT32_CODE`] into an already-formatted FAT32 partition,
 /// **preserving the BPB** and patching its hidden-sectors field.
 ///
@@ -736,6 +740,25 @@ fn install_fat32_vbr<H: Read + Write + Seek>(
 
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     window.write_all(&sector).map_err(ArgosError::Io)?;
+
+    // FAT32 keeps a copy of the boot sector, at the sector the BPB names
+    // (6 in practice). Leaving it as `fatfs` wrote it makes the volume
+    // self-contradictory: the copy would still claim the volume starts at
+    // sector 0 of the disk, and carry no boot code. Windows' own tools
+    // update both, chkdsk compares them, and a recovery that fell back to
+    // the stale copy would produce media that had booted once and then
+    // stopped. Cheap to keep consistent; expensive to debug if not.
+    let backup_sector = u16::from_le_bytes([
+        sector[BPB_BACKUP_BOOT_SECTOR_OFFSET],
+        sector[BPB_BACKUP_BOOT_SECTOR_OFFSET + 1],
+    ]);
+    if backup_sector != 0 && backup_sector != 0xFFFF {
+        window
+            .seek(SeekFrom::Start(u64::from(backup_sector) * SECTOR_SIZE))
+            .map_err(ArgosError::Io)?;
+        window.write_all(&sector).map_err(ArgosError::Io)?;
+    }
+
     window.flush().map_err(ArgosError::Io)?;
     Ok(())
 }
@@ -1278,6 +1301,47 @@ mod tests {
 
         // And the sector must still be a boot sector.
         assert_eq!(&after[510..], &[0x55, 0xAA]);
+    }
+
+    /// FAT32's backup boot sector must match the primary. A stale copy makes
+    /// the volume self-contradictory -- the backup would still say the volume
+    /// starts at disk sector 0 and carry no boot code -- and anything that
+    /// fell back to it would get media that had booted once and then stopped.
+    #[test]
+    fn installing_the_vbr_keeps_the_backup_boot_sector_in_sync() {
+        let layout = WindowsMbrPlan::new(600_000_000);
+        let (start_lba, _) = layout.partition_sectors().unwrap();
+        let mut device = tempfile::tempfile().unwrap();
+        device.set_len(layout.total_bytes_required()).unwrap();
+        let mut window = PartitionWindow::new(&mut device, layout.windows_partition);
+        fatfs::format_volume(
+            &mut window,
+            fatfs::FormatVolumeOptions::new()
+                .fat_type(fatfs::FatType::Fat32)
+                .volume_label(*b"ARGOS-WIN  "),
+        )
+        .unwrap();
+
+        install_fat32_vbr(&mut window, start_lba).unwrap();
+
+        let mut primary = [0u8; 512];
+        window.seek(SeekFrom::Start(0)).unwrap();
+        window.read_exact(&mut primary).unwrap();
+
+        let backup_sector = u16::from_le_bytes([primary[0x32], primary[0x33]]);
+        assert_eq!(backup_sector, 6, "FAT32 puts its backup boot sector at 6");
+
+        let mut backup = [0u8; 512];
+        window
+            .seek(SeekFrom::Start(u64::from(backup_sector) * 512))
+            .unwrap();
+        window.read_exact(&mut backup).unwrap();
+
+        assert_eq!(
+            primary, backup,
+            "the backup boot sector must be a copy of the primary, boot code and \
+             patched hidden-sectors field included"
+        );
     }
 
     #[test]
