@@ -82,6 +82,7 @@ name = "argos-core"
 version = "0.1.0"
 dependencies = [
  "hadris-udf",
+ "libc",
  "newtua-cdfs",
  "serde",
  "sha2",
