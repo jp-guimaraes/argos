@@ -13,12 +13,13 @@ use crate::platform_select::current_platform;
 use argos_core::error::{ArgosError, Result};
 use argos_core::image;
 use argos_platform::PlatformOps;
-use argos_privileged::protocol::{Plan, VerifyPlan, VerifyWindowsPlan};
+use argos_privileged::protocol::{Plan, VerifyPlan, VerifyWindowsPlan, WindowsLayout};
 use std::path::PathBuf;
 
 pub struct Args {
     pub device: String,
     pub iso: PathBuf,
+    pub layout: WindowsLayout,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -70,6 +71,7 @@ fn run_windows_verify(args: &Args) -> Result<()> {
     let plan = VerifyWindowsPlan {
         device_path: args.device.clone(),
         iso_path: args.iso.clone(),
+        layout: args.layout,
     };
 
     let outcome = helper::run_plan(&Plan::VerifyWindowsImage(plan))?;

@@ -9,10 +9,10 @@ use super::helper;
 use crate::platform_select::current_platform;
 use argos_core::device::Device;
 use argos_core::error::{ArgosError, Result};
-use argos_core::partition::windows::WindowsPartitionPlan;
+use argos_core::partition::windows::{WindowsFat32Plan, WindowsPartitionPlan};
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
-use argos_privileged::protocol::{Plan, WritePlan, WriteWindowsPlan};
+use argos_privileged::protocol::{Plan, WindowsLayout, WritePlan, WriteWindowsPlan};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,7 @@ pub struct Args {
     pub no_verify: bool,
     pub no_eject: bool,
     pub i_know_what_im_doing: bool,
+    pub layout: WindowsLayout,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -103,24 +104,40 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
         return Err(ArgosError::WindowsImageRequiresLinux);
     }
 
-    let layout = windows_partition_plan_for(&args.iso)?;
-    preflight::check_windows_capacity(&device.platform_id, device.size_bytes, &args.iso, &layout)?;
-
-    if let Some(backing_device_id) = platform.backing_device_of(&args.iso)? {
-        preflight::check_no_source_target_collision(
-            &args.iso,
-            &backing_device_id,
-            &device.platform_id,
-        )?;
+    // Both branches compute their layout purely for the preflight + the
+    // confirmation prompt below -- the privileged side independently
+    // recomputes it either way (see windows_partition_plan_for).
+    match args.layout {
+        WindowsLayout::Ntfs => {
+            let layout = windows_partition_plan_for(&args.iso)?;
+            preflight::check_windows_capacity(
+                &device.platform_id,
+                device.size_bytes,
+                &args.iso,
+                &layout,
+            )?;
+            check_source_collision(platform, device, args)?;
+            confirm_windows_write_or_abort(device, &args.iso, &layout)?;
+        }
+        WindowsLayout::Fat32 => {
+            let layout = windows_fat32_plan_for(&args.iso)?;
+            preflight::check_windows_fat32_capacity(
+                &device.platform_id,
+                device.size_bytes,
+                &args.iso,
+                &layout,
+            )?;
+            check_source_collision(platform, device, args)?;
+            confirm_windows_fat32_write_or_abort(device, &args.iso, &layout)?;
+        }
     }
-
-    confirm_windows_write_or_abort(device, &args.iso, &layout)?;
 
     let plan = WriteWindowsPlan {
         device_path: device.platform_id.clone(),
         expected_serial: device.serial.clone(),
         expected_size_bytes: device.size_bytes,
         iso_path: args.iso.clone(),
+        layout: args.layout,
     };
 
     let outcome = helper::run_plan(&Plan::WriteWindowsImage(plan))?;
@@ -152,6 +169,37 @@ fn windows_partition_plan_for(iso: &Path) -> Result<WindowsPartitionPlan> {
         argos_privileged::windows::uefi_ntfs_image_size_bytes(),
         files_total_size_bytes,
     ))
+}
+
+/// [`windows_partition_plan_for`]'s FAT32 counterpart (phase 3 M3.5,
+/// backlog #43) -- same display-only role. Also front-runs the helper's
+/// own FAT32 per-file size check so an ISO whose `install.wim` can't fit
+/// fails here, with the clear dedicated error, *before* any sudo/pkexec
+/// prompt or destructive confirmation.
+fn windows_fat32_plan_for(iso: &Path) -> Result<WindowsFat32Plan> {
+    let files = image::windows::WindowsIso::open(iso)?.list_files()?;
+    for entry in &files {
+        if entry.size > argos_privileged::windows_fat32::FAT32_MAX_FILE_BYTES {
+            return Err(ArgosError::WindowsFileTooLargeForFat32 {
+                path: entry.path.clone(),
+                size_bytes: entry.size,
+            });
+        }
+    }
+    Ok(WindowsFat32Plan::new(files.iter().map(|f| f.size).sum()))
+}
+
+/// The source-on-target-device guard, shared verbatim by both Windows
+/// layouts (and the same check `run_dd_write` does inline).
+fn check_source_collision(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
+    if let Some(backing_device_id) = platform.backing_device_of(&args.iso)? {
+        preflight::check_no_source_target_collision(
+            &args.iso,
+            &backing_device_id,
+            &device.platform_id,
+        )?;
+    }
+    Ok(())
 }
 
 /// Ejects the just-written device. Never fails the command over this: the
@@ -247,6 +295,50 @@ fn confirm_windows_write_or_abort(
     );
     println!(
         "  partition 2 (Windows files, NTFS): {} at offset {}",
+        helper::human_size(layout.windows_partition.size_bytes),
+        helper::human_size(layout.windows_partition.start_offset_bytes)
+    );
+    println!();
+    println!(
+        "This will PERMANENTLY ERASE all data on {}.",
+        device.platform_id
+    );
+    print!("Type the device path ({}) to confirm: ", device.platform_id);
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    if input.trim() != device.platform_id {
+        println!("Confirmation did not match; aborting. Nothing was written.");
+        return Err(ArgosError::Cancelled);
+    }
+    Ok(())
+}
+
+/// The FAT32-layout confirmation prompt (phase 3 M3.5): same
+/// retype-the-device-path guard as [`confirm_windows_write_or_abort`], with
+/// the single-partition layout shown instead of two.
+fn confirm_windows_fat32_write_or_abort(
+    device: &Device,
+    iso: &Path,
+    layout: &WindowsFat32Plan,
+) -> Result<()> {
+    println!("About to overwrite:");
+    println!(
+        "  device:  {} ({})",
+        device.platform_id, device.display_name
+    );
+    println!("  size:    {}", helper::human_size(device.size_bytes));
+    println!(
+        "  serial:  {}",
+        device.serial.as_deref().unwrap_or("unknown")
+    );
+    println!("  image:   {} (Windows installer)", iso.display());
+    println!();
+    println!("Argos will create a new partition table with:");
+    println!(
+        "  partition 1 (Windows files, FAT32): {} at offset {}",
         helper::human_size(layout.windows_partition.size_bytes),
         helper::human_size(layout.windows_partition.start_offset_bytes)
     );

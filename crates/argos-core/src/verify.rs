@@ -81,6 +81,24 @@ pub fn verify_windows_partition_layout(
     Ok(())
 }
 
+/// [`verify_windows_partition_layout`]'s single-partition counterpart for
+/// the FAT32 layout (phase 3 M3, backlog #43): confirms the one Microsoft
+/// Basic Data partition a
+/// [`crate::partition::windows::WindowsFat32Plan`]-driven write should have
+/// produced. Same `>=` size posture as the two-partition check.
+pub fn verify_windows_fat32_layout(
+    plan: &crate::partition::windows::WindowsFat32Plan,
+    windows: ObservedPartition,
+) -> Result<()> {
+    check_partition(
+        "windows",
+        MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID,
+        "a Microsoft Basic Data Partition",
+        &plan.windows_partition,
+        &windows,
+    )
+}
+
 fn check_partition(
     label: &str,
     expected_type_guid: [u8; 16],

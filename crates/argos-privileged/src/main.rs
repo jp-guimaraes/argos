@@ -17,7 +17,7 @@
 //! unprivileged parent into a cancel signal here.
 
 use argos_core::progress::{Phase, ProgressSink};
-use argos_privileged::protocol::{Event, Plan};
+use argos_privileged::protocol::{Event, Plan, WindowsLayout};
 use std::io::{Read, Write};
 
 fn main() {
@@ -41,22 +41,40 @@ fn run() -> i32 {
             .map(|written_hash| Event::Done { written_hash }),
         Plan::Verify(verify_plan) => argos_privileged::execute_verify(&verify_plan, &JsonlProgress)
             .map(|hash| Event::VerifyOk { hash }),
-        Plan::WriteWindowsImage(windows_plan) => {
-            argos_privileged::windows::execute_write_windows_image(&windows_plan, &JsonlProgress)
-                .map(|outcome| Event::WindowsDone {
-                    files_copied: outcome.files_copied,
-                    bytes_copied: outcome.bytes_copied,
-                })
-        }
-        Plan::VerifyWindowsImage(verify_windows_plan) => {
-            argos_privileged::windows::execute_verify_windows_image(
+        Plan::WriteWindowsImage(windows_plan) => match windows_plan.layout {
+            WindowsLayout::Ntfs => argos_privileged::windows::execute_write_windows_image(
+                &windows_plan,
+                &JsonlProgress,
+            )
+            .map(|outcome| Event::WindowsDone {
+                files_copied: outcome.files_copied,
+                bytes_copied: outcome.bytes_copied,
+            }),
+            WindowsLayout::Fat32 => argos_privileged::windows_fat32::execute_write_windows_fat32(
+                &windows_plan,
+                &JsonlProgress,
+            )
+            .map(|outcome| Event::WindowsDone {
+                files_copied: outcome.files_copied,
+                bytes_copied: outcome.bytes_copied,
+            }),
+        },
+        Plan::VerifyWindowsImage(verify_windows_plan) => match verify_windows_plan.layout {
+            WindowsLayout::Ntfs => argos_privileged::windows::execute_verify_windows_image(
                 &verify_windows_plan,
                 &JsonlProgress,
             )
             .map(|outcome| Event::WindowsVerifyOk {
                 files_verified: outcome.files_verified,
-            })
-        }
+            }),
+            WindowsLayout::Fat32 => argos_privileged::windows_fat32::execute_verify_windows_fat32(
+                &verify_windows_plan,
+                &JsonlProgress,
+            )
+            .map(|outcome| Event::WindowsVerifyOk {
+                files_verified: outcome.files_verified,
+            }),
+        },
     };
 
     match result {

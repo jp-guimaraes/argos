@@ -73,6 +73,23 @@ pub const MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID: [u8; 16] = [
 /// USB stick capacity, undershooting it fails the write outright.
 pub const NTFS_OVERHEAD_MARGIN_BYTES: u64 = 100 * 1024 * 1024;
 
+/// Extra space reserved on top of the raw byte count of the Windows files
+/// when sizing the FAT32 partition (phase 3 M3, backlog #43): FAT tables
+/// (two copies), per-file cluster slack across the tens of thousands of
+/// small files a Windows image contains, and the root-directory tree. Same
+/// deliberately generous, uncalibrated posture as
+/// [`NTFS_OVERHEAD_MARGIN_BYTES`]; M5's real-hardware pass is what should
+/// calibrate it.
+pub const FAT32_OVERHEAD_MARGIN_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The smallest FAT32 partition the plan will ever lay out. FAT32 requires
+/// at least 65525 clusters, so *forcing* FAT32 (rather than letting the
+/// formatter fall back to FAT16, which UEFI firmware support for is far
+/// less universal) needs a floor: 512 MiB clears the minimum comfortably at
+/// every sane cluster size the formatter might pick. Real Windows media is
+/// >4 GiB so this floor only ever binds in tests.
+pub const FAT32_MIN_PARTITION_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Rounds `value` up to the next multiple of `boundary` (`value` itself if
 /// already a multiple).
 fn align_up(value: u64, boundary: u64) -> u64 {
@@ -141,6 +158,57 @@ impl WindowsPartitionPlan {
     /// not the raw ISO size -- is what the capacity preflight check
     /// (`preflight::check_windows_capacity`) compares a candidate device
     /// against.
+    pub fn total_bytes_required(&self) -> u64 {
+        align_up(
+            self.windows_partition.end_offset_bytes() + BACKUP_GPT_OVERHEAD_BYTES,
+            SECTOR_SIZE,
+        )
+    }
+}
+
+/// The single-partition layout for a FAT32 Windows installer write (phase 3
+/// M3, backlog #43): one Microsoft Basic Data partition holding the whole
+/// Windows installer file tree on FAT32, booted directly by the firmware via
+/// the ISO's own `efi/boot/bootx64.efi` -- no boot partition, no vendored
+/// driver image.
+///
+/// Type-GUID decision (M3.2, recorded): **Microsoft Basic Data, not EFI
+/// System Partition.** UEFI firmware boots removable media by scanning for
+/// `\efi\boot\bootx64.efi` on any FAT filesystem it can read -- the ESP type
+/// GUID is only load-bearing for *fixed* system disks. Rufus marks its FAT32
+/// Windows media basic-data and that boots everywhere it was ever tested;
+/// matching it keeps Argos on the most-travelled firmware path, and keeps
+/// Windows itself (which hides ESPs from Explorer) treating the stick as a
+/// normal data drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsFat32Plan {
+    pub windows_partition: PartitionRegion,
+}
+
+impl WindowsFat32Plan {
+    /// Lays out the single FAT32 partition from the one size that varies per
+    /// write: the sum of every file `image::windows::WindowsIso::list_files`
+    /// reports for this particular ISO (with `install.wim` already counted at
+    /// its split size once M2's splitter is in the pipeline -- the parts sum
+    /// to at most a header per part more than the original).
+    pub fn new(windows_files_total_size_bytes: u64) -> Self {
+        let start = align_up(PRIMARY_GPT_OVERHEAD_BYTES, ALIGNMENT_BYTES);
+        let size = align_up(
+            (windows_files_total_size_bytes + FAT32_OVERHEAD_MARGIN_BYTES)
+                .max(FAT32_MIN_PARTITION_BYTES),
+            SECTOR_SIZE,
+        );
+        Self {
+            windows_partition: PartitionRegion {
+                start_offset_bytes: start,
+                size_bytes: size,
+            },
+        }
+    }
+
+    /// The smallest device size (in bytes) this plan fits on -- the partition
+    /// plus the backup GPT structures that must follow it. Same contract as
+    /// [`WindowsPartitionPlan::total_bytes_required`].
     pub fn total_bytes_required(&self) -> u64 {
         align_up(
             self.windows_partition.end_offset_bytes() + BACKUP_GPT_OVERHEAD_BYTES,
@@ -249,6 +317,38 @@ mod tests {
         let small = WindowsPartitionPlan::new(UEFI_NTFS_IMAGE_SIZE, 1_000_000_000);
         let large = WindowsPartitionPlan::new(UEFI_NTFS_IMAGE_SIZE, 10_000_000_000);
         assert!(large.total_bytes_required() > small.total_bytes_required());
+    }
+
+    #[test]
+    fn fat32_partition_starts_at_the_first_1mib_aligned_lba_after_the_primary_gpt() {
+        let plan = WindowsFat32Plan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert_eq!(plan.windows_partition.start_offset_bytes, ALIGNMENT_BYTES);
+    }
+
+    #[test]
+    fn fat32_partition_size_includes_the_overhead_margin_and_is_sector_rounded() {
+        let plan = WindowsFat32Plan::new(WINDOWS_FILES_TOTAL_SIZE);
+        assert!(
+            plan.windows_partition.size_bytes
+                >= WINDOWS_FILES_TOTAL_SIZE + FAT32_OVERHEAD_MARGIN_BYTES
+        );
+        assert_eq!(plan.windows_partition.size_bytes % SECTOR_SIZE, 0);
+    }
+
+    #[test]
+    fn fat32_partition_never_shrinks_below_the_forced_fat32_floor() {
+        // A tiny synthetic ISO (the integration-test case) must still get a
+        // partition big enough to *force* FAT32 formatting on.
+        let plan = WindowsFat32Plan::new(1_000_000);
+        assert_eq!(plan.windows_partition.size_bytes, FAT32_MIN_PARTITION_BYTES);
+    }
+
+    #[test]
+    fn fat32_total_bytes_required_covers_the_partition_plus_the_backup_gpt() {
+        let plan = WindowsFat32Plan::new(WINDOWS_FILES_TOTAL_SIZE);
+        let required = plan.total_bytes_required();
+        assert!(required - plan.windows_partition.end_offset_bytes() >= BACKUP_GPT_OVERHEAD_BYTES);
+        assert_eq!(required % SECTOR_SIZE, 0);
     }
 
     #[test]

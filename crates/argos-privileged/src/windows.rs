@@ -348,10 +348,11 @@ fn write_partition_table(device_path: &str, layout: &WindowsPartitionPlan) -> Re
     Ok(())
 }
 
-/// 16 cryptographically random bytes, read from `/dev/urandom` -- Linux
-/// only (matching the rest of this write path), and dependency-free rather
-/// than pulling in a `uuid`/`rand` crate just for this.
-fn random_guid() -> Result<[u8; 16]> {
+/// 16 cryptographically random bytes, read from `/dev/urandom` (present on
+/// both Linux and macOS), dependency-free rather than pulling in a
+/// `uuid`/`rand` crate just for this. Shared with the FAT32 path
+/// (`crate::windows_fat32`), hence pub(crate).
+pub(crate) fn random_guid() -> Result<[u8; 16]> {
     let mut buf = [0u8; 16];
     File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut buf))
