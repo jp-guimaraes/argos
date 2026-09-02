@@ -86,6 +86,19 @@ jobs:
           sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
             --features test-overrides --test write_windows_fat32 \
             -- --ignored --nocapture --test-threads=1
+      # #56: confronts the FAT32 we write with implementations that have no
+      # stake in ours -- dosfstools' fsck.vfat for structure, the kernel's
+      # own vfat driver for content. This is the pairing that would have
+      # caught the directory defects Windows rejected: our write and verify
+      # both read through the same fatfs, so they agreed with each other
+      # while the medium was malformed. fsck.vfat needs no root (the
+      # partition is extracted to a file); the mount does, which is why this
+      # lives here rather than in the plain test job.
+      - run: sudo apt-get install -y dosfstools
+      - run: |
+          sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
+            --features test-overrides --test fat32_conformance_linux \
+            -- --ignored --nocapture --test-threads=1
 
   wim-split-oracle-tests:
     name: WIM splitter validation against wimlib (oracle)
