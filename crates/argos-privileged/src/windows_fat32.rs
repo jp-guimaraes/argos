@@ -1712,7 +1712,15 @@ mod tests {
         let file = device_file_for(&layout);
         let mut buffered = crate::partition_io::BufferedDevice::new(file).unwrap();
 
-        write_fat32_media(&mut buffered, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut buffered,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
         buffered.flush().unwrap();
         let mut file = buffered.into_inner();
 
