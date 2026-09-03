@@ -3,7 +3,7 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.5.0] - 2026-09-03
 
 Phase 3: **self-contained Windows installer media**, on Linux *and* macOS,
 for **UEFI *and* legacy BIOS** machines. See
@@ -54,6 +54,11 @@ machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob.
   stops the write.
 
 ### Fixed
+
+- **`argos --version` reported `0.1.0`.** The workspace version was never
+  bumped, so v1.0.0 shipped — tagged, released and published — announcing
+  itself as a pre-1.0 build. Set to `1.5.0` here, which is also the first
+  version string the binary has ever agreed with the changelog on.
 
 - A stale GPT surviving underneath the MBR layout (#59). `mbrman` writes
   sector 0 and nothing else, so a stick recycled from `--layout fat32` kept
@@ -107,6 +112,23 @@ accepted its installation source, split `.swm` parts included.
 
 Still open: an installation carried through to completion rather than stopping
 at disk selection, and Secure Boot (M5.3).
+
+### Known limitations
+
+- No GUI yet. Planned for 2.0; the CLI is architected so one can sit on the
+  same `argos-core`/`argos-platform` crates without a rewrite.
+- Windows as a *host* OS is still out of scope. Argos writes Windows media
+  **from** Linux and macOS.
+- Windows installer media has been carried to Setup's disk selection on real
+  hardware, on both firmwares and from both hosts, but not through a
+  completed installation.
+- Secure Boot is untested (M5.3).
+- A solid `.esd` larger than FAT32's 4GiB file limit cannot be written: only
+  a WIM can be split, and a solid ESD cannot. Use an ISO edition whose
+  install image is a WIM.
+- Non-hybrid ISOs are refused rather than partially supported.
+- A Homebrew tap is not published yet (crates.io and GitHub Releases are
+  both available today).
 
 ## [1.0.0] - 2026-08-30
 
