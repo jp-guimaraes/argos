@@ -13,6 +13,7 @@ name = "argos"
 path = "src/main.rs"
 
 [dependencies]
+ctrlc = { workspace = true }
 argos-core = { workspace = true }
 argos-platform = { workspace = true }
 argos-privileged = { workspace = true }

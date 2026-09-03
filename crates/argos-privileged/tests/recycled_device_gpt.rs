@@ -42,7 +42,7 @@
 
 use argos_core::image::windows::fixtures::udf_windows_installer_iso as windows_installer_iso;
 use argos_core::partition::windows::FAT32_MIN_PARTITION_BYTES;
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress};
 use argos_privileged::protocol::{WindowsLayout, WriteWindowsPlan};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -141,7 +141,11 @@ fn write_media(device: &str, iso: &Path, layout: WindowsLayout) {
         iso_path: iso.to_path_buf(),
         layout,
     };
-    let result = argos_privileged::windows_fat32::execute_write_windows_fat32(&plan, &NoopProgress);
+    let result = argos_privileged::windows_fat32::execute_write_windows_fat32(
+        &plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    );
     std::env::remove_var("ARGOS_TEST_FORCE_REMOVABLE");
     result.expect("writing the Windows installer media should succeed");
 }

@@ -21,7 +21,7 @@
 
 #![cfg(target_os = "linux")]
 
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress};
 use argos_privileged::protocol::{VerifyPlan, WritePlan};
 use std::io::Write;
 use std::process::Command;
@@ -104,7 +104,7 @@ fn writes_and_verifies_against_a_real_loop_device() {
         verify: true,
     };
 
-    let hash = argos_privileged::execute(&plan, &NoopProgress)
+    let hash = argos_privileged::execute(&plan, &NoopProgress, &CancelToken::new())
         .expect("write + verify against the loop device should succeed");
     assert_eq!(hash.len(), 64, "expected a hex SHA-256 digest");
 
@@ -144,7 +144,7 @@ fn refuses_when_the_plan_size_does_not_match_the_device_anymore() {
         verify: false,
     };
 
-    let err = argos_privileged::execute(&plan, &NoopProgress).unwrap_err();
+    let err = argos_privileged::execute(&plan, &NoopProgress, &CancelToken::new()).unwrap_err();
     assert!(matches!(
         err,
         argos_core::error::ArgosError::DeviceNotFound(_)
@@ -183,7 +183,8 @@ fn verify_matches_a_prior_write_against_a_real_loop_device() {
         image_size_bytes: image_contents.len() as u64,
         verify: false,
     };
-    argos_privileged::execute(&write_plan, &NoopProgress).expect("the write itself should succeed");
+    argos_privileged::execute(&write_plan, &NoopProgress, &CancelToken::new())
+        .expect("the write itself should succeed");
 
     let verify_plan = VerifyPlan {
         device_path: loop_device.path.clone(),
@@ -223,7 +224,8 @@ fn verify_rejects_a_device_that_does_not_match_the_iso() {
         image_size_bytes: 1024,
         verify: false,
     };
-    argos_privileged::execute(&write_plan, &NoopProgress).expect("the write itself should succeed");
+    argos_privileged::execute(&write_plan, &NoopProgress, &CancelToken::new())
+        .expect("the write itself should succeed");
 
     // ...then ask to verify against a different ISO entirely -- simulates
     // pointing `argos verify` at the wrong image, or a device that was

@@ -27,7 +27,11 @@ use std::io::Write;
 /// `plan.device_path`, and (unless `plan.verify` is false) reads it back to
 /// confirm it matches. This is everything `argos-helper` does; `main.rs` only
 /// adds stdin/stdout JSON framing around it.
-pub fn execute(plan: &WritePlan, progress: &dyn ProgressSink) -> Result<String> {
+pub fn execute(
+    plan: &WritePlan,
+    progress: &dyn ProgressSink,
+    cancel: &CancelToken,
+) -> Result<String> {
     let platform = platform_select::current_platform();
 
     let refreshed = platform.refresh(&plan.device_path, plan.expected_serial.as_deref())?;
@@ -56,13 +60,12 @@ pub fn execute(plan: &WritePlan, progress: &dyn ProgressSink) -> Result<String> 
     let mut device = OpenOptions::new().write(true).open(&plan.device_path)?;
 
     // No cancellation source is wired up yet -- see main.rs's module doc comment.
-    let cancel = CancelToken::new();
     let written_hash = dd_mode::write_stream(
         &mut image,
         &mut device,
         plan.image_size_bytes,
         progress,
-        &cancel,
+        cancel,
     )?;
     device.flush().map_err(ArgosError::Io)?;
     drop(device);
