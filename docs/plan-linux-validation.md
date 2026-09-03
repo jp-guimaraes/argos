@@ -25,12 +25,17 @@ testing rather than assuming.
 
 ## 2. Tasks, in order
 
-### L1 — Re-open the FAT32 conformance PR (#57)
+### L1 — Re-open the FAT32 conformance PR (#57) — **done, PR #61**
 
 GitHub closed it when the stack merge deleted its base branch, and a closed PR
 can be neither reopened nor retargeted. The branch `fat32-linux-conformance`
 survives on the remote with commit `4f4f965` intact. Open a fresh PR from it
 against `main`.
+
+Reopened as **#61**. The commit was cherry-picked onto current `main` rather
+than rebased (see the trap below — cherry-picking the single commit sidesteps
+it entirely) and revalidated there, `main` having since gained the MBR/BIOS
+layout and the BPB fixes.
 
 **Trap when rebasing:** the stack was merged with squash commits, so every SHA
 `main` absorbed is new. Git will report `add/add` conflicts on files whose
@@ -79,12 +84,31 @@ Worth checking specifically on Linux because the kernel caches partition
 tables and re-reads them on `BLKRRPART`, so a stale GPT can surface
 differently there than on macOS.
 
-### L4 — `fatfs`'s directory-entry defects (#56)
+**Automated half done, PR #62**: `recycled_device_gpt.rs` recycles one loop
+device from `fat32` to `fat32-bios`, detaching and re-attaching between writes
+so each probe reads the medium rather than a cached table, and asks
+`libblkid` (`blkid -p`) what the device carries — an opinion with no stake in
+our writer, and the same one `lsblk` and udev act on. It attaches *with*
+`--partscan`, unlike `write_windows_fat32.rs`, because the kernel parsing the
+table is the point. Raw signatures at LBA 1 and the last sector are asserted
+too. Still open: the same scenario on a physical stick, confirmed with
+`mediadiff.py`.
 
-Argos repairs them after the fact in `repair_directory_entries`. Confirmed
-upstream. Decide between tracking an upstream fix, vendoring a patch, or
-keeping the repair pass — and record the decision in `architecture.md`
-whichever way it goes.
+### L4 — `fatfs`'s directory-entry defects (#56) — **decided**
+
+Argos repairs them after the fact in `repair_directory_entries`.
+
+**Decision: the repair pass stays, and we wait for a release.** There is
+nothing to contribute upstream and nothing to vendor: `rust-fatfs` master (an
+unreleased 0.4.0, actively maintained) already fixes both defects, verified by
+compiling the same reproduction against each version — `..` is cluster 2 under
+0.3.6 and 0 under master, and `fsck.vfat -n` exits 1 on the first and 0 on the
+second. Master also initializes the FSINFO free-cluster count, the one note
+our media still draws. Adopting master early is not a version bump: it
+replaced the I/O surface with its own `IoBase`/`ReadWriteSeek` traits, so
+`windows_fat32` would need reworking. Rationale and evidence recorded in
+`architecture.md` (end of the `argos-privileged` section); when 0.4.0 ships,
+`repair_directory_entries` and the FSINFO note should go with it.
 
 ### L5 — M4.3: retire the NTFS layout, or keep it
 

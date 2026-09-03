@@ -400,6 +400,35 @@ exercised in `write_windows_image.rs`, both the happy path (verify right
 after a real write) and a file corrupted directly on the mounted partition
 afterward, confirming that's caught.
 
+**`fatfs`'s directory-entry defects, and why the repair pass stays**
+(phase 3 L4, backlog #56). `fatfs` 0.3.6 writes two things the FAT
+specification forbids: long-filename entries in front of `.` and `..`, which
+must be a directory's first two entries, and a `..` pointing at the root's
+real cluster where the specification requires zero when the parent is the
+root. Both are repaired after the copy by
+`windows_fat32::repair_directory_entries` rather than avoided at the source.
+
+The decision was between tracking an upstream fix, vendoring a patch, and
+keeping that repair pass. **The repair pass stays**, for now, because the
+upstream fix exists but is unreleased: crates.io serves 0.3.6, while
+[`rust-fatfs`](https://github.com/rafalh/rust-fatfs) master -- an unreleased
+0.4.0, actively maintained -- already fixes both defects, each exactly where
+the analysis in #56 pointed (`create_dir` asks `is_root_dir()` before filling
+in `..`; `write_entry` skips the long-name entries for `.` and `..`, its own
+comment noting they "need to be at the first two slots"). Verified rather than
+read: the same reproduction program compiled against each version writes `..`
+as cluster 2 under 0.3.6 and cluster 0 under master, and `fsck.vfat -n` exits
+1 on the first and 0 with clean output on the second. Master also initializes
+the FSINFO free-cluster count, which is why our media still draws that one
+remaining (spec-legal, status-neutral) `fsck` note.
+
+So there is nothing to contribute upstream and nothing to vendor -- only a
+release to wait for. Adopting master early is not a version bump: it replaced
+the I/O surface with its own `IoBase`/`ReadWriteSeek` traits (`std` types go
+through `StdIoWrapper`), so `windows_fat32` would need reworking. When 0.4.0
+ships, `repair_directory_entries` and the FSINFO note should go with it, and
+the FAT conformance tests on both hosts are what will say whether they can.
+
 ### `argos-cli`
 
 `argos list` lists every physical disk visible to the current platform backend
