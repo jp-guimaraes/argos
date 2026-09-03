@@ -1529,6 +1529,52 @@ mod tests {
         file
     }
 
+    /// Real-hardware regression guard: `mediadiff.py` found the backup boot
+    /// sector (and its dirty-flag byte, offset 0x41) diverging from the
+    /// primary on a physical stick written with `--layout fat32-bios`.
+    /// `installing_the_vbr_keeps_the_backup_boot_sector_in_sync` above
+    /// exercises `install_fat32_vbr` right after formatting, skipping the
+    /// steps in between (copying files, `fs.unmount()`) and, crucially,
+    /// the `BufferedDevice` wrapper `execute_write_windows_fat32` always
+    /// uses in production -- this test goes through the exact same
+    /// `write_fat32_media` call, over `BufferedDevice`, with real file
+    /// copying, to close that gap. It passes deterministically (5/5 runs)
+    /// on this software path, so the divergence seen on hardware did not
+    /// reproduce here; kept as a standing check in case a future change
+    /// reintroduces it.
+    #[test]
+    fn backup_boot_sector_matches_the_primary_after_a_buffered_mbr_write() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let plan = WindowsMbrPlan::new(actions.iter().map(CopyAction::bytes_on_target).sum());
+        let layout = TargetLayout::MbrBios(plan);
+        let file = device_file_for(&layout);
+        let mut buffered = crate::partition_io::BufferedDevice::new(file).unwrap();
+
+        write_fat32_media(&mut buffered, &layout, &iso, &actions, &NoopProgress).unwrap();
+        buffered.flush().unwrap();
+        let mut file = buffered.into_inner();
+
+        let region = layout.region();
+        let mut primary = [0u8; 512];
+        file.seek(SeekFrom::Start(region.start_offset_bytes))
+            .unwrap();
+        file.read_exact(&mut primary).unwrap();
+        let mut backup = [0u8; 512];
+        file.seek(SeekFrom::Start(region.start_offset_bytes + 6 * 512))
+            .unwrap();
+        file.read_exact(&mut backup).unwrap();
+
+        assert_eq!(
+            primary[0x41], 0x00,
+            "the filesystem-dirty flag should be clear after a clean unmount"
+        );
+        assert_eq!(
+            primary, backup,
+            "primary and backup boot sectors diverged after a buffered write"
+        );
+    }
+
     #[test]
     fn write_then_verify_round_trips_on_a_plain_file() {
         let (iso, files, _guard) = synthetic_iso();
