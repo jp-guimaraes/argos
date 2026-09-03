@@ -118,12 +118,12 @@ pub fn execute_write_windows_fat32(
     // SEEK_END, which gptman needs to lay out a new GPT. See its doc
     // comment -- without it this panics before writing a byte, on any real
     // macOS disk.
-    // Created here rather than plumbed in from the parent process, matching
-    // what `crate::windows` does: the copy loop checks this token on every
-    // write, but nothing outside this process can set it yet. Wiring a real
-    // source (SIGINT in the unprivileged parent, forwarded down the helper's
-    // stdin) is backlog #35 -- and when it lands, this line is the only thing
-    // in the FAT32 path that has to change.
+    // Created here rather than plumbed in from the parent process: the copy
+    // loop checks this token on every write, but nothing outside this process
+    // can set it yet. Wiring a real source (SIGINT in the unprivileged parent,
+    // forwarded down the helper's stdin) is backlog #35 -- and when it lands,
+    // this line and this function's signature are the only things in the
+    // FAT32 path that have to change.
     let cancel = CancelToken::new();
 
     let outcome = {
