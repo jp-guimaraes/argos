@@ -14,7 +14,8 @@ Everything below was confirmed by booting real machines, not by argument.
 |---|---|---|---|
 | `--layout fat32` (GPT) | macOS | UEFI | **Setup reaches disk selection**, with an unsplit `install.esd` and with a split `install.wim` |
 | `--layout fat32-bios` (MBR) | macOS | legacy BIOS | **Setup reaches disk selection** (Intel Atom N455, AMI BIOS 2011) |
-| `--layout fat32` / `fat32-bios` | **Linux** | either | **Unvalidated on real hardware.** This is M5.1, and it is the gap this plan exists to close |
+| `--layout fat32` (GPT) | **Linux** | UEFI | **Setup reaches disk selection** (M5.1, 2026-09-03) |
+| `--layout fat32-bios` (MBR) | **Linux** | legacy BIOS | **Setup reaches disk selection** (M5.1, 2026-09-03) |
 | `--layout ntfs` | Linux | UEFI | Works; superseded, pending the M4.3 retire-or-keep decision |
 
 Nothing in the FAT32 path is platform-specific: there is no `mkfs`, no mount,
@@ -25,12 +26,17 @@ testing rather than assuming.
 
 ## 2. Tasks, in order
 
-### L1 — Re-open the FAT32 conformance PR (#57)
+### L1 — Re-open the FAT32 conformance PR (#57) — **done, PR #61**
 
 GitHub closed it when the stack merge deleted its base branch, and a closed PR
 can be neither reopened nor retargeted. The branch `fat32-linux-conformance`
 survives on the remote with commit `4f4f965` intact. Open a fresh PR from it
 against `main`.
+
+Reopened as **#61**. The commit was cherry-picked onto current `main` rather
+than rebased (see the trap below — cherry-picking the single commit sidesteps
+it entirely) and revalidated there, `main` having since gained the MBR/BIOS
+layout and the BPB fixes.
 
 **Trap when rebasing:** the stack was merged with squash commits, so every SHA
 `main` absorbed is new. Git will report `add/add` conflicts on files whose
@@ -43,7 +49,20 @@ git diff origin/main:<file> <inherited-commit>:<file>
 Empty output means `main` holds exactly what the branch already inherited, and
 the branch's own version is the correct resolution.
 
-### L2 — M5.1: real-hardware validation from a Linux host
+### L2 — M5.1: real-hardware validation from a Linux host — **done**
+
+**Both cases passed on 2026-09-03**, from a Linux host (Arch, kernel 7.1),
+writing a real Windows 10 22H2 ISO (6.14 GB; `install.wim` 5.18 GB, so the
+splitter was exercised) to a physical SanDisk 28.7 GB stick: `--layout fat32`
+booted a UEFI machine and `--layout fat32-bios` booted a legacy BIOS machine,
+each reaching **Windows Setup's disk selection**. That is the same criterion
+the macOS side met, and it closes M5.1.
+
+With it, the FAT32 path is validated on real hardware from **both** hosts and
+on **both** firmwares — which is the whole of what phase 3 set out to prove,
+and what unblocks L5 (M4.3).
+
+The original instructions, kept for the record:
 
 The substance of this plan. Write from a Linux machine and boot the result:
 
@@ -79,16 +98,47 @@ Worth checking specifically on Linux because the kernel caches partition
 tables and re-reads them on `BLKRRPART`, so a stale GPT can surface
 differently there than on macOS.
 
-### L4 — `fatfs`'s directory-entry defects (#56)
+**Automated half done, PR #62**: `recycled_device_gpt.rs` recycles one loop
+device from `fat32` to `fat32-bios`, detaching and re-attaching between writes
+so each probe reads the medium rather than a cached table, and asks
+`libblkid` (`blkid -p`) what the device carries — an opinion with no stake in
+our writer, and the same one `lsblk` and udev act on. It attaches *with*
+`--partscan`, unlike `write_windows_fat32.rs`, because the kernel parsing the
+table is the point. Raw signatures at LBA 1 and the last sector are asserted
+too. The scenario has since also run on a physical stick, as part of M5.1: the
+same SanDisk was written `fat32` first and `fat32-bios` second, and the BIOS
+machine booted it through to disk selection. That is the acceptance criterion
+by symptom -- a surviving GPT is exactly what stopped Windows from lettering
+the volume, so reaching the installation source means it did not survive. The
+byte-level `mediadiff.py` dump was not captured during that run, so the
+confirmation is behavioural rather than structural; the automated test above
+covers the structure.
 
-Argos repairs them after the fact in `repair_directory_entries`. Confirmed
-upstream. Decide between tracking an upstream fix, vendoring a patch, or
-keeping the repair pass — and record the decision in `architecture.md`
-whichever way it goes.
+### L4 — `fatfs`'s directory-entry defects (#56) — **decided**
 
-### L5 — M4.3: retire the NTFS layout, or keep it
+Argos repairs them after the fact in `repair_directory_entries`.
 
-Gated on M5 being complete on both hosts. Retiring it removes the last
+**Decision: the repair pass stays, and we wait for a release.** There is
+nothing to contribute upstream and nothing to vendor: `rust-fatfs` master (an
+unreleased 0.4.0, actively maintained) already fixes both defects, verified by
+compiling the same reproduction against each version — `..` is cluster 2 under
+0.3.6 and 0 under master, and `fsck.vfat -n` exits 1 on the first and 0 on the
+second. Master also initializes the FSINFO free-cluster count, the one note
+our media still draws. Adopting master early is not a version bump: it
+replaced the I/O surface with its own `IoBase`/`ReadWriteSeek` traits, so
+`windows_fat32` would need reworking. Rationale and evidence recorded in
+`architecture.md` (end of the `argos-privileged` section); when 0.4.0 ships,
+`repair_directory_entries` and the FSINFO note should go with it.
+
+### L5 — M4.3: retire the NTFS layout, or keep it — **now unblocked**
+
+Gated on M5 being complete on both hosts, which L2 above just satisfied for
+the boot criterion (M5.3, Secure Boot, is still open but does not bear on
+this choice: it asks whether Microsoft's own signed loader is honoured, not
+whether NTFS earns its keep). Two things now need deciding together: whether
+the NTFS layout stays at all, and whether `--layout` should still **default**
+to `ntfs` — that default was explicitly conditioned on FAT32 lacking
+real-hardware validation, and it no longer does. Retiring it removes the last
 `mkfs.ntfs`/`ntfs-3g` shell-outs and the vendored `uefi-ntfs.img` blob, which
 is the entire point of phase 3. The argument for keeping it is that NTFS has
 no 4 GiB file limit and needs no splitting at all.

@@ -66,6 +66,29 @@ machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob.
 - `hadris-udf`, and with it the `check_windows_memory` preflight that existed
   only to refuse writes it would have OOMed on.
 
+### Verified against real hardware
+
+The acceptance criterion throughout was **Windows Setup reaching disk
+selection** — not the language screen, which proves only that the firmware
+found a bootloader. Reaching disk selection is what proves Setup found and
+accepted its installation source, split `.swm` parts included.
+
+- Media written **from macOS**: a UEFI machine (with an unsplit `install.esd`
+  and with a split `install.wim`) and a legacy-BIOS machine (Intel Atom N455
+  netbook, AMI BIOS dated 2011), through Argos's own MBR and VBR.
+- Media written **from Linux** (M5.1): a real Windows 10 22H2 ISO — 6.14 GB,
+  `install.wim` 5.18 GB, so the splitter is genuinely exercised — to a
+  physical 28.7 GB stick, booting a UEFI machine with `--layout fat32` and a
+  legacy-BIOS machine with `--layout fat32-bios`.
+- Both hosts, both firmwares, with no Windows machine, no `mkfs.ntfs`, no
+  `ntfs-3g`, no FUSE and no vendored binary blob anywhere in the path.
+- The stale-GPT scenario (#59) on real hardware: one stick written with the
+  GPT layout and then the MBR layout still reached its installation source,
+  which a surviving GPT would have prevented.
+
+Still open: an installation carried through to completion rather than stopping
+at disk selection, and Secure Boot (M5.3).
+
 ## [1.0.0] - 2026-08-30
 
 Initial release. Argos creates bootable Linux installer USB drives on
