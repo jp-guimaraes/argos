@@ -99,6 +99,18 @@ jobs:
           sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
             --features test-overrides --test fat32_conformance_linux \
             -- --ignored --nocapture --test-threads=1
+      # Phase 3 L3 (docs/plan-linux-validation.md): the #59 stale-GPT fix as
+      # the kernel sees it. windows_fat32's own unit test covers the bytes
+      # over a plain file; this covers what a file cannot -- Linux caches
+      # partition tables per block device, so the device is detached and
+      # re-attached between writes and libblkid, which has no stake in our
+      # writer, is asked what the medium carries. Attaches with --partscan,
+      # unlike the step above, because the kernel parsing the table is the
+      # point.
+      - run: |
+          sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
+            --features test-overrides --test recycled_device_gpt \
+            -- --ignored --nocapture --test-threads=1
 
   wim-split-oracle-tests:
     name: WIM splitter validation against wimlib (oracle)
