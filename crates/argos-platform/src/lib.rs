@@ -9,7 +9,7 @@
 
 use argos_core::device::Device;
 use argos_core::error::Result;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub trait PlatformOps {
     /// Lists every physical disk the backend can see (loop devices, device-mapper
@@ -38,22 +38,4 @@ pub trait PlatformOps {
     /// (e.g. a network filesystem) -- callers must treat that as "unproven", not
     /// as "safe".
     fn backing_device_of(&self, path: &Path) -> Result<Option<String>>;
-
-    /// Forces the OS to reread `device`'s partition table (backlog #27, W3):
-    /// needed right after a privileged process has written a brand new GPT
-    /// to it, so the partitions it just created show up as their own block
-    /// devices before they can be formatted or mounted.
-    fn reread_partition_table(&self, device: &Device) -> Result<()>;
-
-    /// Mounts partition `partition_number` (1-indexed, matching GPT partition
-    /// numbers) of `device` as NTFS and returns the mountpoint it was mounted
-    /// at (backlog #27, W3). The one relaxation of "no shelling out" the
-    /// phase 2 guiding decisions in `docs/architecture.md` call for --
-    /// implemented via the external `ntfs-3g` driver, not a kernel `mount(2)`
-    /// call, since that's the only formatting/mounting path proven across
-    /// the Linux distributions Argos targets.
-    fn mount_ntfs_partition(&self, device: &Device, partition_number: u32) -> Result<PathBuf>;
-
-    /// Unmounts a path previously returned by [`mount_ntfs_partition`].
-    fn unmount_path(&self, mount_path: &Path) -> Result<()>;
 }

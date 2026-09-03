@@ -71,9 +71,11 @@ moved on to NTFS:
   would violate both the no-third-party goal and, practically, the MIT/Apache
   licensing). This is the plan's hardest new piece, priced accordingly below.
 
-The NTFS path (W3–W5, already working on Linux) stays in the tree as a
-`--layout ntfs` fallback until the FAT32 path is validated on real hardware,
-then becomes non-default (or is retired — decision point M4.3).
+The NTFS path (W3–W5, already working on Linux) stayed in the tree as a
+`--layout ntfs` fallback until the FAT32 path was validated on real hardware
+(decision point M4.3, §5) — **retired**, once that validation landed on both
+hosts and both firmwares (M5.1/M5.2): see `docs/architecture.md`'s Status
+table for the scope of what came out with it.
 
 Independently of the layout decision, the UDF streaming problem (P1) must be
 fixed at the reader. Issue #40 established that `hadris-udf` cannot be
@@ -158,7 +160,7 @@ Each milestone below is synchronized to a GitHub issue (see §5).
 |---|---|---|---|
 | M4.1 | Lift `WindowsImageRequiresLinux` for the FAT32 layout; keep it for `--layout ntfs`. Ensure the macOS pre-write `diskutil unmountDisk` path covers the Windows flow (it already does for DD mode), and that `diskarbitrationd` doesn't remount mid-write. | M | macOS |
 | M4.2 | `hdiutil`-image integration test on macOS for the full FAT32 Windows write+verify (same pattern as the E9 tests). | M | macOS |
-| M4.3 | Decision point: once M5.2 passes, demote or retire the NTFS layout (and with it `mkfs.ntfs`, `ntfs-3g`, the vendored `uefi-ntfs.img`, and the three Linux-only `PlatformOps` methods W3 added). | L (the removal) / human (the decision) | any |
+| M4.3 | **Decided: retired**, not demoted, once M5.1/M5.2 validated the FAT32 layout on both hosts and both firmwares. `mkfs.ntfs`, `ntfs-3g`, the vendored `uefi-ntfs.img`, the two-partition `WindowsPartitionPlan`, and the three Linux-only `PlatformOps` methods W3 added are all removed from the tree (not merely unused); `--layout` now defaults to `fat32`, and `ntfs` is no longer a valid value. | L (the removal) / human (the decision) | any |
 
 ### M5 — Real-hardware validation (humans only)
 

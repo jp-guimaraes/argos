@@ -21,7 +21,7 @@
 use crate::diskutil::{self, DiskInfo};
 use argos_core::device::{Bus, Device};
 use argos_core::error::{ArgosError, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 pub struct MacOsPlatform;
@@ -115,29 +115,6 @@ impl argos_platform::PlatformOps for MacOsPlatform {
         };
         let parent = info.parent_whole_disk.unwrap_or(info.device_identifier);
         Ok(Some(format!("/dev/{parent}")))
-    }
-
-    // Windows installer writes (backlog #27) are Linux-only for now -- see
-    // `docs/architecture.md`'s phase 2 guiding decisions for why (macOS's
-    // only NTFS-write path, ntfs-3g via Homebrew on macFUSE, isn't reliably
-    // testable). A clear, honest error here rather than pretending to
-    // support a write path nothing has verified on this platform.
-    fn reread_partition_table(&self, _device: &Device) -> Result<()> {
-        Err(ArgosError::NotImplemented(
-            "Windows installer write support (macOS, phase 2)",
-        ))
-    }
-
-    fn mount_ntfs_partition(&self, _device: &Device, _partition_number: u32) -> Result<PathBuf> {
-        Err(ArgosError::NotImplemented(
-            "Windows installer write support (macOS, phase 2)",
-        ))
-    }
-
-    fn unmount_path(&self, _mount_path: &Path) -> Result<()> {
-        Err(ArgosError::NotImplemented(
-            "Windows installer write support (macOS, phase 2)",
-        ))
     }
 }
 

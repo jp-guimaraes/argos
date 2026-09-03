@@ -65,14 +65,14 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   pure-Rust `fatfs` over `argos-privileged::partition_io::PartitionWindow`,
   a Read+Write+Seek view bounded to the partition's byte range of the open
   whole-device fd -- no `mkfs`, no mount, no partition device nodes, no
-  partition-table reread, zero external processes in the write path. NTFS
-  stays the default layout until M5's real-hardware validation (decision
-  point M4.3); FAT32 refuses >4GiB-1 files with a dedicated error (exit 26)
-  until M2's WIM splitter slots into the copy pipeline. Both of those
-  conditions have since been met -- the splitter landed in M2, and M5 now
-  has FAT32 media booting real UEFI *and* legacy-BIOS machines to Windows
-  Setup's disk selection from both hosts -- so the `ntfs` default is
-  awaiting the M4.3 decision rather than awaiting evidence.)
+  partition-table reread, zero external processes in the write path. FAT32
+  refuses >4GiB-1 files with a dedicated error (exit 26) until M2's WIM
+  splitter slots into the copy pipeline -- it has since landed, and M5 put
+  FAT32 media booting real UEFI *and* legacy-BIOS machines to Windows
+  Setup's disk selection from both hosts. **M4.3 decision: NTFS is retired,
+  not merely demoted** -- `fat32` is the only layout Argos produces (plus
+  `fat32-bios` for legacy BIOS, M6); see the Status table below for the
+  scope of what came out of the tree with it.)
 - **`gptman`** (pure-Rust GPT), **`cdfs`** (ISO9660 reader, used here under
   the local dependency name `cdfs` but backed by the `newtua-cdfs` fork -- see
   below), and **`hadris-udf`** (pure-Rust UDF/ECMA-167 reader, added after W1
@@ -165,46 +165,48 @@ ordinary files and in-memory buffers -- no root, no real hardware.
   `cdfs` (see the phase 2 guiding decisions above, including the post-W1
   correction on why UDF has to come first). `WindowsIso` is a thin
   read-only wrapper (list files with their sizes, open one by path) over
-  whichever backend recognized the image, reused by W3 to copy the
-  extracted files onto the NTFS partition -- both backends stream, so the
-  copy runs in constant memory.
+  whichever backend recognized the image, reused by `windows_fat32` to copy
+  the extracted files onto the FAT32 partition -- both backends stream, so
+  the copy runs in constant memory.
 - `image::checksum`: streaming SHA-256, used both to fingerprint the source ISO
   and (once E5/E6 land) to verify what was actually written.
 - `preflight`: capacity and source/target-collision checks that run in the
   unprivileged process before the user is even asked to confirm anything --
   the same pattern balenaEtcher uses in its renderer process before handing
-  work to its privileged sidecar. `check_windows_capacity` (backlog #27, W2)
-  is the Windows-write equivalent of `check_capacity`: it compares the device
-  against `WindowsPartitionPlan::total_bytes_required` instead of the raw ISO
-  size, since a two-partition GPT layout needs more room than that.
-  A third check, `check_windows_memory` (#38, found running W6 against real
-  hardware), briefly guarded the UDF backend's whole-file-in-memory read --
-  a real Windows 10 ISO's `install.wim` had pushed a 7.7GB-RAM machine into
-  memory pressure severe enough for `systemd-oomd` to kill an unrelated
-  process sharing `argos-helper`'s cgroup. It was retired together with the
-  cost it guarded when `image::udf`'s streaming reader (phase 3 M1, #40)
-  made the copy constant-memory; its exit code (25) stays reserved rather
-  than reused.
-- `partition::windows` (backlog #27, W2): pure arithmetic, no disk I/O.
-  `WindowsPartitionPlan::new` lays out the UEFI:NTFS boot partition and the
-  NTFS Windows partition -- 1 MiB-aligned starts (the same convention
-  Windows Setup/Rufus/`parted` use), sector-rounded sizes, a fixed NTFS
-  overhead margin on top of the extracted files' raw byte total (deliberately
-  generous and uncalibrated; W6's real-hardware pass is what should tell us
-  whether it needs adjusting) -- and `total_bytes_required` folds in the
-  primary/backup GPT structure overhead for the capacity preflight check
-  above. W3 turns this plan into a real GPT via `gptman`.
-- `verify` (backlog #27, W4): `verify_windows_partition_layout` and
+  work to its privileged sidecar. `check_windows_fat32_capacity` (phase 3 M3,
+  backlog #43) is the Windows-write equivalent of `check_capacity`: it
+  compares the device against `WindowsFat32Plan::total_bytes_required`
+  instead of the raw ISO size, since the partition needs overhead margin and
+  GPT/MBR structures on top of that. An earlier `check_windows_memory` guard
+  (#38, found running the retired NTFS path's W6 against real hardware)
+  briefly guarded the UDF backend's whole-file-in-memory read -- a real
+  Windows 10 ISO's `install.wim` had pushed a 7.7GB-RAM machine into memory
+  pressure severe enough for `systemd-oomd` to kill an unrelated process
+  sharing `argos-helper`'s cgroup. It was retired together with the cost it
+  guarded when `image::udf`'s streaming reader (phase 3 M1, #40) made the
+  copy constant-memory; its exit code (25) stays reserved rather than reused.
+- `partition::windows` (phase 3 M3/M6, backlog #43/#45): pure arithmetic, no
+  disk I/O. `WindowsFat32Plan::new` (GPT) and `WindowsMbrPlan::new` (MBR, M6)
+  lay out the single FAT32 partition -- a 1 MiB-aligned start (the same
+  convention Windows Setup/Rufus/`parted` use), a sector-rounded size with a
+  fixed overhead margin on top of the extracted (and, where needed,
+  WIM-split) files' raw byte total (deliberately generous and uncalibrated;
+  M5's real-hardware pass is what told us it didn't need adjusting) -- and
+  `total_bytes_required` folds in the GPT/MBR structure overhead for the
+  capacity preflight check above. `windows_fat32` turns either plan into a
+  real partition table via `gptman`/`mbrman`.
+- `verify` (phase 3 M3, backlog #43): `verify_windows_fat32_layout` and
   `verify_windows_file_hash` are the Windows-write path's counterpart to
   `verify_written_image` above -- deliberately *not* a reuse of it, since
-  that function assumes one meaningful whole-device hash, and a
-  two-partition layout has none. Both are pure comparisons over plain data
+  that function assumes one meaningful whole-device hash, and a partitioned
+  write has none. Both are pure comparisons over plain data
   (`ObservedPartition` wraps a partition type GUID + region, carrying no
   `gptman` type -- only `argos-privileged`, which does the actual reading,
   links that crate), so they're unit-tested the same way as everything else
-  here: no disk, no privilege. `argos_privileged::windows::execute_verify_windows_image`
-  is what actually reads a real GPT and mounted NTFS partition and calls
-  into these.
+  here: no disk, no privilege.
+  `argos_privileged::windows_fat32::execute_verify_windows_fat32` is what
+  actually reads a real GPT/MBR and the FAT32 filesystem and calls into
+  these.
 
 ### `argos-platform` / `argos-platform-linux`
 
@@ -212,18 +214,12 @@ ordinary files and in-memory buffers -- no root, no real hardware.
 `/dev/sdX` parsing baked into the trait) so a real Windows backend could
 implement it later without the trait changing.
 
-Three methods added for the Windows write path (backlog #27, W3) --
-`reread_partition_table`, `mount_ntfs_partition`, `unmount_path` -- are
-Linux-only in practice: macOS returns `NotImplemented` for all three (see
-the phase 2 guiding decisions above), and Windows-as-host already returns
-`NotImplemented` for everything. `reread_partition_table` wraps the
-`BLKRRPART` ioctl via `gptman::linux` (cfg-gated to `target_os = "linux"`,
-since that module doesn't exist on other targets -- the one place this
-crate needs a compile-time OS split rather than the runtime-graceful-failure
-posture everything else here uses). `mount_ntfs_partition` shells out to
-`ntfs-3g` against a derived partition device path (`mounts::partition_device_path`,
-the reverse of the existing `whole_disk_of`) and returns a fresh `tempfile`
-mountpoint; `unmount_path` shells out to `umount`.
+Three methods the NTFS write path added (backlog #27, W3) --
+`reread_partition_table`, `mount_ntfs_partition`, `unmount_path` -- were
+removed from the trait and every backend along with that path itself
+(decision point M4.3): the FAT32 layout needs none of them, writing directly
+into the partition's byte range of the open whole-device fd instead of
+reading/formatting/mounting a filesystem node.
 
 The Linux backend enumerates disks by reading `/sys/block/*` directly (size,
 removable flag, vendor/model) and cross-referencing the udev database at
@@ -358,51 +354,60 @@ binary that is the only thing here meant to actually run privileged.
 helper process can currently trigger the `CancelToken` passed to the write
 loop, so a running write cannot yet be interrupted cleanly from the CLI side.
 
-`windows::execute_write_windows_image` (backlog #27, W3) is the UEFI:NTFS
-write path's equivalent of `execute`, dispatched via a third `Plan` variant,
-`WriteWindowsImage`. In one privileged elevation -- CONTRIBUTING.md's scoped
-exception to this crate's "keep it minimal" rule covers exactly this -- it
-re-validates the device (`validate_refreshed_device_for_windows_write`, the
-`WriteWindowsPlan` counterpart to the TOCTOU guard above), re-classifies and
-re-lists the source ISO itself (never trusting the plan's idea of what's on
-it), builds a `WindowsPartitionPlan`, writes a real GPT via `gptman`
-(protective MBR + one EFI System Partition entry + one Microsoft Basic Data
-entry, using `partition::windows`'s type GUID constants), `dd`s the vendored
-`uefi-ntfs.img` (embedded via `include_bytes!`; see
-`crates/argos-privileged/assets/PROVENANCE.md` for its provenance) onto
-partition 1, shells out to `mkfs.ntfs` to format partition 2 and to `ntfs-3g`
-(via two new `PlatformOps` methods, Linux-only for now) to mount it, then
-copies every file `image::windows::WindowsIso` lists onto it, hashing each
-one in the same pass (`image::checksum::copy_and_hash`) rather than reading
-it twice. A third new `PlatformOps` method wraps the `BLKRRPART` ioctl
-(via `gptman::linux`) so the two new partitions show up as their own block
-devices right after the GPT write, before formatting/mounting need them to.
-Exercised against a real file-backed loop device in
-`crates/argos-privileged/tests/write_windows_image.rs` (root + `losetup` +
-`mkfs.ntfs` + `ntfs-3g` gated, same posture as backlog E9's loop-device
-tests) -- confirmed passing for real in CI's `windows-write-tests` job (a
-real GPT, boot partition, `mkfs.ntfs`, `ntfs-3g` mount, and file copy, all on
-a GitHub-hosted `ubuntu-latest` runner), catching a real bug along the way:
-`losetup --find --show` alone doesn't enable partition scanning, so the
-loop device never got `/dev/loopNpM` nodes for `reread_partition_table` to
-find until `--partscan` was added to the test's own `losetup` call. Not yet
-run against real hardware (that's W6) or wired into the CLI (W5).
+**The NTFS write path (backlog #27, W3/W4) was retired at decision point
+M4.3**, once the FAT32 layout below was validated on real hardware from both
+hosts, on both firmwares (see the phase 2 guiding decisions above, and
+`docs/plan-phase3-self-contained.md` §5 / `docs/plan-linux-validation.md` for
+the record of that validation). `windows::execute_write_windows_image`/
+`execute_verify_windows_image`, the `WindowsPartitionPlan` two-partition
+layout, the vendored `uefi-ntfs.img` boot image, the `mkfs.ntfs`/`ntfs-3g`
+shell-outs, and the three `PlatformOps` methods that existed only to support
+them (`reread_partition_table`, `mount_ntfs_partition`, `unmount_path`) are
+all gone from the tree, not merely superseded in the CLI's default. Everyone
+sending Argos a `Plan::WriteWindowsImage`/`VerifyWindowsImage` with
+`WindowsLayout::Fat32`/`Fat32Bios` -- the only variants left -- reaches
+`windows_fat32::execute_write_windows_fat32`/`execute_verify_windows_fat32`
+instead; an old plan JSON with no `layout` key at all now defaults to
+`Fat32` rather than the retired `Ntfs` (`protocol.rs`'s backward-compatible
+`#[serde(default)]` still parses it, it simply means something different now
+than it did before M4.3, since the old meaning no longer exists to preserve).
 
-`windows::execute_verify_windows_image` (backlog #27, W4) is the same
-write path's verification counterpart, dispatched via a fourth `Plan`
-variant, `VerifyWindowsImage`, and following the same read-only posture
-`execute_verify`'s `VerifyPlan` already established (no TOCTOU refusal
-window, no `expected_serial`/`expected_size_bytes`). It re-derives the
-expected `WindowsPartitionPlan` from the source ISO exactly like the write
-path does, reads the real GPT off the device (`gptman::GPT::find_from`,
-auto-detecting 512- vs 4096-byte sectors) and checks it against the plan
-(`argos_core::verify::verify_windows_partition_layout`), hashes partition
-1's actual bytes against the vendored image, then mounts partition 2 and
-hashes every file `WindowsIso` lists against a fresh read of the source ISO
-(`argos_core::verify::verify_windows_file_hash`, one call per file). Also
-exercised in `write_windows_image.rs`, both the happy path (verify right
-after a real write) and a file corrupted directly on the mounted partition
-afterward, confirming that's caught.
+`windows_fat32::execute_write_windows_fat32` is `execute`'s Windows-write
+equivalent, dispatched via the same `WriteWindowsImage` `Plan` variant. In
+one privileged elevation -- CONTRIBUTING.md's scoped exception to this
+crate's "keep it minimal" rule covers exactly this -- it re-validates the
+device (`validate_refreshed_device_for_windows_write`), re-classifies and
+re-lists the source ISO itself (never trusting the plan's idea of what's on
+it), plans which files copy verbatim and which need WIM-splitting
+(`plan_copy_actions`, phase 3 M2.3/M3.5, backlog #42/#43), builds a
+`WindowsFat32Plan`/`WindowsMbrPlan` (GPT or MBR, per `plan.layout`), writes
+the partition table via `gptman`/`mbrman`, then formats and populates the
+one FAT32 partition through `fatfs` over a
+`partition_io::PartitionWindow`/`SizedDevice` -- a `Read+Write+Seek` view
+bounded to the partition's byte range of the open whole-device fd. No
+`mkfs`, no mount, no partition device nodes, no partition-table reread: the
+whole write is this process talking to one file descriptor. Every file is
+hashed in the same pass it's copied (`image::checksum::copy_and_hash`); an
+oversized `install.wim` streams through `image::wim`'s splitter into `.swm`
+parts instead (UDF read -> splitter -> `fatfs` write, still one pass).
+`repair_directory_entries` runs after the copy -- see below for why.
+Exercised against a real file-backed loop device in
+`crates/argos-privileged/tests/write_windows_fat32.rs` (root + `losetup`
+gated, no `mkfs.ntfs`/`ntfs-3g`/`--partscan` needed -- that difference from
+the retired NTFS path *is* M3's acceptance criterion), and validated on
+real hardware from both hosts (see above).
+
+`windows_fat32::execute_verify_windows_fat32` is the same write path's
+verification counterpart, dispatched via `VerifyWindowsImage`, following the
+same read-only posture `execute_verify`'s `VerifyPlan` established (no
+TOCTOU refusal window, no `expected_serial`/`expected_size_bytes`). It
+re-derives the expected layout from the source ISO exactly like the write
+path does, reads the real GPT/MBR off the device and checks it against the
+plan (`argos_core::verify::verify_windows_fat32_layout`/
+`verify_mbr_layout`), then reads the FAT32 filesystem back -- read-only,
+still no mount -- and hashes every file `WindowsIso` lists against a fresh
+read of the source ISO (`argos_core::verify::verify_windows_file_hash`, one
+call per file).
 
 **`fatfs`'s directory-entry defects, and why the repair pass stays**
 (phase 3 L4, backlog #56). `fatfs` 0.3.6 writes two things the FAT
@@ -487,7 +492,7 @@ a specific `WindowsImageRequiresLinux` error rather than only discovering
 | Privileged helper (`argos-helper`) | Implemented; end-to-end write+verify passes against a real file-backed Linux loop device, a real macOS `hdiutil`-attached disk image, and real physical USB drives on both Linux and macOS, including the TOCTOU re-validation guard in each case |
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
-| Windows ISO support (backlog #27) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming, refusing early and honestly on non-Linux hosts). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. First real-hardware W6 attempt (real Windows 10 ISO to a physical USB drive) surfaced a real memory-exhaustion bug (#38, `install.wim`'s whole-file-in-memory UDF read plus a memory-constrained machine OOM-killed an unrelated process); first mitigated with a `check_windows_memory` preflight refusal, then fixed for real by `image::udf`, Argos's own streaming UDF reader (phase 3 M1, #40 -- constant-memory copy confirmed at 3.5MB peak RSS streaming a 512MB fixture file; the preflight guard and `hadris-udf` runtime dependency were retired with it). `image::udf` since re-validated against **both** real official ISOs (M1.5): Windows 10 22H2 (5.18GB `install.wim`) and Windows 11 25H2 (7.58GB `install.wim`, checksum-verified against Microsoft's published SHA-256), each streamed at **3MiB peak RSS** with a digest byte-identical to macOS's own native UDF driver reading the same file. Phase 3 M3 (#43) added the pure-Rust FAT32 single-partition layout behind `--layout fat32|ntfs` (`WindowsFat32Plan`, `PartitionWindow`, `argos-privileged::windows_fat32`): write+verify round-trip covered by unit tests over plain files and a root-gated loop-device integration test needing only `losetup` -- no `mkfs.ntfs`/`ntfs-3g`/`--partscan`. Phase 3 M2 (#42) added `image::wim`, Argos's own WIM reader/splitter: it redistributes whole stored resources into `.swm` parts without ever decompressing or re-encoding (so the lookup table's SHA-1s stay valid by construction, and no XPRESS/LZX codec is needed), and is wired into the FAT32 copy as a stream (UDF -> splitter -> `fatfs`, hashing in one pass). Validated against wimlib as an external oracle -- including `wimlib-imagex apply` reproducing a source tree byte for byte from our parts -- and against **both real ISOs**: Windows 10 22H2 (71824 lookup entries, 2 parts of 3.98GB + 1.16GB, 1.3s) and Windows 11 25H2 (95219 entries, 7.06GB of resources into 3 parts of 3.46GB + 3.98GB + 0.08GB, 2.3s) -- every part under FAT32's 4GiB-1 limit, `plan_part_sizes` predicting each size exactly before a byte was read, and `wimlib-imagex verify` passing over all 11 images and every byte of file data in both cases. M4 (#34) then enabled the whole FAT32 path on **macOS**, superseding that issue's original macFUSE/`ntfs-3g` route entirely -- with no `mkfs`, no mount and no partition device nodes, nothing in the path is platform-specific. Two real macOS device-node quirks were found by running it against a real `hdiutil`-attached disk and are handled in `argos-privileged::partition_io`: `/dev/diskN` reports 0 for `SEEK_END` (which `gptman` needs to lay out a new GPT -- `SizedDevice` answers it from the already-validated device size), and it rejects `fcntl(F_FULLFSYNC)`, which `File::sync_all` maps to on macOS, with `ENOTTY` (`sync_device` falls back to plain `fsync(2)`, only on that exact errno). Full FAT32 write+verify passes on macOS via `hdiutil` with no macFUSE, no ntfs-3g and no root. **M5 real-hardware result (partial)**: media written from macOS to a physical USB stick booted a real UEFI machine to the Windows Setup start screen. That validates two decisions that until then were only arguments: the M3.2 choice of a Microsoft Basic Data type GUID over an ESP (firmware found and ran `efi/boot/bootx64.efi` on a basic-data partition, as Rufus's media does), and that the FAT32 `fatfs` writes is readable by real firmware rather than only by our own reader. Getting there also surfaced three bugs no automated test had caught: the CLI kept its own pre-splitter 4GiB check and so refused real Windows media the helper could write; `argos verify` opened the disk read-write while macOS had auto-mounted the fresh partition (`EBUSY`); and a write died mid-copy with `EBUSY`, apparently from that same auto-mount, now guarded by an exclusive (`O_EXCL`) open -- a fix that is **inferred rather than reproduced**, since `hdiutil` images are exempt from disk arbitration and never auto-mount. Still pending: taking Setup past disk selection (the acceptance criterion that proves the split `.swm` is accepted -- the machine tested could not be installed to), M5.1 (Linux host), M5.3 (Secure Boot), and the M4.3 decision on retiring the NTFS layout. **M6 (BIOS/MBR) is next and is not optional**: producing media for old lab machines is the use case that motivated the project. Its M6.1 decision is settled -- Argos writes its own MBR and FAT32 boot records from source under MIT/Apache, declining a GPL relicense that would have allowed porting `ms-sys`'s field-tested (but binary-blob) records. **M6 is now implemented and validated on real BIOS hardware.** M6.2-M6.5 (#45) added `WindowsMbrPlan`, Argos's own MBR boot code (279 of the 440 bytes available) and FAT32 VBR (418 of 420), both written from scratch in 16-bit assembly, plus a QEMU/SeaBIOS boot-chain test that boots media the product's own write path produced. `--layout fat32-bios` media written **from a Mac** then booted a real legacy-BIOS machine (Intel Atom N455 netbook, AMI BIOS dated 2011) through Argos's MBR, Argos's VBR, `bootmgr` and WinPE to Windows Setup's **disk selection** -- the acceptance criterion that had been pending, and the one that proves the split `.swm` is accepted by Setup itself. The same criterion was also met on a real UEFI machine, with both an unsplit `install.esd` and a split `install.wim`. That closes M2, M3, M4 and M6 against real hardware, from a host with no Windows machine, no `mkfs.ntfs`, no `ntfs-3g` and no vendored binary blob anywhere in the path. Getting there cost several rounds of lab testing against a symptom -- WinPE showing the volume as FAT32 with **no drive letter**, and Setup reporting a missing media driver -- that six separately-confirmed real defects failed to explain (zeroed CHS in the MBR entry, a desynchronized backup boot sector, a previous bootloader surviving a GPT write, `.`/`..` entries violating the FAT spec (#56), a fixed volume serial, and `BPB_HiddSec` left at 0 on the GPT path). The actual cause was found by dumping a written stick sector by sector and comparing it against Rufus-written media (`tools/mediadiff.py`): `mbrman` writes sector 0 and nothing else, so a stick previously written with `--layout fat32` kept its **entire GPT** -- primary header at LBA 1, entry array behind it, backup header in the device's last sector, every CRC still validating -- underneath an MBR whose first entry is a bootable FAT32 partition rather than the protective `0xEE` a GPT requires. Windows will not hand a volume on a disk in that state a drive letter, and the media still *boots*, which is what made it so hard to localize. `write_mbr_partition_table` now erases both GPT copies and `verify_mbr_layout` refuses media that still carries one (#59). It is also why emulation never reproduced the failure: the QEMU harness builds its media in a freshly truncated file, which has no stale GPT to leave behind -- only a recycled device reproduces it, and every lab stick had been written with the GPT layout first. **M5.1 (Linux host) is now closed too**: a real Windows 10 22H2 ISO written from a Linux host (Arch, kernel 7.1) to a physical SanDisk 28.7GB stick booted to Windows Setup's **disk selection** on a real UEFI machine with `--layout fat32` and on a real legacy-BIOS machine with `--layout fat32-bios` (2026-09-03). The FAT32 path is therefore validated against real hardware from **both** supported hosts and on **both** firmwares, which is the whole of what phase 3 set out to prove. That run also exercised the #59 recycled-stick scenario on real hardware -- the same stick took the GPT layout first and the MBR layout second, and Setup still reached its installation source, which a surviving GPT would have prevented. Still pending: an installation carried to completion rather than stopping at disk selection, M5.3 (Secure Boot), and the M4.3 decision on retiring the NTFS layout -- the latter now unblocked, and with it the question of whether `--layout` should still default to `ntfs`, a default that was explicitly conditioned on FAT32 lacking real-hardware validation |
+| Windows ISO support (backlog #27) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming, refusing early and honestly on non-Linux hosts). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. First real-hardware W6 attempt (real Windows 10 ISO to a physical USB drive) surfaced a real memory-exhaustion bug (#38, `install.wim`'s whole-file-in-memory UDF read plus a memory-constrained machine OOM-killed an unrelated process); first mitigated with a `check_windows_memory` preflight refusal, then fixed for real by `image::udf`, Argos's own streaming UDF reader (phase 3 M1, #40 -- constant-memory copy confirmed at 3.5MB peak RSS streaming a 512MB fixture file; the preflight guard and `hadris-udf` runtime dependency were retired with it). `image::udf` since re-validated against **both** real official ISOs (M1.5): Windows 10 22H2 (5.18GB `install.wim`) and Windows 11 25H2 (7.58GB `install.wim`, checksum-verified against Microsoft's published SHA-256), each streamed at **3MiB peak RSS** with a digest byte-identical to macOS's own native UDF driver reading the same file. Phase 3 M3 (#43) added the pure-Rust FAT32 single-partition layout behind `--layout fat32|ntfs` (`WindowsFat32Plan`, `PartitionWindow`, `argos-privileged::windows_fat32`): write+verify round-trip covered by unit tests over plain files and a root-gated loop-device integration test needing only `losetup` -- no `mkfs.ntfs`/`ntfs-3g`/`--partscan`. Phase 3 M2 (#42) added `image::wim`, Argos's own WIM reader/splitter: it redistributes whole stored resources into `.swm` parts without ever decompressing or re-encoding (so the lookup table's SHA-1s stay valid by construction, and no XPRESS/LZX codec is needed), and is wired into the FAT32 copy as a stream (UDF -> splitter -> `fatfs`, hashing in one pass). Validated against wimlib as an external oracle -- including `wimlib-imagex apply` reproducing a source tree byte for byte from our parts -- and against **both real ISOs**: Windows 10 22H2 (71824 lookup entries, 2 parts of 3.98GB + 1.16GB, 1.3s) and Windows 11 25H2 (95219 entries, 7.06GB of resources into 3 parts of 3.46GB + 3.98GB + 0.08GB, 2.3s) -- every part under FAT32's 4GiB-1 limit, `plan_part_sizes` predicting each size exactly before a byte was read, and `wimlib-imagex verify` passing over all 11 images and every byte of file data in both cases. M4 (#34) then enabled the whole FAT32 path on **macOS**, superseding that issue's original macFUSE/`ntfs-3g` route entirely -- with no `mkfs`, no mount and no partition device nodes, nothing in the path is platform-specific. Two real macOS device-node quirks were found by running it against a real `hdiutil`-attached disk and are handled in `argos-privileged::partition_io`: `/dev/diskN` reports 0 for `SEEK_END` (which `gptman` needs to lay out a new GPT -- `SizedDevice` answers it from the already-validated device size), and it rejects `fcntl(F_FULLFSYNC)`, which `File::sync_all` maps to on macOS, with `ENOTTY` (`sync_device` falls back to plain `fsync(2)`, only on that exact errno). Full FAT32 write+verify passes on macOS via `hdiutil` with no macFUSE, no ntfs-3g and no root. **M5 real-hardware result (partial)**: media written from macOS to a physical USB stick booted a real UEFI machine to the Windows Setup start screen. That validates two decisions that until then were only arguments: the M3.2 choice of a Microsoft Basic Data type GUID over an ESP (firmware found and ran `efi/boot/bootx64.efi` on a basic-data partition, as Rufus's media does), and that the FAT32 `fatfs` writes is readable by real firmware rather than only by our own reader. Getting there also surfaced three bugs no automated test had caught: the CLI kept its own pre-splitter 4GiB check and so refused real Windows media the helper could write; `argos verify` opened the disk read-write while macOS had auto-mounted the fresh partition (`EBUSY`); and a write died mid-copy with `EBUSY`, apparently from that same auto-mount, now guarded by an exclusive (`O_EXCL`) open -- a fix that is **inferred rather than reproduced**, since `hdiutil` images are exempt from disk arbitration and never auto-mount. Still pending: taking Setup past disk selection (the acceptance criterion that proves the split `.swm` is accepted -- the machine tested could not be installed to), M5.1 (Linux host), M5.3 (Secure Boot), and the M4.3 decision on retiring the NTFS layout. **M6 (BIOS/MBR) is next and is not optional**: producing media for old lab machines is the use case that motivated the project. Its M6.1 decision is settled -- Argos writes its own MBR and FAT32 boot records from source under MIT/Apache, declining a GPL relicense that would have allowed porting `ms-sys`'s field-tested (but binary-blob) records. **M6 is now implemented and validated on real BIOS hardware.** M6.2-M6.5 (#45) added `WindowsMbrPlan`, Argos's own MBR boot code (279 of the 440 bytes available) and FAT32 VBR (418 of 420), both written from scratch in 16-bit assembly, plus a QEMU/SeaBIOS boot-chain test that boots media the product's own write path produced. `--layout fat32-bios` media written **from a Mac** then booted a real legacy-BIOS machine (Intel Atom N455 netbook, AMI BIOS dated 2011) through Argos's MBR, Argos's VBR, `bootmgr` and WinPE to Windows Setup's **disk selection** -- the acceptance criterion that had been pending, and the one that proves the split `.swm` is accepted by Setup itself. The same criterion was also met on a real UEFI machine, with both an unsplit `install.esd` and a split `install.wim`. That closes M2, M3, M4 and M6 against real hardware, from a host with no Windows machine, no `mkfs.ntfs`, no `ntfs-3g` and no vendored binary blob anywhere in the path. Getting there cost several rounds of lab testing against a symptom -- WinPE showing the volume as FAT32 with **no drive letter**, and Setup reporting a missing media driver -- that six separately-confirmed real defects failed to explain (zeroed CHS in the MBR entry, a desynchronized backup boot sector, a previous bootloader surviving a GPT write, `.`/`..` entries violating the FAT spec (#56), a fixed volume serial, and `BPB_HiddSec` left at 0 on the GPT path). The actual cause was found by dumping a written stick sector by sector and comparing it against Rufus-written media (`tools/mediadiff.py`): `mbrman` writes sector 0 and nothing else, so a stick previously written with `--layout fat32` kept its **entire GPT** -- primary header at LBA 1, entry array behind it, backup header in the device's last sector, every CRC still validating -- underneath an MBR whose first entry is a bootable FAT32 partition rather than the protective `0xEE` a GPT requires. Windows will not hand a volume on a disk in that state a drive letter, and the media still *boots*, which is what made it so hard to localize. `write_mbr_partition_table` now erases both GPT copies and `verify_mbr_layout` refuses media that still carries one (#59). It is also why emulation never reproduced the failure: the QEMU harness builds its media in a freshly truncated file, which has no stale GPT to leave behind -- only a recycled device reproduces it, and every lab stick had been written with the GPT layout first. **M5.1 (Linux host) is now closed too**: a real Windows 10 22H2 ISO written from a Linux host (Arch, kernel 7.1) to a physical SanDisk 28.7GB stick booted to Windows Setup's **disk selection** on a real UEFI machine with `--layout fat32` and on a real legacy-BIOS machine with `--layout fat32-bios` (2026-09-03). The FAT32 path is therefore validated against real hardware from **both** supported hosts and on **both** firmwares, which is the whole of what phase 3 set out to prove. That run also exercised the #59 recycled-stick scenario on real hardware -- the same stick took the GPT layout first and the MBR layout second, and Setup still reached its installation source, which a surviving GPT would have prevented. **M4.3 is decided: the NTFS layout is retired, not merely demoted.** With M5.1 closing the boot criterion on both hosts and both firmwares, there was no longer a reason to carry `mkfs.ntfs`/`ntfs-3g` shell-outs, the vendored `uefi-ntfs.img` blob, the two-partition `WindowsPartitionPlan`, or the three NTFS-only `PlatformOps` methods -- keeping "NTFS has no 4GiB file limit" as a reason to keep the path stopped being persuasive once M2's splitter made that limit a non-issue for FAT32 too. `windows.rs`, `assets/`, `write_windows_image.rs`, and every NTFS-only code path across `argos-core`/`argos-platform*`/`argos-privileged`/`argos-cli` are gone from the tree; `--layout`'s default is now `fat32`, and `ntfs` is no longer a valid value (a plan JSON with no `layout` key -- from before the field existed -- now parses as `fat32`, the only meaning left for that default). Still pending: an installation carried to completion rather than stopping at disk selection, and M5.3 (Secure Boot) |
 | Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
 
 ## Prior art consulted

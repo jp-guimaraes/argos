@@ -17,7 +17,7 @@
 //! unprivileged parent into a cancel signal here.
 
 use argos_core::progress::{Phase, ProgressSink};
-use argos_privileged::protocol::{Event, Plan, WindowsLayout};
+use argos_privileged::protocol::{Event, Plan};
 use std::io::{Read, Write};
 
 fn main() {
@@ -41,46 +41,29 @@ fn run() -> i32 {
             .map(|written_hash| Event::Done { written_hash }),
         Plan::Verify(verify_plan) => argos_privileged::execute_verify(&verify_plan, &JsonlProgress)
             .map(|hash| Event::VerifyOk { hash }),
-        Plan::WriteWindowsImage(windows_plan) => match windows_plan.layout {
-            WindowsLayout::Ntfs => argos_privileged::windows::execute_write_windows_image(
+        // The plan's layout (WindowsLayout::Fat32 or Fat32Bios -- GPT/UEFI
+        // or MBR/BIOS) selects the partition table inside the same FAT32
+        // executor; there is only one Windows write path since NTFS's
+        // retirement (decision point M4.3, see docs/architecture.md).
+        Plan::WriteWindowsImage(windows_plan) => {
+            argos_privileged::windows_fat32::execute_write_windows_fat32(
                 &windows_plan,
                 &JsonlProgress,
             )
             .map(|outcome| Event::WindowsDone {
                 files_copied: outcome.files_copied,
                 bytes_copied: outcome.bytes_copied,
-            }),
-            // Both FAT32 schemes go to the same executor; the plan's layout
-            // is what selects GPT/UEFI or MBR/BIOS inside it.
-            WindowsLayout::Fat32 | WindowsLayout::Fat32Bios => {
-                argos_privileged::windows_fat32::execute_write_windows_fat32(
-                    &windows_plan,
-                    &JsonlProgress,
-                )
-                .map(|outcome| Event::WindowsDone {
-                    files_copied: outcome.files_copied,
-                    bytes_copied: outcome.bytes_copied,
-                })
-            }
-        },
-        Plan::VerifyWindowsImage(verify_windows_plan) => match verify_windows_plan.layout {
-            WindowsLayout::Ntfs => argos_privileged::windows::execute_verify_windows_image(
+            })
+        }
+        Plan::VerifyWindowsImage(verify_windows_plan) => {
+            argos_privileged::windows_fat32::execute_verify_windows_fat32(
                 &verify_windows_plan,
                 &JsonlProgress,
             )
             .map(|outcome| Event::WindowsVerifyOk {
                 files_verified: outcome.files_verified,
-            }),
-            WindowsLayout::Fat32 | WindowsLayout::Fat32Bios => {
-                argos_privileged::windows_fat32::execute_verify_windows_fat32(
-                    &verify_windows_plan,
-                    &JsonlProgress,
-                )
-                .map(|outcome| Event::WindowsVerifyOk {
-                    files_verified: outcome.files_verified,
-                })
-            }
-        },
+            })
+        }
     };
 
     match result {

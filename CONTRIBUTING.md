@@ -33,10 +33,12 @@ also documents the design decisions behind the current crate layout.
 - `crates/argos-privileged` -- `argos-helper`, the one binary meant to run as
   root. Keep it minimal and dumb by design (see the doc comment in its
   `main.rs`) -- do not add D-Bus or other heavy dependencies to this crate.
-  **Scoped exception** (backlog #27, decided when W3 landed): the Windows
-  installer write path does read the source ISO's file tree here, via
+  **Scoped exception** (backlog #27, decided when W3 landed; the write path
+  itself was replaced by phase 3's pure-Rust FAT32 layout, decision point
+  M4.3, but the exception still holds for it): the Windows installer write
+  path does read the source ISO's file tree here, via
   `argos_core::image::windows`/`cdfs`, so it can copy those files onto the
-  freshly-formatted NTFS partition and hash each one as it goes -- in a
+  freshly-formatted FAT32 partition and hash each one as it goes -- in a
   single privileged elevation, matching every other write path's UX, rather
   than splitting the operation across two separate `pkexec`/`sudo` prompts or
   redesigning the one-shot IPC protocol into a stateful one. Don't take this

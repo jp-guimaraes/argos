@@ -46,10 +46,7 @@ pub enum ArgosError {
         actual: String,
     },
 
-    #[error("writing or verifying a Windows installer image requires a Linux host with ntfs-3g installed, for now")]
-    WindowsImageRequiresLinux,
-
-    #[error("'{path}' is {size_bytes} bytes, over FAT32's 4GiB-1 file limit, and cannot be split to fit (only a WIM can be, and a solid .esd cannot); try --layout ntfs on a Linux host")]
+    #[error("'{path}' is {size_bytes} bytes, over FAT32's 4GiB-1 file limit, and cannot be split to fit (only a WIM can be, and a solid .esd cannot)")]
     WindowsFileTooLargeForFat32 { path: String, size_bytes: u64 },
 
     #[error("operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use")]
@@ -84,11 +81,14 @@ impl ArgosError {
             ArgosError::NotWindowsInstallerIso(_) => 21,
             ArgosError::WindowsPartitionLayoutMismatch(_) => 22,
             ArgosError::WindowsFileMismatch { .. } => 23,
-            ArgosError::WindowsImageRequiresLinux => 24,
-            // Exit code 25 (WindowsFileTooLargeForAvailableMemory) was
-            // retired with the guard itself when image::udf's streaming
+            // Exit code 24 (WindowsImageRequiresLinux) was retired along
+            // with the NTFS write path itself (phase 3 M4.3): the FAT32
+            // layout it gated has run on both hosts since M4 (#34), so
+            // nothing produces this error anymore. Exit code 25
+            // (WindowsFileTooLargeForAvailableMemory) was retired earlier,
+            // with the memory guard itself, when image::udf's streaming
             // reader removed the whole-file-in-memory cost (phase 3 M1,
-            // #40); it stays reserved rather than reused.
+            // #40). Both stay reserved rather than reused.
             ArgosError::WindowsFileTooLargeForFat32 { .. } => 26,
             // Distinct from Cancelled (18) on purpose: that one means a
             // write was interrupted partway and the media is unusable,

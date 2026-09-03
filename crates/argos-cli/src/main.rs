@@ -9,14 +9,14 @@ use std::path::PathBuf;
 /// `argos-privileged` (which runs elevated) never links against `clap`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum LayoutArg {
-    /// Two partitions: UEFI:NTFS boot + NTFS data (backlog #27). Needs
-    /// mkfs.ntfs and ntfs-3g, so Linux-only. Still the default until the
-    /// FAT32 layout is validated on real hardware (phase 3 M5).
-    Ntfs,
     /// One pure-Rust FAT32 partition (phase 3 M3/M2, backlog #43/#42): no
     /// external programs, no mounting. An install.wim over FAT32's 4GiB
     /// file limit is split into install.swm parts automatically. Works on
     /// Linux and macOS. GPT-partitioned, so it boots UEFI firmware only.
+    /// The only layout Argos produces -- an earlier two-partition
+    /// UEFI:NTFS scheme (backlog #27) was retired once this one was
+    /// validated on real hardware from both hosts, on both firmwares
+    /// (decision point M4.3, see docs/architecture.md).
     Fat32,
     /// The same FAT32 media, but MBR-partitioned and carrying Argos's own
     /// boot records, so it boots on **legacy BIOS machines too** (phase 3
@@ -28,7 +28,6 @@ enum LayoutArg {
 impl From<LayoutArg> for WindowsLayout {
     fn from(arg: LayoutArg) -> Self {
         match arg {
-            LayoutArg::Ntfs => WindowsLayout::Ntfs,
             LayoutArg::Fat32 => WindowsLayout::Fat32,
             LayoutArg::Fat32Bios => WindowsLayout::Fat32Bios,
         }
@@ -71,7 +70,7 @@ enum Command {
         i_know_what_im_doing: bool,
         /// On-disk layout for a Windows installer ISO (ignored for Linux
         /// ISOs, which are always written in DD mode).
-        #[arg(long, value_enum, default_value_t = LayoutArg::Ntfs)]
+        #[arg(long, value_enum, default_value_t = LayoutArg::Fat32)]
         layout: LayoutArg,
     },
     /// Re-run post-write verification against a device without writing again.
@@ -83,7 +82,7 @@ enum Command {
         iso: PathBuf,
         /// The layout the device was written with, for a Windows installer
         /// ISO (ignored for Linux ISOs).
-        #[arg(long, value_enum, default_value_t = LayoutArg::Ntfs)]
+        #[arg(long, value_enum, default_value_t = LayoutArg::Fat32)]
         layout: LayoutArg,
     },
 }

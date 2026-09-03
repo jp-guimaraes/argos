@@ -12,20 +12,15 @@ pub enum Phase {
     Checksumming,
     Writing,
     Verifying,
-    /// Creating the GPT for a Windows installer write (backlog #27, W3).
+    /// Creating the GPT for a Windows installer write (phase 3 M3, backlog
+    /// #43).
     Partitioning,
-    /// Formatting the NTFS partition (`mkfs.ntfs`) for a Windows installer
-    /// write (backlog #27, W3).
-    FormattingNtfs,
-    /// Mounting the freshly-formatted NTFS partition (`ntfs-3g`) for a
-    /// Windows installer write (backlog #27, W3).
-    Mounting,
     /// Formatting the FAT32 partition (pure-Rust `fatfs`, no external
     /// process and no mount) for a Windows installer write (phase 3 M3,
     /// backlog #43).
     FormattingFat32,
-    /// Copying the extracted Windows installer files onto the mounted NTFS
-    /// partition (backlog #27, W3).
+    /// Copying the extracted Windows installer files onto the FAT32
+    /// partition (phase 3 M3, backlog #43).
     CopyingFiles,
 }
 

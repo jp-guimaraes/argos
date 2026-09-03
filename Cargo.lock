@@ -103,7 +103,6 @@ version = "0.1.0"
 dependencies = [
  "argos-core",
  "argos-platform",
- "gptman",
  "libc",
  "tempfile",
  "zbus",
