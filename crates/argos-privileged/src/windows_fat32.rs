@@ -231,9 +231,7 @@ impl TargetLayout {
             WindowsLayout::Fat32Bios => {
                 TargetLayout::MbrBios(WindowsMbrPlan::new(files_total_bytes))
             }
-            // Ntfs never reaches this module; the CLI and helper route it to
-            // `crate::windows` instead.
-            _ => TargetLayout::Gpt(WindowsFat32Plan::new(files_total_bytes)),
+            WindowsLayout::Fat32 => TargetLayout::Gpt(WindowsFat32Plan::new(files_total_bytes)),
         }
     }
 }
