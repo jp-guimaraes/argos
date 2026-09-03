@@ -42,7 +42,7 @@ use argos_core::partition::windows::{
     CHS_SECTORS_PER_TRACK, MBR_BOOTABLE_FLAG, MBR_FAT32_LBA_PARTITION_TYPE,
     MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID, SECTOR_SIZE,
 };
-use argos_core::progress::{Phase, ProgressSink};
+use argos_core::progress::{CancelToken, Phase, ProgressSink};
 use argos_core::verify::{
     verify_windows_fat32_layout, verify_windows_file_hash, ObservedPartition,
 };
@@ -118,6 +118,14 @@ pub fn execute_write_windows_fat32(
     // SEEK_END, which gptman needs to lay out a new GPT. See its doc
     // comment -- without it this panics before writing a byte, on any real
     // macOS disk.
+    // Created here rather than plumbed in from the parent process, matching
+    // what `crate::windows` does: the copy loop checks this token on every
+    // write, but nothing outside this process can set it yet. Wiring a real
+    // source (SIGINT in the unprivileged parent, forwarded down the helper's
+    // stdin) is backlog #35 -- and when it lands, this line is the only thing
+    // in the FAT32 path that has to change.
+    let cancel = CancelToken::new();
+
     let outcome = {
         // Buffered under SizedDevice: the filesystem's writes are tiny and
         // its seeks are mostly redundant, and against a USB device node each
@@ -125,7 +133,7 @@ pub fn execute_write_windows_fat32(
         let buffered =
             crate::partition_io::BufferedDevice::new(&mut device_file).map_err(ArgosError::Io)?;
         let mut sized = SizedDevice::new(buffered, device.size_bytes);
-        let outcome = write_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
+        let outcome = write_fat32_media(&mut sized, &layout, &iso, &actions, progress, &cancel)?;
         // The buffer must reach the medium before the handle is dropped.
         sized.flush().map_err(ArgosError::Io)?;
         outcome
@@ -390,6 +398,7 @@ fn write_fat32_media<H: Read + Write + Seek>(
     iso: &WindowsIso,
     actions: &[CopyAction],
     progress: &dyn ProgressSink,
+    cancel: &CancelToken,
 ) -> Result<Fat32WriteOutcome> {
     progress.on_phase(Phase::Partitioning);
     match layout {
@@ -434,11 +443,25 @@ fn write_fat32_media<H: Read + Write + Seek>(
 
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).map_err(ArgosError::Io)?;
-    let copy_result = copy_files_fat32(&fs, iso, actions, progress);
+    let copy_result = copy_files_fat32(&fs, iso, actions, progress, cancel);
     // Unmount regardless of how the copy went -- it's what flushes the FAT
     // and FSInfo sectors -- but a copy error outranks an unmount error.
     let unmount_result = fs.unmount().map_err(ArgosError::Io);
-    let copied = copy_result?;
+    let copied = match copy_result {
+        Ok(copied) => copied,
+        Err(err) => {
+            // A cancelled write stops with a mountable, plausible-looking
+            // volume on the device. Destroy it, so the error's promise that
+            // the media must be rewritten is enforced rather than merely
+            // stated. Best-effort: the cancellation is what the caller needs
+            // to hear about, so a failure to invalidate must not replace it.
+            if matches!(err, ArgosError::Cancelled) {
+                let mut window = PartitionWindow::new(&mut *device, layout.region());
+                let _ = invalidate_fat32_volume(&mut window);
+            }
+            return Err(err);
+        }
+    };
     unmount_result?;
 
     // The filesystem is complete but not yet spec-conformant: fatfs puts
@@ -1096,6 +1119,10 @@ fn install_fat32_vbr<H: Read + Write + Seek>(
 /// Test-only re-export of [`write_fat32_media`], so the QEMU boot-chain test
 /// can assert against media the product's own write path produced rather
 /// than an approximation of it assembled by the test.
+///
+/// Cancellation is deliberately not exposed here: an integration test that
+/// wants it builds the token itself and calls `write_fat32_media`, which the
+/// in-module tests do.
 pub fn write_fat32_media_for_test<H: Read + Write + Seek>(
     device: &mut H,
     layout: &TargetLayout,
@@ -1103,7 +1130,7 @@ pub fn write_fat32_media_for_test<H: Read + Write + Seek>(
     actions: &[CopyAction],
     progress: &dyn ProgressSink,
 ) -> Result<Fat32WriteOutcome> {
-    write_fat32_media(device, layout, iso, actions, progress)
+    write_fat32_media(device, layout, iso, actions, progress, &CancelToken::new())
 }
 
 /// Test-only re-export of [`install_fat32_vbr`], so the QEMU boot-chain test
@@ -1304,11 +1331,107 @@ fn read_observed_fat32_partition<H: Read + Seek>(device: &mut H) -> Result<Obser
 
 /// Copies every listed file into the FAT32 filesystem, creating parent
 /// directories as needed and hashing each file as it's copied.
+/// The payload a cancelled copy carries inside an `io::Error`.
+///
+/// Cancellation has to travel out through `copy_and_hash` and `wim::split`,
+/// which speak `io::Result` and know nothing about [`CancelToken`]. Carrying a
+/// dedicated type rather than a message means the other end tells a cancelled
+/// write apart from a real I/O failure by `downcast`, not by string matching.
+#[derive(Debug)]
+struct CopyCancelled;
+
+impl std::fmt::Display for CopyCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the write was cancelled")
+    }
+}
+
+impl std::error::Error for CopyCancelled {}
+
+fn cancelled_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, CopyCancelled)
+}
+
+/// Maps an error out of the copy back into the domain: a cancellation
+/// surfaces as [`ArgosError::Cancelled`], anything else stays an I/O error.
+fn copy_error(err: std::io::Error) -> ArgosError {
+    if err
+        .get_ref()
+        .is_some_and(|inner| inner.is::<CopyCancelled>())
+    {
+        ArgosError::Cancelled
+    } else {
+        ArgosError::Io(err)
+    }
+}
+
+/// Wraps a writer so it refuses to keep going once `cancel` is set.
+///
+/// Checking on every `write` puts the granularity at one buffer of
+/// `copy_and_hash`'s copy loop, which is the same responsiveness
+/// `write::dd_mode` has had since v1 -- and it applies to a 4GB `.swm` part
+/// as much as to a 128-byte `autorun.inf`.
+struct CancellableWriter<'a, W> {
+    inner: W,
+    cancel: &'a CancelToken,
+}
+
+impl<W: Write> Write for CancellableWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.cancel.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Destroys the FAT32 volume's boot sector and its backup.
+///
+/// A cancelled write leaves media that **mounts**. The partition table and
+/// the filesystem are written before the copy starts, so an interrupted write
+/// yields a structurally valid FAT32 volume, labelled `ARGOS-WIN`, that lists
+/// files and looks plausible -- while missing files, or holding a truncated
+/// `install.swm`. That is unlike DD mode, where partial media is obviously
+/// broken and nobody is fooled.
+///
+/// [`ArgosError::Cancelled`] already promises the device "must be rewritten
+/// before use". This is what makes the promise true: with both boot sectors
+/// gone, no operating system will mount the volume, and a half-written stick
+/// cannot be mistaken for a good one on a lab bench.
+fn invalidate_fat32_volume<H: Read + Write + Seek>(window: &mut H) -> Result<()> {
+    let mut sector = [0u8; 512];
+    window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    window.read_exact(&mut sector).map_err(ArgosError::Io)?;
+
+    // Read where the backup lives before destroying the field that says so.
+    let backup_sector = u16::from_le_bytes([
+        sector[BPB_BACKUP_BOOT_SECTOR_OFFSET],
+        sector[BPB_BACKUP_BOOT_SECTOR_OFFSET + 1],
+    ]);
+
+    let zeros = [0u8; 512];
+    window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
+    window.write_all(&zeros).map_err(ArgosError::Io)?;
+    if backup_sector != 0 && backup_sector != 0xFFFF {
+        window
+            .seek(SeekFrom::Start(u64::from(backup_sector) * SECTOR_SIZE))
+            .map_err(ArgosError::Io)?;
+        window.write_all(&zeros).map_err(ArgosError::Io)?;
+    }
+    window.flush().map_err(ArgosError::Io)?;
+    Ok(())
+}
+
 fn copy_files_fat32<H: Read + Write + Seek>(
     fs: &fatfs::FileSystem<H>,
     iso: &WindowsIso,
     actions: &[CopyAction],
     progress: &dyn ProgressSink,
+    cancel: &CancelToken,
 ) -> Result<Fat32WriteOutcome> {
     progress.on_phase(Phase::CopyingFiles);
 
@@ -1318,16 +1441,26 @@ fn copy_files_fat32<H: Read + Write + Seek>(
     let mut files_copied = 0u64;
 
     for action in actions {
+        // Checked here as well as inside CancellableWriter: a long run of
+        // tiny files would otherwise sit between writes for a while, and a
+        // cancellation asked for before the first byte should not have to
+        // wait for one.
+        if cancel.is_cancelled() {
+            return Err(ArgosError::Cancelled);
+        }
         match action {
             CopyAction::Direct { path, size } => {
                 let source = open_iso_file(iso, path)?;
-                let mut dest = create_file_at(fs, path)?;
+                let mut dest = CancellableWriter {
+                    inner: create_file_at(fs, path)?,
+                    cancel,
+                };
                 // One pass: every byte read from the ISO is both hashed and
                 // written, same as the NTFS path's copy_files.
                 let hash = copy_and_hash(source, &mut dest, |chunk_done| {
                     progress.on_progress(bytes_done + chunk_done, total_bytes);
                 })
-                .map_err(ArgosError::Io)?;
+                .map_err(copy_error)?;
                 dest.flush().map_err(ArgosError::Io)?;
                 bytes_done += size;
                 files_copied += 1;
@@ -1347,6 +1480,7 @@ fn copy_files_fat32<H: Read + Write + Seek>(
                     bytes_done,
                     total_bytes,
                     progress,
+                    cancel,
                 )?;
                 bytes_done += part_sizes.iter().sum::<u64>();
                 files_copied += part_paths.len() as u64;
@@ -1396,6 +1530,7 @@ fn split_wim_onto_fat32<H: Read + Write + Seek>(
     bytes_done_before: u64,
     total_bytes: u64,
     progress: &dyn ProgressSink,
+    cancel: &CancelToken,
 ) -> Result<Vec<(String, String)>> {
     let mut reader = iso
         .open_file_seekable(source_path)
@@ -1417,9 +1552,16 @@ fn split_wim_onto_fat32<H: Read + Write + Seek>(
         struct PartSink<'a, H: Read + Write + Seek> {
             file: fatfs::File<'a, H>,
             hasher: Sha256,
+            cancel: &'a CancelToken,
         }
         impl<H: Read + Write + Seek> Write for PartSink<'_, H> {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                // The parts are the big files -- one of them runs to 4GB --
+                // so this is the check that makes cancelling a Windows write
+                // feel immediate rather than eventual.
+                if self.cancel.is_cancelled() {
+                    return Err(cancelled_error());
+                }
                 let n = self.file.write(buf)?;
                 self.hasher.update(&buf[..n]);
                 Ok(n)
@@ -1483,6 +1625,7 @@ fn split_wim_onto_fat32<H: Read + Write + Seek>(
                     sink: Some(PartSink {
                         file,
                         hasher: Sha256::new(),
+                        cancel,
                     }),
                     finished: &finished,
                 })
@@ -1495,7 +1638,7 @@ fn split_wim_onto_fat32<H: Read + Write + Seek>(
                 progress.on_progress(bytes_done_before + copied, total_bytes);
             },
         )
-        .map_err(ArgosError::Io)?;
+        .map_err(copy_error)?;
 
         for digest in finished.into_inner() {
             let path = part_paths
@@ -1554,8 +1697,15 @@ mod tests {
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
 
-        let outcome =
-            write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        let outcome = write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
         assert_eq!(outcome.files_copied, files.len() as u64);
         assert_eq!(
             outcome.bytes_copied,
@@ -1571,7 +1721,15 @@ mod tests {
         let actions = plan_copy_actions(&iso, &files).unwrap();
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         let observed = read_observed_fat32_partition(&mut device).unwrap();
         assert_eq!(
@@ -1597,7 +1755,15 @@ mod tests {
         let actions = plan_copy_actions(&iso, &files).unwrap();
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         let window = PartitionWindow::new(&mut device, layout.region());
         let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
@@ -1615,7 +1781,15 @@ mod tests {
         let actions = plan_copy_actions(&iso, &files).unwrap();
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         let expected = layout.start_lba().unwrap();
         assert_ne!(
@@ -1654,6 +1828,120 @@ mod tests {
     /// The BPB and the MBR partition entry describe the same disk, so they had
     /// better agree on its geometry. fatfs defaults to 32x64; chs_for_lba uses
     /// 255x63; Windows-made media carries 63/255.
+    /// Where FAT32 keeps its spare boot sector. Production code reads this
+    /// out of the BPB rather than assuming it; the test has to know it,
+    /// because by the time it looks the BPB is deliberately gone.
+    const FAT32_BACKUP_BOOT_SECTOR: u64 = 6;
+
+    /// Cancels the write the first time it is told about progress, so the
+    /// cancellation lands in the middle of a real copy rather than before it.
+    struct CancelOnFirstProgress {
+        cancel: CancelToken,
+    }
+
+    impl ProgressSink for CancelOnFirstProgress {
+        fn on_phase(&self, _phase: Phase) {}
+        fn on_progress(&self, _done: u64, _total: u64) {
+            self.cancel.cancel();
+        }
+    }
+
+    #[test]
+    fn a_write_cancelled_mid_copy_reports_cancelled() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mut device = device_file_for(&layout);
+
+        let cancel = CancelToken::new();
+        let progress = CancelOnFirstProgress {
+            cancel: cancel.clone(),
+        };
+        let err = write_fat32_media(&mut device, &layout, &iso, &actions, &progress, &cancel)
+            .expect_err("a cancelled write must not report success");
+
+        assert!(
+            matches!(err, ArgosError::Cancelled),
+            "expected Cancelled, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_write_cancelled_before_it_starts_reports_cancelled() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mut device = device_file_for(&layout);
+
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let err = write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress, &cancel)
+            .expect_err("a cancelled write must not report success");
+
+        assert!(matches!(err, ArgosError::Cancelled), "got {err:?}");
+    }
+
+    /// The reason cancellation needed more than an early return. Unlike DD
+    /// mode, where an interrupted write leaves obviously broken media, the
+    /// FAT32 path writes the partition table and formats the volume *before*
+    /// copying, so stopping mid-copy would otherwise leave a mountable,
+    /// correctly-labelled volume that merely happens to be missing files.
+    /// `ArgosError::Cancelled` promises the device must be rewritten; this is
+    /// what makes that true.
+    #[test]
+    fn a_cancelled_write_leaves_media_that_will_not_mount() {
+        let (iso, files, _guard) = synthetic_iso();
+        let actions = plan_copy_actions(&iso, &files).unwrap();
+        let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
+        let mut device = device_file_for(&layout);
+
+        // The premise: the same write, uncancelled, does leave a mountable
+        // volume. Without this the assertion below could pass for the wrong
+        // reason -- a write that never got as far as formatting.
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
+        {
+            let window = PartitionWindow::new(&mut device, layout.region());
+            fatfs::FileSystem::new(window, fatfs::FsOptions::new())
+                .expect("a completed write must leave a mountable volume");
+        }
+
+        let cancel = CancelToken::new();
+        let progress = CancelOnFirstProgress {
+            cancel: cancel.clone(),
+        };
+        let err = write_fat32_media(&mut device, &layout, &iso, &actions, &progress, &cancel)
+            .expect_err("the write was cancelled");
+        assert!(matches!(err, ArgosError::Cancelled), "got {err:?}");
+
+        let window = PartitionWindow::new(&mut device, layout.region());
+        assert!(
+            fatfs::FileSystem::new(window, fatfs::FsOptions::new()).is_err(),
+            "a cancelled write must leave a volume no operating system will mount"
+        );
+
+        // Both copies, not just the primary: a recovery tool that fell back to
+        // the backup boot sector would otherwise resurrect the half-written
+        // volume.
+        let mut window = PartitionWindow::new(&mut device, layout.region());
+        let mut backup = [0u8; 512];
+        window
+            .seek(SeekFrom::Start(FAT32_BACKUP_BOOT_SECTOR * SECTOR_SIZE))
+            .unwrap();
+        window.read_exact(&mut backup).unwrap();
+        assert_eq!(
+            backup, [0u8; 512],
+            "the backup boot sector must be destroyed too"
+        );
+    }
+
     /// A stick recycled from `--layout fat32` to `--layout fat32-bios` used to
     /// keep its entire GPT -- primary header at LBA 1, entry array behind it,
     /// backup header in the device's last sector, all CRCs still valid --
@@ -1684,7 +1972,15 @@ mod tests {
             )
             .unwrap();
 
-        write_fat32_media(&mut device, &gpt_layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &gpt_layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         // The premise: the first write really does leave a GPT behind. If this
         // ever stops holding, the test below stops testing anything.
@@ -1693,7 +1989,15 @@ mod tests {
         device.read_exact(&mut lba1).unwrap();
         assert_eq!(&lba1[..8], b"EFI PART");
 
-        write_fat32_media(&mut device, &mbr_layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &mbr_layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         device.seek(SeekFrom::Start(SECTOR_SIZE)).unwrap();
         device.read_exact(&mut lba1).unwrap();
@@ -1727,7 +2031,15 @@ mod tests {
             )),
         ] {
             let mut device = device_file_for(&layout);
-            write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+            write_fat32_media(
+                &mut device,
+                &layout,
+                &iso,
+                &actions,
+                &NoopProgress,
+                &CancelToken::new(),
+            )
+            .unwrap();
 
             let mut window = PartitionWindow::new(&mut device, layout.region());
             let mut boot = [0u8; 512];
@@ -1753,7 +2065,15 @@ mod tests {
         let actions = plan_copy_actions(&iso, &files).unwrap();
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         // Corrupt the first byte of the largest file's content by finding it
         // through the filesystem itself (window + fatfs, read-write).
@@ -1800,7 +2120,15 @@ mod tests {
         let mut serials = Vec::new();
         for _ in 0..2 {
             let mut device = device_file_for(&layout);
-            write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+            write_fat32_media(
+                &mut device,
+                &layout,
+                &iso,
+                &actions,
+                &NoopProgress,
+                &CancelToken::new(),
+            )
+            .unwrap();
             let mut boot = [0u8; 512];
             device
                 .seek(SeekFrom::Start(layout.region().start_offset_bytes))
@@ -1950,7 +2278,15 @@ mod tests {
         device.seek(SeekFrom::Start(0)).unwrap();
         device.write_all(&[0xE9u8; 440]).unwrap();
 
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         let mut bootstrap = [0u8; 440];
         device.seek(SeekFrom::Start(0)).unwrap();
@@ -2089,7 +2425,8 @@ mod tests {
         window.seek(SeekFrom::Start(0)).unwrap();
         let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).unwrap();
         assert_eq!(fs.fat_type(), fatfs::FatType::Fat32);
-        let copied = copy_files_fat32(&fs, &iso, &actions, &NoopProgress).unwrap();
+        let copied =
+            copy_files_fat32(&fs, &iso, &actions, &NoopProgress, &CancelToken::new()).unwrap();
         assert_eq!(copied.files_copied, files.len() as u64);
         fs.unmount().unwrap();
     }
@@ -2114,7 +2451,15 @@ mod tests {
 
         // `bootmgr` must come from somewhere the copy can read; the fixture
         // ISO has `bootmgr` at its root, so the Direct action resolves.
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         let mut sector0 = [0u8; 512];
         device.seek(SeekFrom::Start(0)).unwrap();
@@ -2157,8 +2502,15 @@ mod tests {
             TargetLayout::for_layout(WindowsLayout::Fat32Bios, total_bytes_on_target(&actions));
         let mut device = device_file_for(&layout);
 
-        let err = write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress)
-            .expect_err("media with no bootmgr in the root directory must be refused");
+        let err = write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .expect_err("media with no bootmgr in the root directory must be refused");
         assert!(
             err.to_string().contains("bootmgr"),
             "the refusal should name what is missing; got: {err}"
@@ -2249,7 +2601,15 @@ mod tests {
         let actions = plan_copy_actions(&iso, &files).unwrap();
         let layout = TargetLayout::Gpt(fat32_layout_for(&actions));
         let mut device = device_file_for(&layout);
-        write_fat32_media(&mut device, &layout, &iso, &actions, &NoopProgress).unwrap();
+        write_fat32_media(
+            &mut device,
+            &layout,
+            &iso,
+            &actions,
+            &NoopProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
 
         // Write a synthetic multi-resource WIM into the FAT32 filesystem by
         // splitting it, exactly as split_wim_onto_fat32 does, and read the
