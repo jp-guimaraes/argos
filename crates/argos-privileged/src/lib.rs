@@ -11,7 +11,6 @@
 pub mod partition_io;
 pub mod platform_select;
 pub mod protocol;
-pub mod windows;
 pub mod windows_fat32;
 
 use argos_core::error::{ArgosError, Result};

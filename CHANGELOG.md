@@ -65,6 +65,15 @@ machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob.
 
 - `hadris-udf`, and with it the `check_windows_memory` preflight that existed
   only to refuse writes it would have OOMed on.
+- **The NTFS/UEFI:NTFS Windows write path** (`--layout ntfs`), retired at
+  decision point M4.3 once `--layout fat32`/`fat32-bios` was validated on
+  real hardware from both hosts and both firmwares (see below). Out of the
+  tree, not just unused: the vendored `uefi-ntfs.img` boot image and its
+  provenance doc, the `mkfs.ntfs`/`ntfs-3g` shell-outs, the two-partition
+  `WindowsPartitionPlan`, and the three `PlatformOps` methods that existed
+  only to support it (`reread_partition_table`, `mount_ntfs_partition`,
+  `unmount_path`). `--layout` now defaults to `fat32`; `ntfs` is no longer a
+  valid value.
 
 ### Verified against real hardware
 

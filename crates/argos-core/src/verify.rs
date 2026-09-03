@@ -6,10 +6,7 @@
 
 use crate::error::{ArgosError, Result};
 use crate::image::checksum::sha256_stream;
-use crate::partition::windows::{
-    PartitionRegion, WindowsPartitionPlan, EFI_SYSTEM_PARTITION_TYPE_GUID,
-    MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID,
-};
+use crate::partition::windows::{PartitionRegion, MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID};
 use crate::progress::{Phase, ProgressSink};
 use std::io::Read;
 
@@ -47,45 +44,18 @@ pub struct ObservedPartition {
     pub region: PartitionRegion,
 }
 
-/// Confirms a real GPT (already read off the device) matches what
-/// [`crate::partition::windows::WindowsPartitionPlan`]-driven write
-/// (`argos_privileged::windows::execute_write_windows_image`, W3) should
-/// have produced: right partition type GUIDs, each partition starting at
-/// exactly its planned offset with at least its planned size. Size uses
-/// `>=` rather than `==` since W3 always writes the exact planned size
-/// today, but a future "extend the Windows partition to fill the rest of
-/// the device" change shouldn't need this check to change too.
+/// Confirms a real GPT (already read off the device) matches what a
+/// [`crate::partition::windows::WindowsFat32Plan`]-driven write
+/// (`argos_privileged::windows_fat32`, phase 3 M3, backlog #43) should have
+/// produced: right partition type GUID, the partition starting at exactly
+/// its planned offset with at least its planned size. Size uses `>=` rather
+/// than `==` since the write always writes the exact planned size today, but
+/// a future "extend the partition to fill the rest of the device" change
+/// shouldn't need this check to change too.
 ///
 /// This is the "not `verify_written_image`, which assumes a whole-device
-/// hash" strategy the write path always needed -- a two-partition layout
-/// has no single meaningful whole-device hash to compare against.
-pub fn verify_windows_partition_layout(
-    plan: &WindowsPartitionPlan,
-    boot: ObservedPartition,
-    windows: ObservedPartition,
-) -> Result<()> {
-    check_partition(
-        "boot",
-        EFI_SYSTEM_PARTITION_TYPE_GUID,
-        "an EFI System Partition",
-        &plan.boot_partition,
-        &boot,
-    )?;
-    check_partition(
-        "windows",
-        MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID,
-        "a Microsoft Basic Data Partition",
-        &plan.windows_partition,
-        &windows,
-    )?;
-    Ok(())
-}
-
-/// [`verify_windows_partition_layout`]'s single-partition counterpart for
-/// the FAT32 layout (phase 3 M3, backlog #43): confirms the one Microsoft
-/// Basic Data partition a
-/// [`crate::partition::windows::WindowsFat32Plan`]-driven write should have
-/// produced. Same `>=` size posture as the two-partition check.
+/// hash" strategy the Windows write path needs -- a partition layout has no
+/// single meaningful whole-device hash to compare against.
 pub fn verify_windows_fat32_layout(
     plan: &crate::partition::windows::WindowsFat32Plan,
     windows: ObservedPartition,
@@ -127,9 +97,10 @@ fn check_partition(
 }
 
 /// Compares one file's expected hash (from a fresh read of the source ISO)
-/// against its actual hash (from a fresh read of what's on the mounted NTFS
-/// partition) -- the per-file half of W4's verification strategy, run once
-/// per file `image::windows::WindowsIso::list_files` reported.
+/// against its actual hash (from a fresh read of what's on the written
+/// Windows partition) -- the per-file half of the Windows write path's
+/// verification strategy, run once per file
+/// `image::windows::WindowsIso::list_files` reported.
 pub fn verify_windows_file_hash(path: &str, expected: &str, actual: &str) -> Result<()> {
     if expected != actual {
         return Err(ArgosError::WindowsFileMismatch {
@@ -199,59 +170,52 @@ mod tests {
         assert!(matches!(err, ArgosError::ChecksumMismatch { .. }));
     }
 
-    fn matching_plan_and_observed() -> (WindowsPartitionPlan, ObservedPartition, ObservedPartition)
-    {
-        let plan = WindowsPartitionPlan::new(1_474_560, 4_000_000_000);
-        let boot = ObservedPartition {
-            partition_type_guid: EFI_SYSTEM_PARTITION_TYPE_GUID,
-            region: plan.boot_partition,
-        };
+    fn matching_fat32_plan_and_observed() -> (
+        crate::partition::windows::WindowsFat32Plan,
+        ObservedPartition,
+    ) {
+        let plan = crate::partition::windows::WindowsFat32Plan::new(4_000_000_000);
         let windows = ObservedPartition {
             partition_type_guid: MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID,
             region: plan.windows_partition,
         };
-        (plan, boot, windows)
+        (plan, windows)
     }
 
     #[test]
-    fn accepts_a_layout_matching_the_plan_exactly() {
-        let (plan, boot, windows) = matching_plan_and_observed();
-        assert!(verify_windows_partition_layout(&plan, boot, windows).is_ok());
+    fn accepts_a_fat32_layout_matching_the_plan_exactly() {
+        let (plan, windows) = matching_fat32_plan_and_observed();
+        assert!(verify_windows_fat32_layout(&plan, windows).is_ok());
     }
 
     #[test]
-    fn accepts_partitions_larger_than_planned() {
-        // A future "extend to fill the device" write, or simply a plan
-        // recomputed slightly more conservatively than what was actually
-        // written, should not fail verification -- only undersized or
-        // misplaced partitions should.
-        let (plan, mut boot, mut windows) = matching_plan_and_observed();
-        boot.region.size_bytes += 4096;
+    fn accepts_a_fat32_partition_larger_than_planned() {
+        let (plan, mut windows) = matching_fat32_plan_and_observed();
         windows.region.size_bytes += 4096;
-        assert!(verify_windows_partition_layout(&plan, boot, windows).is_ok());
+        assert!(verify_windows_fat32_layout(&plan, windows).is_ok());
     }
 
     #[test]
-    fn rejects_a_boot_partition_with_the_wrong_type_guid() {
-        let (plan, mut boot, windows) = matching_plan_and_observed();
-        boot.partition_type_guid = MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID;
-        let err = verify_windows_partition_layout(&plan, boot, windows).unwrap_err();
+    fn rejects_a_fat32_partition_with_the_wrong_type_guid() {
+        let (plan, mut windows) = matching_fat32_plan_and_observed();
+        windows.partition_type_guid = [0u8; 16];
+        let err = verify_windows_fat32_layout(&plan, windows).unwrap_err();
         assert!(matches!(err, ArgosError::WindowsPartitionLayoutMismatch(_)));
     }
 
     #[test]
-    fn rejects_a_windows_partition_that_starts_in_the_wrong_place() {
-        let (plan, boot, mut windows) = matching_plan_and_observed();
+    fn rejects_a_fat32_partition_that_starts_in_the_wrong_place() {
+        let (plan, mut windows) = matching_fat32_plan_and_observed();
         windows.region.start_offset_bytes += 1024;
-        let err = verify_windows_partition_layout(&plan, boot, windows).unwrap_err();
+        let err = verify_windows_fat32_layout(&plan, windows).unwrap_err();
         assert!(matches!(err, ArgosError::WindowsPartitionLayoutMismatch(_)));
     }
 
     #[test]
-    fn rejects_a_windows_partition_smaller_than_planned() {
-        let (plan, boot, mut windows) = matching_plan_and_observed();
+    fn rejects_a_fat32_partition_smaller_than_planned() {
+        let (plan, mut windows) = matching_fat32_plan_and_observed();
         windows.region.size_bytes -= 1;
-        let err = verify_windows_partition_layout(&plan, boot, windows).unwrap_err();
+        let err = verify_windows_fat32_layout(&plan, windows).unwrap_err();
         assert!(matches!(err, ArgosError::WindowsPartitionLayoutMismatch(_)));
     }
 

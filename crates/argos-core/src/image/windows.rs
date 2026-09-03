@@ -1,8 +1,9 @@
 //! Detects a Windows installer ISO and provides a thin, read-only wrapper over
 //! its file tree -- the counterpart to `image::isohybrid` for the phase 2
 //! (Windows ISO support) backlog: [`docs/architecture.md`](../../../../../docs/architecture.md)
-//! records the guiding decisions this module implements (Linux-first, and
-//! UEFI:NTFS rather than `install.wim` splitting).
+//! records the guiding decisions this module implements, including the
+//! phase 3 M4.3 decision that the FAT32 layout with WIM splitting (not the
+//! original UEFI:NTFS scheme) is how Argos writes Windows media today.
 //!
 //! Unlike an isohybrid Linux image, a Windows installation ISO carries no
 //! embedded MBR/GPT at all. It also, in practice, is **not** a plain ISO9660
@@ -25,7 +26,8 @@
 //! Detection looks for the same two paths every official Windows 10/11
 //! install media has always shipped: `bootmgr` and `sources/boot.wim` at the
 //! root. `sources/install.wim` (or `.esd`) is what actually gets copied onto
-//! the NTFS partition in W3, but it is *not* part of detection: its absence
+//! the FAT32 partition (splitting into `.swm` parts if it's too large), but
+//! it is *not* part of detection: its absence
 //! (some multi-edition or trimmed media rename or omit it) says nothing about
 //! whether this is a Windows installer, whereas `bootmgr` and `boot.wim`
 //! missing does.
@@ -46,8 +48,8 @@ pub struct WindowsClassification {
 
 impl WindowsClassification {
     /// The only question the write pipeline asks: does this look enough like
-    /// an official Windows installer image to attempt the UEFI:NTFS write
-    /// path (`WindowsPartitionPlan`, landing in W2) at all?
+    /// an official Windows installer image to attempt the FAT32 write path
+    /// (`windows_fat32`, phase 3 M3, backlog #43) at all?
     pub fn is_windows_installer_iso(&self) -> bool {
         self.is_windows_installer
     }
@@ -168,8 +170,8 @@ pub struct IsoFileEntry {
 /// A thin, read-only wrapper over a Windows installer image's file tree.
 ///
 /// This is deliberately dumb: it lists files and hands back a reader for one
-/// at a time. W3 is what actually copies bytes onto a mounted NTFS partition
-/// (hashing each file as it goes); nothing here touches a disk.
+/// at a time. `windows_fat32` is what actually copies bytes onto the FAT32
+/// partition (hashing each file as it goes); nothing here touches a disk.
 pub struct WindowsIso {
     backing: Backing,
 }

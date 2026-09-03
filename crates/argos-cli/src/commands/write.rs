@@ -9,7 +9,7 @@ use super::helper;
 use crate::platform_select::current_platform;
 use argos_core::device::Device;
 use argos_core::error::{ArgosError, Result};
-use argos_core::partition::windows::{WindowsFat32Plan, WindowsPartitionPlan};
+use argos_core::partition::windows::WindowsFat32Plan;
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use argos_privileged::protocol::{Plan, WindowsLayout, WritePlan, WriteWindowsPlan};
@@ -86,14 +86,16 @@ fn run_dd_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Re
     Ok(())
 }
 
-/// The UEFI:NTFS write path (backlog #27, W5): same shape as
-/// [`run_dd_write`] above (preflight, confirm, invoke `argos-helper`,
-/// eject), but against `Plan::WriteWindowsImage` instead, and with a
-/// two-partition layout to show instead of a single image size.
+/// The FAT32 Windows write path (phase 3 M3/M6, backlog #43/#45): preflight,
+/// confirm, invoke `argos-helper`, eject -- against `Plan::WriteWindowsImage`,
+/// with the single-partition layout shown in the confirmation prompt. The
+/// only Windows write path since NTFS's retirement (decision point M4.3, see
+/// `docs/architecture.md`); `args.layout` still selects GPT/UEFI vs
+/// MBR/BIOS.
 ///
 /// Unlike DD mode, there's no inline post-write verification here (no
 /// `plan.verify` field on `WriteWindowsPlan` at all -- `--no-verify` simply
-/// doesn't apply to a Windows write): `execute_write_windows_image` already
+/// doesn't apply to a Windows write): `execute_write_windows_fat32` already
 /// runs as one privileged elevation covering partition+format+copy, and
 /// bolting a second, separate verify pass onto that would mean either a
 /// second `pkexec`/`sudo` prompt or turning the one-shot IPC protocol into a
@@ -101,45 +103,18 @@ fn run_dd_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Re
 /// already declined for the copy step itself. `argos verify` covers it as
 /// its own explicit step instead.
 fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
-    // Both branches compute their layout purely for the preflight + the
-    // confirmation prompt below -- the privileged side independently
-    // recomputes it either way (see windows_partition_plan_for).
-    match args.layout {
-        WindowsLayout::Ntfs => {
-            // The NTFS layout still needs mkfs.ntfs + ntfs-3g, which is why
-            // it stays Linux-only; the FAT32 layout (phase 3 M4, #34) needs
-            // neither and runs on macOS too.
-            if !cfg!(target_os = "linux") {
-                return Err(ArgosError::WindowsImageRequiresLinux);
-            }
-            let layout = windows_partition_plan_for(&args.iso)?;
-            preflight::check_windows_capacity(
-                &device.platform_id,
-                device.size_bytes,
-                &args.iso,
-                &layout,
-            )?;
-            check_source_collision(platform, device, args)?;
-            confirm_windows_write_or_abort(device, &args.iso, &layout)?;
-        }
-        WindowsLayout::Fat32 | WindowsLayout::Fat32Bios => {
-            let (layout, actions) = windows_fat32_plan_for(&args.iso)?;
-            preflight::check_windows_fat32_capacity(
-                &device.platform_id,
-                device.size_bytes,
-                &args.iso,
-                &layout,
-            )?;
-            check_source_collision(platform, device, args)?;
-            confirm_windows_fat32_write_or_abort(
-                device,
-                &args.iso,
-                &layout,
-                &actions,
-                args.layout,
-            )?;
-        }
-    }
+    // Computed purely for the preflight + the confirmation prompt below --
+    // the privileged side independently recomputes it either way (see
+    // windows_fat32_plan_for).
+    let (layout, actions) = windows_fat32_plan_for(&args.iso)?;
+    preflight::check_windows_fat32_capacity(
+        &device.platform_id,
+        device.size_bytes,
+        &args.iso,
+        &layout,
+    )?;
+    check_source_collision(platform, device, args)?;
+    confirm_windows_fat32_write_or_abort(device, &args.iso, &layout, &actions, args.layout)?;
 
     let plan = WriteWindowsPlan {
         device_path: device.platform_id.clone(),
@@ -164,26 +139,10 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
     Ok(())
 }
 
-/// Builds the same [`WindowsPartitionPlan`] `execute_write_windows_image`
-/// will independently recompute -- purely for display in the confirmation
-/// prompt below; the privileged side never trusts this one, the same
-/// never-trust-the-caller posture the rest of the Windows write path uses.
-fn windows_partition_plan_for(iso: &Path) -> Result<WindowsPartitionPlan> {
-    let files_total_size_bytes: u64 = image::windows::WindowsIso::open(iso)?
-        .list_files()?
-        .iter()
-        .map(|f| f.size)
-        .sum();
-    Ok(WindowsPartitionPlan::new(
-        argos_privileged::windows::uefi_ntfs_image_size_bytes(),
-        files_total_size_bytes,
-    ))
-}
-
-/// [`windows_partition_plan_for`]'s FAT32 counterpart (phase 3 M3.5,
-/// backlog #43) -- same display-only role, and it front-runs the helper's
-/// own refusals so an ISO the FAT32 layout genuinely cannot hold fails
-/// here, before any sudo/pkexec prompt or destructive confirmation.
+/// The FAT32 counterpart of a per-write layout plan (phase 3 M3.5, backlog
+/// #43) -- display-only, and it front-runs the helper's own refusals so an
+/// ISO the FAT32 layout genuinely cannot hold fails here, before any
+/// sudo/pkexec prompt or destructive confirmation.
 ///
 /// Calls the helper's own [`plan_copy_actions`], deliberately, rather than
 /// reimplementing the "will this fit?" rules: the first version of this
@@ -203,8 +162,8 @@ fn windows_fat32_plan_for(iso: &Path) -> Result<(WindowsFat32Plan, Vec<CopyActio
     Ok((layout, actions))
 }
 
-/// The source-on-target-device guard, shared verbatim by both Windows
-/// layouts (and the same check `run_dd_write` does inline).
+/// The source-on-target-device guard, shared verbatim with the DD-mode
+/// write path (`run_dd_write` does the same check inline).
 fn check_source_collision(platform: &impl PlatformOps, device: &Device, args: &Args) -> Result<()> {
     if let Some(backing_device_id) = platform.backing_device_of(&args.iso)? {
         preflight::check_no_source_target_collision(
@@ -280,59 +239,11 @@ fn confirm_or_abort(device: &Device, iso: &Path, image_size_bytes: u64) -> Resul
     Ok(())
 }
 
-/// The Windows-write counterpart to [`confirm_or_abort`] above: same
-/// retype-the-device-path guard, but shows the two-partition layout Argos is
-/// about to create (backlog #27, W5) instead of a single image size, since
-/// there's no single "image size" for a two-partition write to show.
-fn confirm_windows_write_or_abort(
-    device: &Device,
-    iso: &Path,
-    layout: &WindowsPartitionPlan,
-) -> Result<()> {
-    println!("About to overwrite:");
-    println!(
-        "  device:  {} ({})",
-        device.platform_id, device.display_name
-    );
-    println!("  size:    {}", helper::human_size(device.size_bytes));
-    println!(
-        "  serial:  {}",
-        device.serial.as_deref().unwrap_or("unknown")
-    );
-    println!("  image:   {} (Windows installer)", iso.display());
-    println!();
-    println!("Argos will create a new partition table with:");
-    println!(
-        "  partition 1 (EFI boot, FAT):       {} at offset {}",
-        helper::human_size(layout.boot_partition.size_bytes),
-        helper::human_size(layout.boot_partition.start_offset_bytes)
-    );
-    println!(
-        "  partition 2 (Windows files, NTFS): {} at offset {}",
-        helper::human_size(layout.windows_partition.size_bytes),
-        helper::human_size(layout.windows_partition.start_offset_bytes)
-    );
-    println!();
-    println!(
-        "This will PERMANENTLY ERASE all data on {}.",
-        device.platform_id
-    );
-    print!("Type the device path ({}) to confirm: ", device.platform_id);
-    std::io::stdout().flush().ok();
-
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-
-    if input.trim() != device.platform_id {
-        println!("Confirmation did not match; aborting. Nothing was written.");
-        return Err(ArgosError::NotConfirmed);
-    }
-    Ok(())
-}
-
-/// The FAT32-layout confirmation prompt (phase 3 M3.5): same
-/// retype-the-device-path guard as [`confirm_windows_write_or_abort`], with
-/// the single-partition layout shown instead of two.
+/// The Windows-write confirmation prompt (phase 3 M3.5): same
+/// retype-the-device-path guard as [`confirm_or_abort`] above, showing the
+/// single-partition FAT32 layout Argos is about to create instead of a
+/// single image size, since there's no plain "image size" for a
+/// partitioned write to show.
 fn confirm_windows_fat32_write_or_abort(
     device: &Device,
     iso: &Path,

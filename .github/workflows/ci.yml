@@ -62,26 +62,18 @@ jobs:
 
   windows-write-tests:
     name: Windows installer write integration tests (root)
-    # Backlog #27, W3: exercises the real UEFI:NTFS write path against a
-    # real file-backed loop device -- the Windows-write counterpart to
-    # loop-device-tests above. Needs the same root/losetup prerequisites,
-    # plus mkfs.ntfs/ntfs-3g (the one relaxation of "no shelling out" the
-    # phase 2 guiding decisions call for), which GitHub-hosted Ubuntu
-    # runners don't preinstall -- unlike losetup/dmsetup above, so this is
-    # the one integration-test job that installs a package first.
+    # Phase 3 M3.6 (#43): exercises the real FAT32 Windows write path
+    # against a real file-backed loop device -- the Windows-write
+    # counterpart to loop-device-tests above. Needs the same root/losetup
+    # prerequisites, and nothing else: no mkfs, no mount, no --partscan. An
+    # earlier two-partition UEFI:NTFS path (backlog #27) needed
+    # mkfs.ntfs/ntfs-3g here; it was retired at decision point M4.3 once
+    # this layout was validated on real hardware from both hosts, on both
+    # firmwares (see docs/architecture.md).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y ntfs-3g
-      - run: |
-          sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
-            --features test-overrides --test write_windows_image \
-            -- --ignored --nocapture --test-threads=1
-      # Phase 3 M3.6 (#43): the FAT32 layout's counterpart. Deliberately a
-      # separate step, not extra cases in the job above: it needs neither
-      # ntfs-3g nor --partscan, and keeping it distinct means a failure here
-      # points at the pure-Rust path rather than at the NTFS tooling.
       - run: |
           sudo -E env "PATH=$PATH" cargo test -p argos-privileged \
             --features test-overrides --test write_windows_fat32 \
@@ -182,7 +174,7 @@ jobs:
           cargo test -p argos-privileged --features test-overrides \
             --test hdiutil_image_write -- --ignored --nocapture
       # Phase 3 M4.2 (#34): the FAT32 Windows write path on macOS. Needs no
-      # macFUSE, no ntfs-3g and no root -- which is the whole point of the
+      # macFUSE, no ntfs-3g and no root -- which was the whole point of the
       # layout change, and is why this can run in CI at all, unlike the
       # macFUSE route #34 originally planned.
       - run: |

@@ -43,13 +43,13 @@ pub struct WritePlan {
     pub verify: bool,
 }
 
-/// Backlog #27 (W3): the UEFI:NTFS write path's counterpart to [`WritePlan`].
-/// Deliberately carries only `iso_path`, not a precomputed partition layout
-/// or Windows-files byte total -- `execute_write_windows_image` reads the
-/// ISO's tree itself (`argos_core::image::windows::WindowsIso`) to build a
-/// `WindowsPartitionPlan` from scratch, the same never-trust-the-caller
-/// posture [`validate_refreshed_device`] already applies to the device
-/// itself.
+/// The Windows installer write path's counterpart to [`WritePlan`] (phase 3
+/// M3, backlog #43). Deliberately carries only `iso_path`, not a precomputed
+/// partition layout or Windows-files byte total --
+/// `execute_write_windows_fat32` reads the ISO's tree itself
+/// (`argos_core::image::windows::WindowsIso`) to build a `WindowsFat32Plan`
+/// from scratch, the same never-trust-the-caller posture
+/// [`validate_refreshed_device`] already applies to the device itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteWindowsPlan {
     pub device_path: String,
@@ -59,20 +59,23 @@ pub struct WriteWindowsPlan {
     /// Which on-disk layout to produce (phase 3 M3.5, backlog #43).
     /// `#[serde(default)]` keeps the JSON contract backward-compatible: a
     /// plan from an older `argos` simply carries no `layout` key and gets
-    /// the NTFS layout it was written against.
+    /// the layout it was written against -- originally NTFS (backlog #27,
+    /// retired at decision point M4.3, see `docs/architecture.md`), now
+    /// [`WindowsLayout::Fat32`].
     #[serde(default)]
     pub layout: WindowsLayout,
 }
 
-/// The two Windows-media layouts the helper can produce: the original
-/// two-partition UEFI:NTFS scheme (backlog #27) and phase 3's single
-/// FAT32 partition (backlog #43). NTFS stays the default until M5's
-/// real-hardware validation flips it (decision point M4.3).
+/// The on-disk layouts the helper can produce for a Windows installer write
+/// (phase 3, backlog #43/#45): a single FAT32 partition, GPT-partitioned for
+/// UEFI or MBR-partitioned with Argos's own boot records for legacy BIOS. An
+/// earlier two-partition UEFI:NTFS scheme (backlog #27) was retired once
+/// this layout was validated on real hardware from both hosts, on both
+/// firmwares (decision point M4.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowsLayout {
     #[default]
-    Ntfs,
     Fat32,
     /// Phase 3 M6 (#45): the same FAT32 filesystem as [`Self::Fat32`], but
     /// described by an MBR and carrying Argos's own boot records, so a
@@ -98,12 +101,11 @@ pub struct VerifyPlan {
     pub iso_size_bytes: u64,
 }
 
-/// Backlog #27 (W4): the [`WriteWindowsPlan`]/two-partition write's
-/// counterpart to [`VerifyPlan`] -- same read-only posture (no
-/// `expected_serial`/`expected_size_bytes`, no TOCTOU refusal window), same
-/// re-resolution of `device_path` before opening it. Carries only
-/// `iso_path`: `execute_verify_windows_image` rebuilds the expected
-/// `WindowsPartitionPlan` and re-lists the ISO's files itself, the same
+/// [`WriteWindowsPlan`]'s read-only counterpart to [`VerifyPlan`] -- same
+/// read-only posture (no `expected_serial`/`expected_size_bytes`, no TOCTOU
+/// refusal window), same re-resolution of `device_path` before opening it.
+/// Carries only `iso_path`: `execute_verify_windows_fat32` rebuilds the
+/// expected `WindowsFat32Plan` and re-lists the ISO's files itself, the same
 /// never-trust-the-caller posture the write path already applies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyWindowsPlan {
@@ -312,11 +314,16 @@ mod tests {
     }
 
     /// A plan JSON written before the `layout` field existed must still
-    /// parse -- and must mean NTFS, the only layout such a sender knew.
+    /// parse -- and default to [`WindowsLayout::Fat32`], the only layout
+    /// left since NTFS's retirement (decision point M4.3). Such a sender
+    /// predates M4.3 too, so it meant NTFS at the time; there is no way (or
+    /// need) to preserve that meaning once the layout it named is gone --
+    /// parsing cleanly, rather than refusing the plan outright, is what
+    /// matters for compatibility.
     #[test]
-    fn windows_plans_without_a_layout_key_default_to_ntfs() {
+    fn windows_plans_without_a_layout_key_default_to_fat32() {
         let json = r#"{"kind":"write_windows_image","device_path":"/dev/sdz","expected_serial":null,"expected_size_bytes":8000000000,"iso_path":"/tmp/Win11.iso"}"#;
         let parsed: Plan = serde_json::from_str(json).unwrap();
-        assert!(matches!(parsed, Plan::WriteWindowsImage(p) if p.layout == WindowsLayout::Ntfs));
+        assert!(matches!(parsed, Plan::WriteWindowsImage(p) if p.layout == WindowsLayout::Fat32));
     }
 }

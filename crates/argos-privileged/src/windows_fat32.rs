@@ -2,10 +2,9 @@
 //! a single-partition GPT (via `gptman`), then formats and populates that
 //! partition as FAT32 through `fatfs` over a [`crate::partition_io::PartitionWindow`]
 //! -- writing directly into the partition's byte range of the open device
-//! handle. Unlike the NTFS path (`crate::windows`, W3), nothing here spawns a
-//! process, re-reads the partition table, waits for partition device nodes,
-//! or mounts a filesystem: the whole write is this process talking to one
-//! file descriptor.
+//! handle. Nothing here spawns a process, re-reads the partition table,
+//! waits for partition device nodes, or mounts a filesystem: the whole
+//! write is this process talking to one file descriptor.
 //!
 //! The media boots because FAT32 is what UEFI firmware reads natively: the
 //! ISO's own `efi/boot/bootx64.efi` (Microsoft-signed) is copied like any
@@ -22,10 +21,12 @@
 //! **Runs on Linux and macOS** (phase 3 M4, backlog #34). Nothing in this
 //! path is platform-specific: with no `mkfs`, no mount and no partition
 //! device nodes, the only OS interaction left is the pre-write unmount,
-//! which `PlatformOps` already provides on both. That is precisely why the
-//! phase-3 plan replaced the NTFS layout -- the macFUSE/`ntfs-3g`
-//! dependency #34 was originally scoped around simply has no counterpart
-//! here. `--layout ntfs` keeps its Linux-only gate.
+//! which `PlatformOps` already provides on both. This is the *only* Windows
+//! write path Argos has: the earlier two-partition UEFI:NTFS scheme
+//! (backlog #27) needed `mkfs.ntfs`/`ntfs-3g` and was Linux-only for exactly
+//! that reason, and was retired once this layout was validated on real
+//! hardware from both hosts, on both firmwares (decision point M4.3; see
+//! `docs/architecture.md`).
 
 use crate::partition_io::{PartitionWindow, SizedDevice};
 use crate::protocol::{
@@ -47,14 +48,25 @@ use argos_core::verify::{
 };
 use argos_platform::PlatformOps;
 use sha2::{Digest, Sha256};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 /// FAT32's hard per-file ceiling: sizes are 32-bit, so 4GiB-1.
 pub const FAT32_MAX_FILE_BYTES: u64 = u32::MAX as u64;
 
-/// What [`execute_write_windows_fat32`] returns on success -- the FAT32
-/// counterpart of [`crate::windows::WindowsWriteOutcome`], minus the boot
-/// partition hash (this layout has no boot partition).
+/// 16 cryptographically random bytes, read from `/dev/urandom` (present on
+/// both Linux and macOS), dependency-free rather than pulling in a
+/// `uuid`/`rand` crate just for this. Used for the GPT's disk GUID and each
+/// partition's unique GUID.
+pub(crate) fn random_guid() -> Result<[u8; 16]> {
+    let mut buf = [0u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .map_err(ArgosError::Io)?;
+    Ok(buf)
+}
+
+/// What [`execute_write_windows_fat32`] returns on success.
 #[derive(Debug)]
 pub struct Fat32WriteOutcome {
     pub files_copied: u64,
@@ -124,6 +136,14 @@ pub fn execute_write_windows_fat32(
     Ok(outcome)
 }
 
+/// What [`execute_verify_windows_fat32`] returns on success: just a count,
+/// since verification's whole point is confirming every file already
+/// matches, so there's nothing left to report per file beyond that count.
+#[derive(Debug)]
+pub struct WindowsVerifyOutcome {
+    pub files_verified: u64,
+}
+
 /// The FAT32 layout verification counterpart (M3.4): re-derives the expected
 /// [`WindowsFat32Plan`] from the source ISO, confirms the real GPT matches
 /// it, then reads the FAT32 filesystem back (read-only, still no mount) and
@@ -131,7 +151,7 @@ pub fn execute_write_windows_fat32(
 pub fn execute_verify_windows_fat32(
     plan: &VerifyWindowsPlan,
     progress: &dyn ProgressSink,
-) -> Result<crate::windows::WindowsVerifyOutcome> {
+) -> Result<WindowsVerifyOutcome> {
     let platform = crate::platform_select::current_platform();
     let device = platform
         .refresh(&plan.device_path, None)?
@@ -160,7 +180,7 @@ pub fn execute_verify_windows_fat32(
     let mut sized = SizedDevice::new(buffered, device.size_bytes);
     let files_verified = verify_fat32_media(&mut sized, &layout, &iso, &actions, progress)?;
 
-    Ok(crate::windows::WindowsVerifyOutcome { files_verified })
+    Ok(WindowsVerifyOutcome { files_verified })
 }
 
 /// Which partition scheme and boot records to put on the media. The
@@ -905,12 +925,12 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
         .write_all(&[0u8; MBR_BOOTSTRAP_BYTES])
         .map_err(ArgosError::Io)?;
 
-    let mut gpt = gptman::GPT::new_from(device, SECTOR_SIZE, crate::windows::random_guid()?)
+    let mut gpt = gptman::GPT::new_from(device, SECTOR_SIZE, random_guid()?)
         .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))?;
 
     gpt[1] = gptman::GPTPartitionEntry {
         partition_type_guid: MICROSOFT_BASIC_DATA_PARTITION_TYPE_GUID,
-        unique_partition_guid: crate::windows::random_guid()?,
+        unique_partition_guid: random_guid()?,
         starting_lba: layout.windows_partition.start_offset_bytes / SECTOR_SIZE,
         ending_lba: layout.windows_partition.end_offset_bytes() / SECTOR_SIZE - 1,
         attribute_bits: 0,
@@ -947,7 +967,7 @@ fn write_fat32_partition_table<H: Read + Write + Seek>(
 /// from. Real formatters derive one from the clock; either way the point is
 /// that two volumes must not claim the same identity.
 fn random_volume_id() -> Result<u32> {
-    let bytes = crate::windows::random_guid()?;
+    let bytes = random_guid()?;
     // Never zero: some tools treat an all-zero serial as "unset".
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) | 1)
 }
@@ -1170,7 +1190,7 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
     // A random disk signature, like the GPT path's GUIDs: Windows uses it to
     // identify the disk, and a fixed value would make two Argos-written
     // sticks collide in its registry.
-    let signature = crate::windows::random_guid()?;
+    let signature = random_guid()?;
     let mut mbr = mbrman::MBR::new_from(
         device,
         sector_size,

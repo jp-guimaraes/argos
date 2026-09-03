@@ -1,13 +1,14 @@
 //! Phase 3 M3.6 (backlog #43): exercises the real FAT32 Windows installer
 //! write (`execute_write_windows_fat32`) and verify
 //! (`execute_verify_windows_fat32`) paths against a throwaway file-backed
-//! loop device -- the FAT32 counterpart of `write_windows_image.rs`.
+//! loop device.
 //!
-//! Deliberately needs much less than that file: root and `losetup` only --
-//! no `mkfs.ntfs`, no `ntfs-3g`, no `--partscan` (the FAT32 path never asks
-//! the kernel for partition device nodes: it writes the partition's byte
-//! range through the whole-device fd). That difference *is* the milestone's
-//! acceptance criterion, so this file asserting it stays honest. Run e.g.:
+//! Deliberately needs much less than the retired NTFS path's equivalent
+//! test did: root and `losetup` only -- no `mkfs.ntfs`, no `ntfs-3g`, no
+//! `--partscan` (the FAT32 path never asks the kernel for partition device
+//! nodes: it writes the partition's byte range through the whole-device
+//! fd). That difference *is* the milestone's acceptance criterion, so this
+//! file asserting it stays honest. Run e.g.:
 //!
 //! ```sh
 //! sudo -E cargo test -p argos-privileged --features test-overrides \

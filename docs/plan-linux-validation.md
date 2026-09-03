@@ -16,7 +16,7 @@ Everything below was confirmed by booting real machines, not by argument.
 | `--layout fat32-bios` (MBR) | macOS | legacy BIOS | **Setup reaches disk selection** (Intel Atom N455, AMI BIOS 2011) |
 | `--layout fat32` (GPT) | **Linux** | UEFI | **Setup reaches disk selection** (M5.1, 2026-09-03) |
 | `--layout fat32-bios` (MBR) | **Linux** | legacy BIOS | **Setup reaches disk selection** (M5.1, 2026-09-03) |
-| `--layout ntfs` | Linux | UEFI | Works; superseded, pending the M4.3 retire-or-keep decision |
+| `--layout ntfs` | Linux | UEFI | **Retired (M4.3)** -- removed from the tree, not merely superseded |
 
 Nothing in the FAT32 path is platform-specific: there is no `mkfs`, no mount,
 no partition device node and no kernel filesystem driver involved. The write
@@ -130,18 +130,23 @@ replaced the I/O surface with its own `IoBase`/`ReadWriteSeek` traits, so
 `architecture.md` (end of the `argos-privileged` section); when 0.4.0 ships,
 `repair_directory_entries` and the FSINFO note should go with it.
 
-### L5 — M4.3: retire the NTFS layout, or keep it — **now unblocked**
+### L5 — M4.3: retire the NTFS layout, or keep it — **decided: retired**
 
-Gated on M5 being complete on both hosts, which L2 above just satisfied for
-the boot criterion (M5.3, Secure Boot, is still open but does not bear on
-this choice: it asks whether Microsoft's own signed loader is honoured, not
-whether NTFS earns its keep). Two things now need deciding together: whether
-the NTFS layout stays at all, and whether `--layout` should still **default**
-to `ntfs` — that default was explicitly conditioned on FAT32 lacking
-real-hardware validation, and it no longer does. Retiring it removes the last
-`mkfs.ntfs`/`ntfs-3g` shell-outs and the vendored `uefi-ntfs.img` blob, which
-is the entire point of phase 3. The argument for keeping it is that NTFS has
-no 4 GiB file limit and needs no splitting at all.
+Gated on M5 being complete on both hosts, which L2 satisfied for the boot
+criterion (M5.3, Secure Boot, is still open but doesn't bear on this choice:
+it asks whether Microsoft's own signed loader is honoured, not whether NTFS
+earns its keep). **Decision: retired, not demoted.** `--layout` now defaults
+to `fat32`, and `ntfs` is no longer a valid value at all -- `windows.rs`,
+`assets/` (the vendored `uefi-ntfs.img` and its provenance doc),
+`write_windows_image.rs`, the two-partition `WindowsPartitionPlan`, the
+`mkfs.ntfs`/`ntfs-3g` shell-outs, and the three NTFS-only `PlatformOps`
+methods (`reread_partition_table`, `mount_ntfs_partition`, `unmount_path`)
+are all gone from the tree. The argument for keeping it -- NTFS has no 4GiB
+file limit, so it needs no splitting -- stopped being persuasive once M2's
+splitter made that limit a non-issue for FAT32 too, and every real-hardware
+result phase 3 has (both hosts, both firmwares, disk selection reached) is
+against FAT32, not NTFS. Full rationale and evidence recorded in
+`docs/architecture.md`'s Status table and `argos-privileged` section.
 
 ### L6 — Independent of everything above
 

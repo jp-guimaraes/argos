@@ -61,14 +61,12 @@ fn run_dd_verify(args: &Args) -> Result<()> {
     Ok(())
 }
 
-/// The Windows-write counterpart to [`run_dd_verify`] above (backlog #27,
-/// W5): same shape, against `Plan::VerifyWindowsImage` instead.
+/// The Windows-write counterpart to [`run_dd_verify`] above (phase 3 M3,
+/// backlog #43): same shape, against `Plan::VerifyWindowsImage` instead.
+/// Runs on both hosts -- the FAT32 layout is the only one Argos produces
+/// since NTFS's retirement (decision point M4.3, see docs/architecture.md),
+/// and it needs no host-specific gate.
 fn run_windows_verify(args: &Args) -> Result<()> {
-    // Same split as the write path: only the NTFS layout is Linux-only.
-    if args.layout == WindowsLayout::Ntfs && !cfg!(target_os = "linux") {
-        return Err(ArgosError::WindowsImageRequiresLinux);
-    }
-
     let plan = VerifyWindowsPlan {
         device_path: args.device.clone(),
         iso_path: args.iso.clone(),

@@ -111,79 +111,11 @@ impl argos_platform::PlatformOps for LinuxPlatform {
             &dm::resolve_mount_source,
         ))
     }
-
-    fn reread_partition_table(&self, device: &Device) -> Result<()> {
-        reread_partition_table_impl(&device.platform_id)
-    }
-
-    fn mount_ntfs_partition(&self, device: &Device, partition_number: u32) -> Result<PathBuf> {
-        let partition_path = mounts::partition_device_path(&device.platform_id, partition_number);
-        let mountpoint = tempfile::Builder::new()
-            .prefix("argos-windows-write-")
-            .tempdir()
-            .map_err(ArgosError::Io)?
-            .keep();
-
-        let status = std::process::Command::new("ntfs-3g")
-            .arg(&partition_path)
-            .arg(&mountpoint)
-            .status()
-            .map_err(ArgosError::Io)?;
-        if !status.success() {
-            return Err(ArgosError::Io(std::io::Error::other(format!(
-                "ntfs-3g {} {} exited with {status}",
-                partition_path,
-                mountpoint.display()
-            ))));
-        }
-        Ok(mountpoint)
-    }
-
-    fn unmount_path(&self, mount_path: &Path) -> Result<()> {
-        let status = std::process::Command::new("umount")
-            .arg(mount_path)
-            .status()
-            .map_err(ArgosError::Io)?;
-        if !status.success() {
-            return Err(ArgosError::Io(std::io::Error::other(format!(
-                "umount {} exited with {status}",
-                mount_path.display()
-            ))));
-        }
-        Ok(())
-    }
 }
 
 fn read_proc_mounts() -> Result<Vec<MountEntry>> {
     let contents = fs::read_to_string("/proc/mounts").map_err(ArgosError::Io)?;
     Ok(mounts::parse_proc_mounts(&contents))
-}
-
-/// `gptman::linux::reread_partition_table` (the `BLKRRPART` ioctl wrapper
-/// this delegates to) only exists when actually compiling for Linux --
-/// unlike the rest of this crate, which happens to compile cleanly
-/// everywhere because every other OS call it makes degrades gracefully at
-/// *runtime* instead (no `/sys/block`, no `udisksd`, ...). This is the one
-/// genuinely Linux-only API surface, so it needs an explicit `cfg` split
-/// instead, with the same `NotImplemented` posture `argos-platform-macos`
-/// and `argos-platform-windows` already use for methods that plain don't
-/// apply on their platform.
-#[cfg(target_os = "linux")]
-fn reread_partition_table_impl(device_path: &str) -> Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(device_path)
-        .map_err(ArgosError::Io)?;
-    gptman::linux::reread_partition_table(&mut file)
-        .map_err(|e| ArgosError::Io(std::io::Error::other(e.to_string())))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn reread_partition_table_impl(_device_path: &str) -> Result<()> {
-    Err(ArgosError::NotImplemented(
-        "reread_partition_table (non-Linux)",
-    ))
 }
 
 /// Reads everything sysfs (and, when available, the udev database and a

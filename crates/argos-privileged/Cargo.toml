@@ -28,7 +28,7 @@ argos-core = { workspace = true }
 argos-platform = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Builds the GPT for a Windows installer write (backlog #27, W3). See
+# Builds the GPT for a Windows installer write (phase 3, backlog #43). See
 # CONTRIBUTING.md's scoped exception for why this crate's "keep it minimal"
 # rule doesn't block that write path's other new dependency,
 # argos-core's `image::windows` (already pulled in transitively).
