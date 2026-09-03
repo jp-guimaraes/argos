@@ -14,7 +14,8 @@ Everything below was confirmed by booting real machines, not by argument.
 |---|---|---|---|
 | `--layout fat32` (GPT) | macOS | UEFI | **Setup reaches disk selection**, with an unsplit `install.esd` and with a split `install.wim` |
 | `--layout fat32-bios` (MBR) | macOS | legacy BIOS | **Setup reaches disk selection** (Intel Atom N455, AMI BIOS 2011) |
-| `--layout fat32` / `fat32-bios` | **Linux** | either | **Unvalidated on real hardware.** This is M5.1, and it is the gap this plan exists to close |
+| `--layout fat32` (GPT) | **Linux** | UEFI | **Setup reaches disk selection** (M5.1, 2026-09-03) |
+| `--layout fat32-bios` (MBR) | **Linux** | legacy BIOS | **Setup reaches disk selection** (M5.1, 2026-09-03) |
 | `--layout ntfs` | Linux | UEFI | Works; superseded, pending the M4.3 retire-or-keep decision |
 
 Nothing in the FAT32 path is platform-specific: there is no `mkfs`, no mount,
@@ -48,7 +49,20 @@ git diff origin/main:<file> <inherited-commit>:<file>
 Empty output means `main` holds exactly what the branch already inherited, and
 the branch's own version is the correct resolution.
 
-### L2 — M5.1: real-hardware validation from a Linux host
+### L2 — M5.1: real-hardware validation from a Linux host — **done**
+
+**Both cases passed on 2026-09-03**, from a Linux host (Arch, kernel 7.1),
+writing a real Windows 10 22H2 ISO (6.14 GB; `install.wim` 5.18 GB, so the
+splitter was exercised) to a physical SanDisk 28.7 GB stick: `--layout fat32`
+booted a UEFI machine and `--layout fat32-bios` booted a legacy BIOS machine,
+each reaching **Windows Setup's disk selection**. That is the same criterion
+the macOS side met, and it closes M5.1.
+
+With it, the FAT32 path is validated on real hardware from **both** hosts and
+on **both** firmwares — which is the whole of what phase 3 set out to prove,
+and what unblocks L5 (M4.3).
+
+The original instructions, kept for the record:
 
 The substance of this plan. Write from a Linux machine and boot the result:
 
@@ -91,8 +105,14 @@ so each probe reads the medium rather than a cached table, and asks
 our writer, and the same one `lsblk` and udev act on. It attaches *with*
 `--partscan`, unlike `write_windows_fat32.rs`, because the kernel parsing the
 table is the point. Raw signatures at LBA 1 and the last sector are asserted
-too. Still open: the same scenario on a physical stick, confirmed with
-`mediadiff.py`.
+too. The scenario has since also run on a physical stick, as part of M5.1: the
+same SanDisk was written `fat32` first and `fat32-bios` second, and the BIOS
+machine booted it through to disk selection. That is the acceptance criterion
+by symptom -- a surviving GPT is exactly what stopped Windows from lettering
+the volume, so reaching the installation source means it did not survive. The
+byte-level `mediadiff.py` dump was not captured during that run, so the
+confirmation is behavioural rather than structural; the automated test above
+covers the structure.
 
 ### L4 — `fatfs`'s directory-entry defects (#56) — **decided**
 
@@ -110,9 +130,15 @@ replaced the I/O surface with its own `IoBase`/`ReadWriteSeek` traits, so
 `architecture.md` (end of the `argos-privileged` section); when 0.4.0 ships,
 `repair_directory_entries` and the FSINFO note should go with it.
 
-### L5 — M4.3: retire the NTFS layout, or keep it
+### L5 — M4.3: retire the NTFS layout, or keep it — **now unblocked**
 
-Gated on M5 being complete on both hosts. Retiring it removes the last
+Gated on M5 being complete on both hosts, which L2 above just satisfied for
+the boot criterion (M5.3, Secure Boot, is still open but does not bear on
+this choice: it asks whether Microsoft's own signed loader is honoured, not
+whether NTFS earns its keep). Two things now need deciding together: whether
+the NTFS layout stays at all, and whether `--layout` should still **default**
+to `ntfs` — that default was explicitly conditioned on FAT32 lacking
+real-hardware validation, and it no longer does. Retiring it removes the last
 `mkfs.ntfs`/`ntfs-3g` shell-outs and the vendored `uefi-ntfs.img` blob, which
 is the entire point of phase 3. The argument for keeping it is that NTFS has
 no 4 GiB file limit and needs no splitting at all.
