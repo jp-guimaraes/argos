@@ -43,6 +43,16 @@ machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob.
   checks. Written to run a differential diagnosis against Rufus-made media;
   it is what found the stale-GPT bug below.
 
+- **End-to-end write cancellation** (M7.5, #35). Ctrl-C during a write now
+  reaches the privileged helper: `argos` keeps the helper's stdin open and a
+  `SIGINT` handler writes `protocol::CANCEL_SIGNAL` into it, a watcher thread
+  in the helper turns that into a `CancelToken`, and the write path checks it
+  on every buffer. The helper **ignores `SIGINT` itself** -- Ctrl-C reaches
+  the whole foreground process group, and letting the default disposition kill
+  the helper would stop it before it could act on the cancellation. The pipe
+  closing counts as a cancellation too, so a parent that dies outright still
+  stops the write.
+
 ### Fixed
 
 - A stale GPT surviving underneath the MBR layout (#59). `mbrman` writes

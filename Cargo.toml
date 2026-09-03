@@ -23,6 +23,11 @@ repository = "https://github.com/jp-guimaraes/argos"
 authors = ["Argos contributors"]
 
 [workspace.dependencies]
+# argos-cli only (backlog #35, write cancellation) -- CONTRIBUTING.md's
+# "keep it minimal" rule targets argos-privileged specifically, not this
+# crate. A small, single-purpose, widely-used Rust CLI standard for catching
+# SIGINT portably.
+ctrlc = "3"
 # `version` is required here (not just `path`) for every crate this workspace
 # publishes to crates.io -- a published crate can't depend on a bare local
 # path, since that path won't exist on whoever installs it; cargo strips

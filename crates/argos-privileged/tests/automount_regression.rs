@@ -19,7 +19,7 @@
 
 use argos_core::image::windows::fixtures::udf_windows_installer_iso as windows_installer_iso;
 use argos_core::partition::windows::FAT32_MIN_PARTITION_BYTES;
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress};
 use argos_privileged::protocol::{VerifyWindowsPlan, WindowsLayout, WriteWindowsPlan};
 use std::process::Command;
 
@@ -103,8 +103,12 @@ fn write_and_verify_survive_a_mounted_partition_from_a_previous_write() {
         layout: WindowsLayout::Fat32,
     };
 
-    argos_privileged::windows_fat32::execute_write_windows_fat32(&write_plan, &NoopProgress)
-        .expect("the first write should succeed");
+    argos_privileged::windows_fat32::execute_write_windows_fat32(
+        &write_plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    )
+    .expect("the first write should succeed");
 
     // Now do what macOS does on its own with a real stick.
     let mounted = image.provoke_automount();
@@ -115,8 +119,12 @@ fn write_and_verify_survive_a_mounted_partition_from_a_previous_write() {
         .expect("verify must work with the just-written partition mounted");
 
     let _ = image.provoke_automount();
-    argos_privileged::windows_fat32::execute_write_windows_fat32(&write_plan, &NoopProgress)
-        .expect("rewriting over a mounted partition must work");
+    argos_privileged::windows_fat32::execute_write_windows_fat32(
+        &write_plan,
+        &NoopProgress,
+        &CancelToken::new(),
+    )
+    .expect("rewriting over a mounted partition must work");
 
     std::env::remove_var("ARGOS_TEST_FORCE_REMOVABLE");
 }
@@ -157,6 +165,7 @@ fn holding_the_device_open_blocks_macos_from_mounting_it() {
             layout: WindowsLayout::Fat32,
         },
         &NoopProgress,
+        &CancelToken::new(),
     )
     .expect("the setup write should succeed");
     let _ = Command::new("diskutil")

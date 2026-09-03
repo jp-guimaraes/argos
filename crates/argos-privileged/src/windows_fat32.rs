@@ -79,6 +79,7 @@ pub struct Fat32WriteOutcome {
 pub fn execute_write_windows_fat32(
     plan: &WriteWindowsPlan,
     progress: &dyn ProgressSink,
+    cancel: &CancelToken,
 ) -> Result<Fat32WriteOutcome> {
     let platform = crate::platform_select::current_platform();
 
@@ -118,14 +119,6 @@ pub fn execute_write_windows_fat32(
     // SEEK_END, which gptman needs to lay out a new GPT. See its doc
     // comment -- without it this panics before writing a byte, on any real
     // macOS disk.
-    // Created here rather than plumbed in from the parent process: the copy
-    // loop checks this token on every write, but nothing outside this process
-    // can set it yet. Wiring a real source (SIGINT in the unprivileged parent,
-    // forwarded down the helper's stdin) is backlog #35 -- and when it lands,
-    // this line and this function's signature are the only things in the
-    // FAT32 path that have to change.
-    let cancel = CancelToken::new();
-
     let outcome = {
         // Buffered under SizedDevice: the filesystem's writes are tiny and
         // its seeks are mostly redundant, and against a USB device node each
@@ -133,7 +126,7 @@ pub fn execute_write_windows_fat32(
         let buffered =
             crate::partition_io::BufferedDevice::new(&mut device_file).map_err(ArgosError::Io)?;
         let mut sized = SizedDevice::new(buffered, device.size_bytes);
-        let outcome = write_fat32_media(&mut sized, &layout, &iso, &actions, progress, &cancel)?;
+        let outcome = write_fat32_media(&mut sized, &layout, &iso, &actions, progress, cancel)?;
         // The buffer must reach the medium before the handle is dropped.
         sized.flush().map_err(ArgosError::Io)?;
         outcome

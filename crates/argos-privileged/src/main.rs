@@ -16,16 +16,25 @@
 //! loop. A future iteration should forward e.g. a caught SIGINT from the
 //! unprivileged parent into a cancel signal here.
 
-use argos_core::progress::{Phase, ProgressSink};
-use argos_privileged::protocol::{Event, Plan};
-use std::io::{Read, Write};
+use argos_core::progress::{CancelToken, Phase, ProgressSink};
+use argos_privileged::protocol::{self, Event, Plan};
+use std::io::{BufRead, Write};
 
 fn main() {
     std::process::exit(run());
 }
 
 fn run() -> i32 {
-    let plan = match read_plan_from_stdin() {
+    ignore_sigint();
+
+    // Deliberately the unlocked `Stdin` handle, not `.lock()`'s `StdinLock`:
+    // that one holds a `MutexGuard` for as long as it is alive, which is not
+    // `Send` and so cannot be handed to the watcher thread below. `Stdin`
+    // itself is `Send + Sync` -- each read takes the lock internally, just for
+    // that call -- so `read_plan` borrows it for the first line and the same
+    // handle then moves into the thread for the rest of the stream.
+    let stdin = std::io::stdin();
+    let plan = match read_plan(&mut stdin.lock()) {
         Ok(plan) => plan,
         Err(err) => {
             emit(&Event::Error {
@@ -36,8 +45,12 @@ fn run() -> i32 {
         }
     };
 
+    let cancel = CancelToken::new();
+    let cancel_for_watcher = cancel.clone();
+    std::thread::spawn(move || protocol::watch_for_cancel(stdin, cancel_for_watcher));
+
     let result = match plan {
-        Plan::Write(write_plan) => argos_privileged::execute(&write_plan, &JsonlProgress)
+        Plan::Write(write_plan) => argos_privileged::execute(&write_plan, &JsonlProgress, &cancel)
             .map(|written_hash| Event::Done { written_hash }),
         Plan::Verify(verify_plan) => argos_privileged::execute_verify(&verify_plan, &JsonlProgress)
             .map(|hash| Event::VerifyOk { hash }),
@@ -49,6 +62,7 @@ fn run() -> i32 {
             argos_privileged::windows_fat32::execute_write_windows_fat32(
                 &windows_plan,
                 &JsonlProgress,
+                &cancel,
             )
             .map(|outcome| Event::WindowsDone {
                 files_copied: outcome.files_copied,
@@ -82,10 +96,37 @@ fn run() -> i32 {
     }
 }
 
-fn read_plan_from_stdin() -> std::io::Result<Plan> {
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
-    serde_json::from_str(&input).map_err(std::io::Error::other)
+/// Reads exactly the first line of `stdin` -- the `Plan` -- and leaves the
+/// rest of the pipe for [`protocol::watch_for_cancel`]. Reading to EOF here,
+/// as this used to, would consume the cancel byte and block until the parent
+/// closed the pipe, which is precisely what cancellation needs it not to do.
+fn read_plan<R: BufRead>(reader: &mut R) -> std::io::Result<Plan> {
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    serde_json::from_str(&line).map_err(std::io::Error::other)
+}
+
+/// Makes `SIGINT` a no-op for this process.
+///
+/// Ctrl-C in a terminal goes to the whole foreground process group, and the
+/// privilege broker leaves the helper in it -- so without this, the default
+/// disposition kills the helper outright, mid-write, *before* the write path
+/// can act on a cancellation. Everything cancellation is supposed to do on the
+/// way out -- most importantly destroying the half-written FAT32 volume so it
+/// cannot be mistaken for good media -- would never run.
+///
+/// Cancellation therefore has exactly one channel: the byte `argos` writes on
+/// stdin (plus the pipe closing, which `watch_for_cancel` treats the same way
+/// as a safety net for a parent that died without asking politely). `SIGKILL`
+/// still cannot be caught, and a helper killed that way still leaves media
+/// that must be rewritten -- which is what `ArgosError::Cancelled` has always
+/// said.
+fn ignore_sigint() {
+    // SAFETY: `SIG_IGN` is a disposition, not a Rust callback -- there is no
+    // handler body to be async-signal-unsafe.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+    }
 }
 
 struct JsonlProgress;
@@ -112,5 +153,41 @@ fn emit(event: &Event) {
     if let Ok(line) = serde_json::to_string(event) {
         println!("{line}");
         let _ = std::io::stdout().flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use argos_privileged::protocol::{WindowsLayout, WriteWindowsPlan};
+    use std::io::Read;
+
+    /// The regression that would silently disable cancellation: reading to
+    /// EOF here, as this used to, consumes the cancel byte the watcher thread
+    /// is supposed to see -- and blocks until the parent closes the pipe,
+    /// which is exactly what it must not wait for.
+    #[test]
+    fn read_plan_consumes_the_plan_line_and_nothing_after_it() {
+        let plan = Plan::WriteWindowsImage(WriteWindowsPlan {
+            device_path: "/dev/null".into(),
+            expected_serial: None,
+            expected_size_bytes: 0,
+            iso_path: "/tmp/x.iso".into(),
+            layout: WindowsLayout::Fat32,
+        });
+        let json = serde_json::to_string(&plan).unwrap();
+
+        let mut stream = std::io::Cursor::new(format!("{json}\n").into_bytes());
+        stream.get_mut().push(protocol::CANCEL_SIGNAL);
+
+        read_plan(&mut stream).expect("the plan line should parse");
+
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).unwrap();
+        assert_eq!(
+            rest,
+            vec![protocol::CANCEL_SIGNAL],
+            "the cancel byte must still be on the stream for the watcher thread"
+        );
     }
 }

@@ -25,7 +25,7 @@
 
 use argos_core::image::windows::fixtures::udf_windows_installer_iso as windows_installer_iso;
 use argos_core::partition::windows::FAT32_MIN_PARTITION_BYTES;
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress};
 use argos_privileged::protocol::{VerifyWindowsPlan, WindowsLayout, WriteWindowsPlan};
 use std::process::Command;
 
@@ -112,6 +112,7 @@ fn writes_a_windows_installer_iso_via_fat32_on_macos() {
     let outcome = argos_privileged::windows_fat32::execute_write_windows_fat32(
         &write_plan(&image, iso.path()),
         &NoopProgress,
+        &CancelToken::new(),
     )
     .expect("the FAT32 Windows write should succeed on macOS");
 
@@ -148,6 +149,7 @@ fn verify_matches_a_prior_fat32_write_on_macos() {
     argos_privileged::windows_fat32::execute_write_windows_fat32(
         &write_plan(&image, iso.path()),
         &NoopProgress,
+        &CancelToken::new(),
     )
     .expect("the write itself should succeed");
 
@@ -179,6 +181,7 @@ fn refuses_a_non_windows_iso_on_macos() {
     let err = argos_privileged::windows_fat32::execute_write_windows_fat32(
         &write_plan(&image, iso.path()),
         &NoopProgress,
+        &CancelToken::new(),
     )
     .unwrap_err();
     assert!(matches!(

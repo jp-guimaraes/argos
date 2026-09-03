@@ -22,7 +22,7 @@
 
 use argos_core::image::windows::fixtures::udf_windows_installer_iso as windows_installer_iso;
 use argos_core::partition::windows::FAT32_MIN_PARTITION_BYTES;
-use argos_core::progress::NoopProgress;
+use argos_core::progress::{CancelToken, NoopProgress};
 use argos_privileged::protocol::{VerifyWindowsPlan, WindowsLayout, WriteWindowsPlan};
 use std::process::Command;
 
@@ -106,6 +106,7 @@ fn writes_a_windows_installer_iso_via_fat32_with_no_external_tools() {
     let outcome = argos_privileged::windows_fat32::execute_write_windows_fat32(
         &write_plan(&loop_device, iso.path()),
         &NoopProgress,
+        &CancelToken::new(),
     )
     .expect("writing the Windows installer image via FAT32 should succeed");
 
@@ -144,6 +145,7 @@ fn refuses_a_non_windows_iso() {
     let err = argos_privileged::windows_fat32::execute_write_windows_fat32(
         &write_plan(&loop_device, iso.path()),
         &NoopProgress,
+        &CancelToken::new(),
     )
     .unwrap_err();
     assert!(matches!(
@@ -183,6 +185,7 @@ fn verify_matches_a_prior_fat32_write() {
     argos_privileged::windows_fat32::execute_write_windows_fat32(
         &write_plan(&loop_device, iso.path()),
         &NoopProgress,
+        &CancelToken::new(),
     )
     .expect("the write itself should succeed");
 

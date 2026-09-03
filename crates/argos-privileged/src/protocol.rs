@@ -16,8 +16,46 @@
 
 use argos_core::device::Device;
 use argos_core::error::ArgosError;
+use argos_core::progress::CancelToken;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::PathBuf;
+
+/// The byte `argos` writes into `argos-helper`'s stdin to ask it to stop.
+///
+/// Chosen as ETX (0x03), what a terminal sends on Ctrl-C, because this
+/// channel already carries a line of JSON and nothing else: any byte that is
+/// not a newline-terminated plan is unambiguous, and this one names what it
+/// means.
+pub const CANCEL_SIGNAL: u8 = 0x03;
+
+/// Runs on a background thread for the duration of a write, watching
+/// whatever's left of `argos`'s stdin pipe after the `Plan` line for
+/// [`CANCEL_SIGNAL`] and calling `cancel.cancel()` when it sees one.
+///
+/// Also cancels on plain EOF (the pipe closing without the byte ever
+/// arriving) or a read error, as a safety net: if the unprivileged parent
+/// process dies or is killed outright rather than delivering a clean
+/// `SIGINT`-triggered byte, this is the only way `argos-helper` finds out --
+/// and stopping is the safer default when the process that was supposed to
+/// be watching this write is gone. Harmless if it fires *after* the write
+/// already finished (the write loop has stopped checking the token by then
+/// either way).
+///
+/// Takes a plain [`Read`] rather than assuming stdin specifically so it's
+/// testable against an in-memory buffer.
+pub fn watch_for_cancel<R: Read>(mut reader: R, cancel: CancelToken) {
+    let mut byte = [0u8; 1];
+    loop {
+        match reader.read(&mut byte) {
+            Ok(0) => break,                             // EOF -- parent closed the pipe
+            Ok(_) if byte[0] == CANCEL_SIGNAL => break, // the real signal
+            Ok(_) => continue,                          // anything else on this channel: ignore
+            Err(_) => break,
+        }
+    }
+    cancel.cancel();
+}
 
 /// The one value `argos` ever sends `argos-helper` on stdin. Tagged so a
 /// single JSON blob unambiguously carries which operation to run -- `argos
@@ -210,6 +248,35 @@ fn validate_refreshed_device_common(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn watch_for_cancel_cancels_the_token_when_it_sees_the_signal_byte() {
+        let cancel = CancelToken::new();
+        watch_for_cancel(std::io::Cursor::new(vec![CANCEL_SIGNAL]), cancel.clone());
+        assert!(cancel.is_cancelled());
+    }
+
+    /// The safety net: if `argos` dies outright instead of asking politely,
+    /// the pipe closing is the only notice the helper ever gets, and stopping
+    /// is the safer reading of it.
+    #[test]
+    fn watch_for_cancel_cancels_the_token_on_plain_eof_too() {
+        let cancel = CancelToken::new();
+        watch_for_cancel(std::io::Cursor::new(Vec::new()), cancel.clone());
+        assert!(cancel.is_cancelled());
+    }
+
+    /// Anything else on this channel is ignored rather than treated as a
+    /// cancellation -- the byte has to be the agreed one.
+    #[test]
+    fn watch_for_cancel_ignores_bytes_that_are_not_the_signal() {
+        let cancel = CancelToken::new();
+        let cancel_seen = cancel.clone();
+        watch_for_cancel(std::io::Cursor::new(vec![b'x', b'y']), cancel);
+        // Still cancelled, but only because the cursor then hit EOF -- the
+        // point is that neither byte alone stopped the loop early.
+        assert!(cancel_seen.is_cancelled());
+    }
     use super::*;
     use argos_core::device::Bus;
 

@@ -142,7 +142,9 @@ ordinary files and in-memory buffers -- no root, no real hardware.
 - `error`: `ArgosError`, a `thiserror` enum mapped to stable CLI exit codes.
 - `progress`: `ProgressSink` trait and a `CancelToken` for cooperative
   cancellation. Cancelling never tries to "undo" a partial write -- the device
-  is reported as inconsistent and must be rewritten in full.
+  is reported as inconsistent and must be rewritten in full. The FAT32 Windows
+  path goes one step further and *invalidates* what it leaves, because unlike
+  DD mode its partial media would otherwise mount and look plausible.
 - `image::isohybrid`: classifies an ISO from its first couple of sectors
   (embedded MBR signature + partition entry, El Torito boot catalog, a
   best-effort GPT/UEFI hint) into `Hybrid` / `ElToritoOnly` / `PlainData`.
@@ -350,9 +352,22 @@ no D-Bus/plist/UDisks2 API. The crate is split into a library (`protocol`,
 reused by `argos-cli` to build plans and parse events) and the `argos-helper`
 binary that is the only thing here meant to actually run privileged.
 
-**Known gap**: cancellation is not wired end-to-end yet -- nothing outside the
-helper process can currently trigger the `CancelToken` passed to the write
-loop, so a running write cannot yet be interrupted cleanly from the CLI side.
+**Cancellation is wired end-to-end** (M7.5, backlog #35). `argos` keeps the
+helper's stdin open for the whole write instead of closing it after the plan
+line; a `SIGINT` handler writes `protocol::CANCEL_SIGNAL` into it, and a
+watcher thread in `argos-helper` turns that byte -- or the pipe simply closing,
+which is what a parent that died outright leaves behind -- into a
+`CancelToken` the write loop checks on every buffer.
+
+The helper **ignores `SIGINT` itself**. Ctrl-C in a terminal goes to the whole
+foreground process group and the privilege broker leaves the helper in it, so
+the default disposition would kill it mid-write, before the write path could
+act on the cancellation at all. Cancellation therefore has exactly one
+channel, and the helper stays alive long enough to use it -- which matters
+because the FAT32 path does real work on the way out: it destroys the volume's
+boot sectors, so half-written media cannot be mistaken for good media.
+`SIGKILL` still cannot be caught, and media left behind that way is exactly
+what `ArgosError::Cancelled` has always described.
 
 **The NTFS write path (backlog #27, W3/W4) was retired at decision point
 M4.3**, once the FAT32 layout below was validated on real hardware from both

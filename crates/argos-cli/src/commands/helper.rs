@@ -8,11 +8,12 @@
 //! summary string each command prints.
 
 use argos_core::error::{ArgosError, Result};
-use argos_privileged::protocol::{Event, Plan};
+use argos_privileged::protocol::{self, Event, Plan};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Elevates, feeds `plan` to `argos-helper`, renders its progress, and
@@ -20,6 +21,13 @@ use std::time::{Duration, Instant};
 /// for a write, `Event::VerifyOk`'s `hash` for a verify -- callers already
 /// know which one they sent, so they don't need the `Event` back, only the
 /// string).
+///
+/// Cancellation (backlog #35): the helper's stdin is *not* closed right after
+/// the `Plan` line -- it stays open, held here behind a mutex, for the rest of
+/// the call. A `SIGINT` handler (`ctrlc`) writes [`protocol::CANCEL_SIGNAL`]
+/// into it and drops it, which both delivers the byte `argos-helper`'s watcher
+/// thread is reading for and closes the pipe as a second, redundant signal in
+/// case the byte doesn't make it.
 pub fn run_plan(plan: &Plan) -> Result<String> {
     let helper_path = locate_helper_binary();
     let elevation_command = if cfg!(target_os = "linux") && command_exists("pkexec") {
@@ -35,16 +43,46 @@ pub fn run_plan(plan: &Plan) -> Result<String> {
         .stderr(Stdio::inherit())
         .spawn()?;
 
+    let mut stdin = child.stdin.take().expect("stdin was piped");
     {
-        let stdin = child.stdin.as_mut().expect("stdin was piped");
+        // Newline-terminated now: the helper reads one *line* and keeps the
+        // rest of the pipe open for the cancel byte, rather than reading to
+        // EOF.
         let plan_json = serde_json::to_string(plan).map_err(std::io::Error::other)?;
-        stdin.write_all(plan_json.as_bytes())?;
+        writeln!(stdin, "{plan_json}")?;
+        stdin.flush()?;
     }
-    // Dropping stdin (by taking it out of scope) signals EOF to the helper.
-    drop(child.stdin.take());
+
+    // Held open, not dropped -- see this function's doc comment.
+    let stdin = Arc::new(Mutex::new(Some(stdin)));
+    let stdin_for_handler = Arc::clone(&stdin);
+    // Best-effort: a second `run_plan` in the same process (doesn't happen
+    // today) would find the handler already registered and get an `Err` here,
+    // which is fine to ignore -- the first registration already covers this
+    // process's whole lifetime.
+    let _ = ctrlc::set_handler(move || {
+        if let Ok(mut guard) = stdin_for_handler.lock() {
+            if let Some(mut stdin) = guard.take() {
+                // Best-effort: if the helper has already exited this just
+                // fails with a broken pipe, and there is nothing left to
+                // cancel anyway. Dropping the handle right after closes the
+                // pipe, which is itself a second, redundant cancel signal
+                // (see `protocol::watch_for_cancel`).
+                let _ = stdin.write_all(&[protocol::CANCEL_SIGNAL]);
+                let _ = stdin.flush();
+            }
+        }
+    });
 
     let stdout = child.stdout.take().expect("stdout was piped");
     let outcome = stream_helper_events(BufReader::new(stdout));
+
+    // The event stream has ended, so there is nothing left to cancel: close
+    // stdin now if the handler above didn't already, or the helper would sit
+    // waiting on a pipe nobody is going to write to.
+    if let Ok(mut guard) = stdin.lock() {
+        guard.take();
+    }
 
     let status = child.wait()?;
     match outcome {
