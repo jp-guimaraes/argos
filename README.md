@@ -124,6 +124,56 @@ cargo build --release -p argos-cli -p argos-privileged
 # binaries land in target/release/argos and target/release/argos-helper
 ```
 
+## Usage
+
+```sh
+argos list
+```
+
+Lists every disk Argos can see and whether it looks safe to write to (not a
+system disk, removable, on a USB bus). Start here -- the device path you
+need for the next step comes from this output (e.g. `/dev/sdb` on Linux,
+`/dev/diskN` on macOS).
+
+```sh
+argos write path/to/some.iso --device /dev/sdb
+```
+
+`argos` re-elevates itself (`pkexec` on Linux where available, `sudo`
+otherwise) to run `argos-helper`, which does the actual write -- expect a
+password prompt. Before anything is touched, it prints exactly what it's
+about to do and asks you to type the device path back to confirm:
+
+```
+About to overwrite:
+  device:  /dev/sdb (...)
+  size:    ...
+  image:   path/to/some.iso
+
+This will PERMANENTLY ERASE all data on /dev/sdb.
+Type the device path (/dev/sdb) to confirm:
+```
+
+A Linux or Windows installer ISO is detected automatically. Windows media
+defaults to `--layout fat32` (GPT/UEFI); add `--layout fat32-bios` for
+legacy BIOS/MBR machines instead. Linux ISOs are always written
+byte-for-byte ("DD mode") and `--layout` is ignored for them.
+
+```sh
+argos verify /dev/sdb --iso path/to/some.iso
+```
+
+Re-checks a device against the image it was supposedly written from,
+without writing anything -- useful after the fact, or if `write` was run
+with `--no-verify`. Note the argument order flips relative to `write`: the
+device is positional here and the ISO is `--iso`.
+
+Run `argos <command> --help` for every flag (`--no-verify`, `--no-eject`,
+`--i-know-what-im-doing` for a disk Argos doesn't recognize as removable
+but you're sure about), or see the man page (`argos man`, or installed
+automatically by the `.deb`/Homebrew/AUR packages above) and
+`argos completions <shell>` for tab completion.
+
 ## Inspiration
 
 At this point, it is clear that Rufus is the primary inspiration for this software. Argos aims to bring that same rock-solid reliability to a cross-platform tool that isn't limited to Windows.
