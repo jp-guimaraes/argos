@@ -1,0 +1,51 @@
+# Maintainer: João Paulo Ferreira Guimarães <jotazerupe4@gmail.com>
+pkgname=argos
+pkgver=1.5.1
+pkgrel=1
+pkgdesc="Create bootable Windows and Linux installer USB drives, for BIOS/MBR and UEFI/GPT"
+arch=('x86_64' 'aarch64')
+url="https://github.com/jp-guimaraes/argos"
+license=('MIT' 'Apache-2.0')
+depends=('gcc-libs')
+makedepends=('cargo')
+# [profile.release] strip = true (workspace Cargo.toml) already strips the
+# binaries at build time, so there is no debug info left for makepkg's
+# automatic argos-debug split package to package -- without this it builds
+# one anyway, empty and useless ("No debugging symbols").
+options=('!debug')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/jp-guimaraes/argos/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('ab57f6b63b1e46d3c69fb53de94088bbab1338820fc007885de3cebe4dda3d16')
+
+prepare() {
+    cd "argos-$pkgver"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "argos-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    # Two binaries from two crates, deliberately: argos-helper is the only
+    # thing that ever runs elevated, and it never links clap or touches the
+    # terminal. `argos` locates its helper as a sibling of its own path
+    # (locate_helper_binary in crates/argos-cli/src/commands/helper.rs), so
+    # both are built together here and installed side by side below.
+    cargo build --frozen --release -p argos-cli -p argos-privileged
+}
+
+package() {
+    cd "argos-$pkgver"
+    install -Dm755 "target/release/argos" "$pkgdir/usr/bin/argos"
+    install -Dm755 "target/release/argos-helper" "$pkgdir/usr/bin/argos-helper"
+
+    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+
+    # Generated from the built binary rather than kept as hand-maintained
+    # files, so they can never drift from the real CLI (argos completions /
+    # argos man, backlog #46).
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/man/man1/argos.1" < <("target/release/argos" man)
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/argos" < <("target/release/argos" completions bash)
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_argos" < <("target/release/argos" completions zsh)
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/argos.fish" < <("target/release/argos" completions fish)
+}

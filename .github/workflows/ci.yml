@@ -222,3 +222,37 @@ jobs:
           name: argos-deb
           path: target/debian/argos_*.deb
           if-no-files-found: error
+
+  aur-package:
+    name: build the AUR package (Arch packaging, backlog #46)
+    # Runs makepkg for real inside archlinux:base-devel -- the same reasoning
+    # as deb-package above, and the same discovery: an early version of
+    # PKGBUILD tested fine against a plain `makepkg` run, but the AUR-facing
+    # source tarball (a GitHub release tag, not this checkout) has to be
+    # fetched and built from scratch to actually prove the sha256sums and
+    # the build steps are right, so that's what this does.
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+      - run: pacman -Sy --noconfirm --needed rust namcap sudo
+      # makepkg refuses to run as root; Actions containers otherwise run
+      # everything as root by default.
+      - run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: namcap the PKGBUILD itself
+        run: sudo -u builder namcap packaging/aur/PKGBUILD
+      - name: makepkg (downloads the real release tarball and builds it)
+        working-directory: packaging/aur
+        run: sudo -u builder makepkg --syncdeps --noconfirm
+      - name: namcap the built package
+        working-directory: packaging/aur
+        run: sudo -u builder bash -c 'namcap ./*.pkg.tar.zst'
+      - name: install and smoke-test it
+        working-directory: packaging/aur
+        run: |
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          argos --version

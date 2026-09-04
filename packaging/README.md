@@ -64,8 +64,51 @@ of which tool does the building or how it's invoked afterward.
 
 Not this repository -- see [`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos).
 
-## Arch / pacman
+## Arch / pacman (AUR)
 
-See `packaging/aur/` for the AUR `PKGBUILD`.
+`packaging/aur/PKGBUILD` builds `argos` and `argos-helper` from a tagged
+release tarball, same shape as the `.deb` and the Homebrew formula: both
+binaries side by side, and the man page and shell completions generated
+from the built binary rather than kept as separate files.
+
+Validated the same way as the `.deb`: built for real with `makepkg` inside
+a plain `archlinux:base-devel` container (CI does this on every push --
+see `aur-package` in `.github/workflows/ci.yml`), then checked with
+[`namcap`](https://wiki.archlinux.org/title/Namcap), Arch's own packaging
+linter. One thing worth naming, since it isn't obvious from the diff: an
+early version built `argos-debug`, an empty debug-symbol split package --
+`[profile.release] strip = true` already strips the binaries before
+`makepkg` sees them, so there's nothing left to split out.
+`options=('!debug')` turns that off.
+
+### This is not published to the AUR yet
+
+A PKGBUILD living in this repository is not the same thing as an AUR
+package -- the AUR is a *separate* git repository per package
+(`ssh://aur@aur.archlinux.org/argos.git`), pushed to under the
+maintainer's own AUR account and SSH key. That account/key setup is a
+one-time, human step this repository's tooling can't do on anyone's
+behalf. Once it exists:
+
+```sh
+git clone ssh://aur@aur.archlinux.org/argos.git
+cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO argos/
+cd argos && git add -A && git commit -m "1.5.1-1" && git push
+```
+
+### Keeping it in sync with releases
+
+Unlike `packaging/build-deb.sh` (which always builds *this checkout*), the
+PKGBUILD's `source=` pins a specific tagged release tarball and its
+`sha256sums`. There is no way around updating both by hand for every new
+Argos version -- same as the Homebrew formula's `url`/`sha256`:
+
+```sh
+# in packaging/aur/PKGBUILD: bump pkgver, then
+curl -sL -o /tmp/argos.tar.gz \
+  https://github.com/jp-guimaraes/argos/archive/refs/tags/vX.Y.Z.tar.gz
+sha256sum /tmp/argos.tar.gz        # paste into sha256sums=(...)
+makepkg --printsrcinfo > packaging/aur/.SRCINFO
+```
 
 [cargo-deb]: https://github.com/kornelski/cargo-deb

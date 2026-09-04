@@ -1,0 +1,16 @@
+pkgbase = argos
+	pkgdesc = Create bootable Windows and Linux installer USB drives, for BIOS/MBR and UEFI/GPT
+	pkgver = 1.5.1
+	pkgrel = 1
+	url = https://github.com/jp-guimaraes/argos
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	license = Apache-2.0
+	makedepends = cargo
+	depends = gcc-libs
+	options = !debug
+	source = argos-1.5.1.tar.gz::https://github.com/jp-guimaraes/argos/archive/refs/tags/v1.5.1.tar.gz
+	sha256sums = ab57f6b63b1e46d3c69fb53de94088bbab1338820fc007885de3cebe4dda3d16
+
+pkgname = argos
