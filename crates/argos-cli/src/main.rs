@@ -81,9 +81,26 @@ enum Command {
     /// is touched, the exact target is printed and the device path has to
     /// be typed back to confirm -- there is no way to trigger this by
     /// accident, and no undo once confirmed.
+    ///
+    /// The ISO can be given either way: positionally, or as --iso. Accepting
+    /// both exists because `verify` only ever took --iso (its device is
+    /// positional instead), and typing --iso here out of habit used to be a
+    /// hard error -- reported from real use within hours of --iso being
+    /// documented for `verify`. Give exactly one; the flag exists to be
+    /// forgiving, not to make positional the deprecated form.
+    #[command(group(
+        clap::ArgGroup::new("write_iso_source")
+            .args(["iso", "iso_flag"])
+            .required(true)
+    ))]
     Write {
         /// Path to the ISO image.
-        iso: PathBuf,
+        #[arg(value_name = "ISO")]
+        iso: Option<PathBuf>,
+        /// Path to the ISO image (equivalent to the positional argument
+        /// above).
+        #[arg(long = "iso", value_name = "ISO")]
+        iso_flag: Option<PathBuf>,
         /// Target device, e.g. /dev/sdb.
         #[arg(long)]
         device: String,
@@ -147,13 +164,16 @@ fn main() {
         Command::List => commands::list::run(),
         Command::Write {
             iso,
+            iso_flag,
             device,
             no_verify,
             no_eject,
             i_know_what_im_doing,
             layout,
         } => commands::write::run(commands::write::Args {
-            iso,
+            // The ArgGroup on Command::Write guarantees exactly one of
+            // these is Some.
+            iso: iso.or(iso_flag).expect("the iso ArgGroup requires one"),
             device,
             no_verify,
             no_eject,
@@ -234,6 +254,45 @@ mod tests {
     #[test]
     fn the_cli_definition_is_internally_consistent() {
         Cli::command().debug_assert();
+    }
+
+    /// `write` accepts its ISO either way -- positionally, or as `--iso` --
+    /// unlike `verify`, which only ever takes `--iso`. Reported from real
+    /// use: `--iso` documented for `verify` got typed for `write` too,
+    /// within hours, and used to be a hard error.
+    #[test]
+    fn write_accepts_the_iso_either_positionally_or_as_a_flag() {
+        let cases: [&[&str]; 2] = [
+            &["argos", "write", "some.iso", "--device", "/dev/sdb"],
+            &[
+                "argos", "write", "--iso", "some.iso", "--device", "/dev/sdb",
+            ],
+        ];
+        for argv in cases {
+            let Command::Write {
+                iso,
+                iso_flag,
+                device,
+                ..
+            } = Cli::try_parse_from(argv).unwrap().command
+            else {
+                panic!("parsed a Write out of {argv:?}");
+            };
+            assert_eq!(iso.or(iso_flag).unwrap().to_str().unwrap(), "some.iso");
+            assert_eq!(device, "/dev/sdb");
+        }
+    }
+
+    /// Giving neither, or both, has to fail -- silently preferring one
+    /// would hide a typo (`--iso` given but ignored because a stray
+    /// positional also matched) rather than reporting it.
+    #[test]
+    fn write_refuses_neither_or_both_iso_forms() {
+        assert!(Cli::try_parse_from(["argos", "write", "--device", "/dev/sdb"]).is_err());
+        assert!(Cli::try_parse_from([
+            "argos", "write", "a.iso", "--iso", "b.iso", "--device", "/dev/sdb",
+        ])
+        .is_err());
     }
 
     /// The man page exists for packaging, so what matters is that it renders
