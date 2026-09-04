@@ -63,3 +63,9 @@ console = "0.15"
 [profile.release]
 lto = true
 codegen-units = 1
+# Found missing, not added speculatively: Debian's lintian flags an
+# unstripped binary as a packaging error, and cargo-deb's own stripping only
+# engages when it does the build itself -- a workspace build done ahead of
+# time for packaging (packaging/build-deb.sh) skipped it entirely without
+# this. Smaller binaries on every channel as a side effect.
+strip = true

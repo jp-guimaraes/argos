@@ -3,6 +3,30 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **A Debian/Ubuntu `.deb` package** (backlog #46). `packaging/build-deb.sh`
+  builds `argos` and `argos-helper` together, generates shell completions
+  and the man page from the built binary (never a hand-maintained copy),
+  and produces a package with a single dependency (`libc6`) -- no
+  `mkfs.ntfs`, no `ntfs-3g`, nothing else. Built and `lintian`-checked on
+  every push (CI) and attached to every GitHub Release. Install with:
+  `sudo apt install ./argos_<version>_amd64.deb`. See `packaging/README.md`
+  for how it's built and two non-obvious things `cargo-deb` needed correcting
+  for.
+
+### Changed
+
+- **Release binaries are now stripped** (`[profile.release] strip = true`).
+  Found missing while packaging the `.deb`: Debian's `lintian` flags an
+  unstripped binary as a packaging error, and `cargo-deb`'s own stripping
+  only takes effect when it does the build itself -- a workspace build done
+  ahead of time (as packaging, and cross-compiled release builds, both do)
+  skipped it silently. Smaller binaries on every distribution channel as a
+  side effect, not just the `.deb`.
+
 ## [1.5.1] - 2026-09-04
 
 ### Added

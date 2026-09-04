@@ -181,3 +181,44 @@ jobs:
           cargo test -p argos-privileged --features test-overrides \
             --test hdiutil_windows_fat32 --test automount_regression \
             -- --ignored --nocapture --test-threads=1
+
+  deb-package:
+    name: build and lint the .deb (Debian packaging, backlog #46)
+    # Builds a real .deb with packaging/build-deb.sh on every push and PR,
+    # then runs it through lintian -- Debian's own packaging linter -- the
+    # same way the Homebrew tap's CI builds and tests the formula on a real
+    # runner rather than trusting the config by inspection. Caught three
+    # real defects during development this way: an unstripped binary (fixed
+    # by [profile.release] strip = true), a copyright file that named
+    # Apache-2.0 without including its text, and cargo-deb's Debian-archive
+    # -only changelog expectation.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-deb --locked
+      - run: packaging/build-deb.sh
+      - run: sudo apt-get install -y lintian
+      - name: lintian (errors fail the build; warnings are printed, not enforced)
+        run: |
+          set +e
+          lintian target/debian/argos_*.deb
+          status=$?
+          set -e
+          # lintian's exit code conflates errors and warnings; only E: lines
+          # are build-breaking here. no-manual-page on argos-helper (it is
+          # never meant to be run interactively) and
+          # initial-upload-closes-no-bugs (only relevant to an actual
+          # Debian-archive ITP submission) are known, accepted warnings.
+          if lintian target/debian/argos_*.deb 2>&1 | grep -q '^E:'; then
+            echo "lintian reported an error -- see above"
+            exit 1
+          fi
+          exit 0
+      - run: sudo apt-get install -y ./target/debian/argos_*.deb
+      - run: argos --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: argos-deb
+          path: target/debian/argos_*.deb
+          if-no-files-found: error

@@ -40,6 +40,24 @@ jobs:
           targets: ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }} -p argos-cli -p argos-privileged
 
+      # Debian packaging (backlog #46): only makes sense for the glibc Linux
+      # target, and packaging/build-deb.sh assumes an untargeted build
+      # (`target/release/`, not `target/${{ matrix.target }}/release/`), so
+      # it gets its own plain `cargo build` rather than reusing the one
+      # above.
+      - name: Build the .deb
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo install cargo-deb --locked
+          packaging/build-deb.sh
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: argos-deb
+          path: target/debian/argos_*.deb
+          if-no-files-found: error
+
       - name: Package
         env:
           TARGET: ${{ matrix.target }}
@@ -68,11 +86,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create the GitHub Release and attach every target's tarball
+      - name: Create the GitHub Release and attach every target's tarball, plus the .deb
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" dist/*.tar.gz \
+          gh release create "${{ github.ref_name }}" dist/*.tar.gz dist/*.deb \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes
