@@ -3,6 +3,23 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`argos write`/`argos verify` failed on a relative ISO path, elevating
+  via `pkexec`.** Reported from real hardware: `argos write some.iso
+  --device /dev/sdg`, run from the directory holding the ISO, passed the
+  confirmation prompt and started unmounting, then failed with a bare "No
+  such file or directory" and no further explanation. `pkexec` resets the
+  working directory before running the elevated `argos-helper` (the same
+  cwd-reset hardening any setuid-style launcher applies, so a relative path
+  can't resolve somewhere the caller didn't intend) -- `sudo` commonly
+  preserves it, which is why this went unnoticed on macOS. The ISO path is
+  now resolved to absolute in `argos` itself, before the confirmation
+  prompt, so a bad path fails immediately and by name instead of well after
+  the user has already confirmed a write.
+
 ## [1.5.2] - 2026-09-04
 
 Also the first tag to actually exercise the `.deb`-building step

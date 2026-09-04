@@ -11,10 +11,34 @@ use argos_core::error::{ArgosError, Result};
 use argos_privileged::protocol::{self, Event, Plan};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Resolves an ISO path to absolute before it's put in a `Plan` and sent
+/// across the privilege boundary to `argos-helper`.
+///
+/// Load-bearing, not defensive: `argos-helper` opens `plan.image_path` (or
+/// `plan.iso_path`) relative to *its own* working directory, not the shell's
+/// the user typed a relative path in. `sudo` commonly preserves the caller's
+/// cwd, which is why this went unnoticed for a long time -- `pkexec`
+/// deliberately does not (the same cwd-reset hardening every setuid-style
+/// launcher does, to stop a relative path from resolving somewhere the
+/// caller didn't intend), so it surfaces exactly there: confirmed on real
+/// hardware, running `argos write some.iso --device /dev/sdg` from the
+/// directory holding the ISO -- unmounting succeeds, then `File::open` on
+/// the (still-relative) path fails with a bare, pathless "No such file or
+/// directory" from deep inside the elevated helper, well after the
+/// destructive confirmation prompt.
+///
+/// Resolving here instead means a bad path fails immediately, with the path
+/// named in the message, before any confirmation prompt, unmount, or
+/// elevation -- not moments after the user has confirmed a write.
+pub fn canonicalize_iso_path(path: &Path) -> Result<PathBuf> {
+    path.canonicalize()
+        .map_err(|err| ArgosError::Io(std::io::Error::other(format!("{}: {err}", path.display()))))
+}
 
 /// Elevates, feeds `plan` to `argos-helper`, renders its progress, and
 /// returns the hash it reported on success (`Event::Done`'s `written_hash`
@@ -326,6 +350,44 @@ fn command_exists(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This is the actual bug: a relative path resolves fine right here
+    /// (same process, same cwd as the shell), which is exactly what let it
+    /// through code review and every existing test (all of which use
+    /// tempfile's always-absolute paths) -- and then fails deep inside
+    /// argos-helper, elevated via a mechanism that may not preserve cwd,
+    /// with an error naming no path at all. Pins the fix at the type that
+    /// actually crosses the privilege boundary: what canonicalize_iso_path
+    /// returns must be absolute, not merely "resolved without error".
+    #[test]
+    fn a_relative_path_comes_back_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let iso = dir.path().join("some.iso");
+        std::fs::write(&iso, b"x").unwrap();
+
+        let original_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = canonicalize_iso_path(Path::new("some.iso"));
+        std::env::set_current_dir(original_cwd).unwrap();
+
+        let resolved = result.expect("a file that exists should resolve");
+        assert!(resolved.is_absolute(), "got {resolved:?}, not absolute");
+        assert_eq!(resolved.file_name().unwrap(), "some.iso");
+    }
+
+    /// The failure case has to name the path -- a bare "No such file or
+    /// directory" is what the user actually saw in the field, and it names
+    /// nothing to act on.
+    #[test]
+    fn a_missing_path_is_named_in_the_error() {
+        let err = canonicalize_iso_path(Path::new("/definitely/does/not/exist.iso"))
+            .expect_err("a nonexistent path must not resolve");
+        let message = err.to_string();
+        assert!(
+            message.contains("does/not/exist.iso"),
+            "error {message:?} does not name the path"
+        );
+    }
 
     #[test]
     fn human_size_formats_bytes_and_larger_units() {
