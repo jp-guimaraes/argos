@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "argos-cli"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "argos-core",
  "argos-platform",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "argos-core"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "hadris-udf",
  "libc",
@@ -95,14 +95,14 @@ dependencies = [
 
 [[package]]
 name = "argos-platform"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "argos-core",
 ]
 
 [[package]]
 name = "argos-platform-linux"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "argos-core",
  "argos-platform",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "argos-platform-macos"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "argos-core",
  "argos-platform",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "argos-platform-windows"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "argos-core",
  "argos-platform",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "argos-privileged"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "argos-core",
  "argos-platform",
