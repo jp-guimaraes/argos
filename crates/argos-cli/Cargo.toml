@@ -1,6 +1,6 @@
 [package]
 name = "argos-cli"
-description = "The `argos` command-line tool."
+description = "Create bootable Windows and Linux installer USB drives"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,38 @@ authors.workspace = true
 [[bin]]
 name = "argos"
 path = "src/main.rs"
+
+# Debian packaging (packaging/build-deb.sh, backlog #46). Built and lintian
+# -checked on every push (.github/workflows/ci.yml) and attached to every
+# release (.github/workflows/release.yml) -- see packaging/README.md for
+# what each field is doing and why the asset paths are the shape they are.
+[package.metadata.deb]
+name = "argos"
+maintainer = "João Paulo Ferreira Guimarães <jotazerupe4@gmail.com>"
+copyright = "2026, Argos contributors"
+extended-description = """\
+Argos creates bootable Windows and Linux installer USB drives, in the \
+spirit of Rufus, for both legacy BIOS/MBR and modern UEFI/GPT machines, \
+from Linux or macOS. Windows media is written as a pure-Rust FAT32 volume \
+with no mkfs.ntfs, no FUSE, and no vendored boot-loader blob."""
+section = "utils"
+priority = "optional"
+depends = "$auto"
+changelog = "../../packaging/debian/changelog"
+assets = [
+    ["../../packaging/debian/copyright", "usr/share/doc/argos/copyright", "644"],
+    # target/release/ has to stay exactly this, with no ../.. -- it is the
+    # one prefix cargo-deb resolves against the workspace's real target dir
+    # (accounting for CARGO_TARGET_DIR, cross-compilation, etc.) instead of
+    # against this crate's own directory. Every other asset below it is
+    # ordinary crate-relative, which is why they carry ../../.
+    ["target/release/argos", "usr/bin/", "755"],
+    ["target/release/argos-helper", "usr/bin/", "755"],
+    ["../../target/deb-assets/argos.1", "usr/share/man/man1/", "644"],
+    ["../../target/deb-assets/argos.bash", "usr/share/bash-completion/completions/argos", "644"],
+    ["../../target/deb-assets/_argos", "usr/share/zsh/vendor-completions/_argos", "644"],
+    ["../../target/deb-assets/argos.fish", "usr/share/fish/vendor_completions.d/argos.fish", "644"],
+]
 
 [dependencies]
 ctrlc = { workspace = true }
