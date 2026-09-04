@@ -18,6 +18,8 @@ argos-core = { workspace = true }
 argos-platform = { workspace = true }
 argos-privileged = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 indicatif = { workspace = true }
 console = { workspace = true }
 serde_json = { workspace = true }

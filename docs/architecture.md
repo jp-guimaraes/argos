@@ -125,7 +125,6 @@ crates/
   argos-platform-windows/ # deliberate stub, proves the trait has no Unix bias, out of v1 scope
   argos-privileged/       # argos-helper: the one binary meant to run as root
   argos-cli/              # the `argos` binary
-xtask/                    # developer tooling (currently unused placeholder)
 ```
 
 `argos-core` never imports anything OS-specific for disk access; it receives

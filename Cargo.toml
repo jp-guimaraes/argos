@@ -8,7 +8,6 @@ members = [
     "crates/argos-platform-windows",
     "crates/argos-privileged",
     "crates/argos-cli",
-    "xtask",
 ]
 
 [workspace.package]
@@ -52,6 +51,12 @@ gptman = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
+# argos-cli only: `argos completions` and the hidden `argos man` generate
+# packaging artifacts from the same clap definition the CLI already carries,
+# so a distribution package never has to keep a hand-written copy in step
+# (backlog #46).
+clap_complete = "4"
+clap_mangen = "0.2"
 indicatif = "0.17"
 console = "0.15"
 
