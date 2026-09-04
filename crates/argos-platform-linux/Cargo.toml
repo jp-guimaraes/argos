@@ -27,6 +27,12 @@ argos-platform = { workspace = true }
 # runtime anywhere but Linux).
 zbus = "5"
 
+# Only where it is used: `unmount_path` calls `umount2(2)` directly (M7.1,
+# backlog #46). Target-gated so the other hosts this crate still compiles on
+# -- it is a workspace member, see the note above -- do not pull it in.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 libc = "0.2"
 # Used by tests/dm_resolution.rs to create a throwaway loop-device backing
