@@ -79,6 +79,20 @@ pub struct WritePlan {
     pub image_path: PathBuf,
     pub image_size_bytes: u64,
     pub verify: bool,
+    /// Whether to eject once the write (and its verify) has finished.
+    ///
+    /// Carried in the plan, rather than left to `argos-cli` after the helper
+    /// exits, because ejecting needs the same privilege writing does: on a
+    /// stock Ubuntu `/dev/sdX` is `root:disk` and the user running `argos`
+    /// typically isn't in `disk`, so the CLI's own attempt failed with
+    /// "cannot open /dev/sdg: Permission denied" on the very device it had
+    /// just written successfully. Reported from real hardware.
+    ///
+    /// `#[serde(default)]` for the same reason [`WriteWindowsPlan::layout`]
+    /// has it: a plan from an older `argos` carries no `eject` key, and the
+    /// conservative reading of that is "don't touch the device further".
+    #[serde(default)]
+    pub eject: bool,
 }
 
 /// The Windows installer write path's counterpart to [`WritePlan`] (phase 3
@@ -102,6 +116,11 @@ pub struct WriteWindowsPlan {
     /// [`WindowsLayout::Fat32`].
     #[serde(default)]
     pub layout: WindowsLayout,
+    /// Whether to eject once the write has finished -- see
+    /// [`WritePlan::eject`], which this mirrors exactly; the Windows path
+    /// had the same unprivileged-eject failure.
+    #[serde(default)]
+    pub eject: bool,
 }
 
 /// The on-disk layouts the helper can produce for a Windows installer write
@@ -176,6 +195,16 @@ pub enum Event {
     },
     WindowsVerifyOk {
         files_verified: u64,
+    },
+    /// The outcome of the post-write eject, emitted after the terminal
+    /// event (so the CLI's progress bar is already finished and printing is
+    /// safe) and only when the plan asked for one. `error` carries the
+    /// failure text rather than failing the operation: the write has already
+    /// succeeded and been verified by this point, so a device that won't
+    /// eject is a warning about unplugging, not a bad write.
+    Ejected {
+        device_path: String,
+        error: Option<String>,
     },
     Error {
         message: String,
@@ -288,6 +317,7 @@ mod tests {
             image_path: "/tmp/ubuntu.iso".into(),
             image_size_bytes: 4_000_000_000,
             verify: true,
+            eject: true,
         }
     }
 
@@ -392,5 +422,28 @@ mod tests {
         let json = r#"{"kind":"write_windows_image","device_path":"/dev/sdz","expected_serial":null,"expected_size_bytes":8000000000,"iso_path":"/tmp/Win11.iso"}"#;
         let parsed: Plan = serde_json::from_str(json).unwrap();
         assert!(matches!(parsed, Plan::WriteWindowsImage(p) if p.layout == WindowsLayout::Fat32));
+    }
+
+    /// A plan JSON written before the `eject` field existed must still parse,
+    /// and must *not* eject: the sender never asked for it, and touching a
+    /// device further than a plan asked is the wrong way to be wrong.
+    #[test]
+    fn write_plans_without_an_eject_key_do_not_eject() {
+        let json = r#"{"kind":"write","device_path":"/dev/sdz","expected_serial":null,"expected_size_bytes":8000000000,"image_path":"/tmp/ubuntu.iso","image_size_bytes":4000000000,"verify":true}"#;
+        let parsed: Plan = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Plan::Write(p) if !p.eject));
+    }
+
+    #[test]
+    fn an_eject_outcome_round_trips_both_ways() {
+        for error in [None, Some("eject exited with exit status: 1".to_string())] {
+            let event = Event::Ejected {
+                device_path: "/dev/sdz".into(),
+                error: error.clone(),
+            };
+            let json = serde_json::to_string(&event).unwrap();
+            let parsed: Event = serde_json::from_str(&json).unwrap();
+            assert!(matches!(parsed, Event::Ejected { error: e, .. } if e == error));
+        }
     }
 }

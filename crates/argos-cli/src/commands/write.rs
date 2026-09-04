@@ -81,14 +81,11 @@ fn run_dd_write(platform: &impl PlatformOps, device: &Device, args: &Args) -> Re
         image_path: args.iso.clone(),
         image_size_bytes,
         verify: !args.no_verify,
+        eject: !args.no_eject,
     };
 
     let written_hash = helper::run_plan(&Plan::Write(plan))?;
     println!("Done. SHA-256: {written_hash}");
-
-    if !args.no_eject {
-        eject_best_effort(platform, device);
-    }
 
     Ok(())
 }
@@ -129,6 +126,7 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
         expected_size_bytes: device.size_bytes,
         iso_path: args.iso.clone(),
         layout: args.layout,
+        eject: !args.no_eject,
     };
 
     let outcome = helper::run_plan(&Plan::WriteWindowsImage(plan))?;
@@ -138,10 +136,6 @@ fn run_windows_write(platform: &impl PlatformOps, device: &Device, args: &Args) 
         device.platform_id,
         args.iso.display()
     );
-
-    if !args.no_eject {
-        eject_best_effort(platform, device);
-    }
 
     Ok(())
 }
@@ -182,22 +176,14 @@ fn check_source_collision(platform: &impl PlatformOps, device: &Device, args: &A
     Ok(())
 }
 
-/// Ejects the just-written device. Never fails the command over this: the
-/// write itself already succeeded (that's what matters and what the exit
-/// code reflects), and both current `PlatformOps` backends already treat the
-/// underlying `eject`/`diskutil eject` call as best-effort internally --
-/// this only adds the same posture at the one call site that skipped it
-/// until now, plus a message either way so the user isn't left guessing
-/// whether it's safe to unplug.
-fn eject_best_effort(platform: &impl PlatformOps, device: &Device) {
-    match platform.eject(device) {
-        Ok(()) => println!("Ejected {}. Safe to unplug.", device.platform_id),
-        Err(err) => eprintln!(
-            "warning: could not eject {}: {err} (the write itself succeeded -- eject it manually before unplugging)",
-            device.platform_id
-        ),
-    }
-}
+// Ejecting used to happen here, right after the helper exited, and the
+// messages it printed now come from `Event::Ejected` in
+// `helper::stream_helper_events` instead. The move is the fix: an eject
+// attempted from this unprivileged process cannot even open `/dev/sdX` on a
+// stock Ubuntu (`root:disk`, and the user is typically not in `disk`), so it
+// failed with EACCES on exactly the device the elevated helper had just
+// written. The plan carries `eject` and the helper does it while it still
+// holds the privilege. See `protocol::WritePlan::eject`.
 
 /// The non-negotiable part of the safety gate: a system disk is refused
 /// unconditionally, no flag overrides it. A disk the OS doesn't report as

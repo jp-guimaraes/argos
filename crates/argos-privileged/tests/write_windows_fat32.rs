@@ -84,6 +84,7 @@ fn write_plan(loop_device: &LoopDevice, iso_path: &std::path::Path) -> WriteWind
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso_path.to_path_buf(),
         layout: WindowsLayout::Fat32,
+        eject: false,
     }
 }
 

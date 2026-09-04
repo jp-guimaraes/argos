@@ -54,6 +54,21 @@ pub fn is_excluded_block_device_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// Pulls "sectors written" out of a `/sys/block/<dev>/stat` line: field 7
+/// (1-based) of a whitespace-separated row, in 512-byte sectors regardless of
+/// the device's own block size (kernel `Documentation/block/stat.rst`).
+///
+/// This is completed writes as counted by the block layer, so it tracks what
+/// has actually reached the device rather than what is still sitting in the
+/// page cache -- which is what makes it usable as a progress signal that
+/// doesn't lie, without an `fsync` barrier to force the answer to be true.
+/// Verified against a controlled 64MiB write: 131344 sectors for 131072
+/// written, the difference being filesystem journal traffic a raw device
+/// write doesn't have.
+pub fn parse_sectors_written(stat_contents: &str) -> Option<u64> {
+    stat_contents.split_whitespace().nth(6)?.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +113,24 @@ mod tests {
         assert!(is_excluded_block_device_name("sr0"));
         assert!(!is_excluded_block_device_name("sdb"));
         assert!(!is_excluded_block_device_name("nvme0n1"));
+    }
+
+    /// A real row, copied verbatim off `/sys/block/sdg/stat` mid-write on the
+    /// USB stick this was built for: 1796632 is the sectors-written field,
+    /// and picking the wrong column here would silently report someone
+    /// else's number (read sectors, merges, ticks) as write progress.
+    #[test]
+    fn reads_the_sectors_written_column_of_a_real_stat_row() {
+        let row = "     265      415    14090     1371      999   171818  1796632   \
+                   433014        1   261347   434386        0        0        0        0        \
+                   0        0";
+        assert_eq!(parse_sectors_written(row), Some(1_796_632));
+    }
+
+    #[test]
+    fn a_stat_row_that_is_too_short_or_unparsable_reports_nothing() {
+        assert_eq!(parse_sectors_written(""), None);
+        assert_eq!(parse_sectors_written("1 2 3 4 5 6"), None);
+        assert_eq!(parse_sectors_written("1 2 3 4 5 6 not-a-number"), None);
     }
 }

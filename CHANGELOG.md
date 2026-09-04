@@ -3,6 +3,67 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **The write progress bar now tracks bytes the device has actually taken,
+  not bytes merely handed to the OS -- without slowing the write down.**
+  Reported from real hardware: the bar climbed to 100% in an instant (a
+  `write()` only queues bytes in the page cache), then the write sat there
+  looking finished while the kernel was still flushing gigabytes to a slow
+  USB stick in the background. 1.5.4's `Flushing` phase named that wait but
+  had nothing to show during it.
+
+  Progress now comes from the kernel's own per-device counter (field 7 of
+  `/sys/block/<dev>/stat`, completed sectors written), sampled during the
+  copy and again on a background thread while the final `fsync` blocks --
+  so the flush phase advances with real numbers instead of standing still.
+  Nothing about the write path itself changed: it stays plain buffered
+  writes, which is what lets the kernel merge them into large sequential
+  device requests.
+
+  The first attempt at this instead *forced* the answer to be true, with an
+  `fsync` every 64MiB. Measured on the same stick, that dropped a write the
+  kernel otherwise kept 100% busy to roughly 1 MiB/s, because each barrier
+  drains the queue and flushes the device's internal cache. Watching a
+  counter costs nothing; forcing a barrier costs almost everything.
+
+  Platforms with no such counter (macOS, for now) fall back to the previous
+  behavior rather than losing progress reporting.
+
+### Fixed
+
+- **`eject` failing silently claimed "Safe to unplug" anyway.** Reported from
+  real hardware: `eject: cannot open /dev/sdX: Permission denied` printed to
+  the terminal, immediately followed by `Ejected /dev/sdX. Safe to unplug.`
+  Both the Linux and macOS `PlatformOps::eject` backends discarded the
+  underlying `eject`/`diskutil eject` exit status and always returned `Ok(())`
+  -- `eject_best_effort` in the CLI already had the right behavior for a
+  real failure (a warning telling the user to eject manually, without
+  failing the write), but that path was dead code since the backends never
+  actually produced an `Err`. Both now report a real failure (while still
+  treating a missing `eject` binary on Linux as nothing to report, since
+  there's no eject-manage step to have failed); the write itself is
+  unaffected either way -- the physical flush already happened earlier, in
+  `argos-helper`, before eject is ever attempted.
+
+- **The post-write eject then failed for a much simpler reason: it had no
+  privilege.** With the message above finally telling the truth, what it
+  told was `could not eject /dev/sdg: eject exited with exit status: 1`,
+  from `eject: cannot open /dev/sdg: Permission denied` -- on a stock
+  Ubuntu, `/dev/sdX` is `root:disk` mode 0660 and the user running `argos`
+  is typically not in `disk`. Writing works because it happens in the
+  elevated `argos-helper`; ejecting was the one step left behind in the
+  unprivileged CLI, so it could not even open the device it had just
+  written. The eject now travels in the plan (`WritePlan::eject`,
+  `WriteWindowsPlan::eject`) and runs in the helper, which reports the
+  outcome back as a new `Ejected` event -- so the CLI prints the same two
+  messages as before, but from a process that could actually do the work.
+  `--no-eject` is unchanged. Note this is an `EACCES` on `open`, not the
+  `EBUSY` an in-flight write would give: the data was already flushed and
+  verified by the time eject ran.
+
 ## [1.5.4] - 2026-09-04
 
 ### Added

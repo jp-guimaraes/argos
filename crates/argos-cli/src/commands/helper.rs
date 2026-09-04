@@ -167,6 +167,17 @@ fn stream_helper_events<R: std::io::Read>(
                 presenter.finish("verified");
                 outcome = Some(Ok(format!("{files_verified} files verified")));
             }
+            // Arrives after the terminal event, so the bar is already
+            // finished and printing here can't garble it -- see
+            // `Event::Ejected`. The write's own success is unaffected either
+            // way, which is why this only prints and never touches
+            // `outcome`.
+            Event::Ejected { device_path, error } => match error {
+                None => println!("Ejected {device_path}. Safe to unplug."),
+                Some(err) => eprintln!(
+                    "warning: could not eject {device_path}: {err} (the write itself succeeded -- eject it manually before unplugging)"
+                ),
+            },
             Event::Error { message, .. } => {
                 presenter.abandon();
                 outcome = Some(Err(ArgosError::Io(std::io::Error::other(message))));

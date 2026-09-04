@@ -18,9 +18,11 @@ use argos_core::image::checksum::sha256_stream;
 use argos_core::progress::{CancelToken, Phase, ProgressSink};
 use argos_core::write::dd_mode;
 use argos_core::{preflight, verify};
-use argos_platform::PlatformOps;
+use argos_platform::{PlatformOps, WrittenBytes};
 use protocol::{VerifyPlan, WritePlan};
 use std::fs::{File, OpenOptions};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Re-validates the target device, unmounts it, writes `plan.image_path` to
 /// `plan.device_path`, and (unless `plan.verify` is false) reads it back to
@@ -55,6 +57,20 @@ pub fn execute(
     progress.on_phase(Phase::Unmounting);
     platform.unmount(&device)?;
 
+    // Resolved from the `Device` before the binding below shadows it with the
+    // open file handle, and read *before* the first byte is written: the
+    // counter is cumulative for the device's whole lifetime, so only the
+    // delta from here means anything. A platform with no counter leaves this
+    // `None`, and progress falls back to bytes handed to the OS.
+    let counter = platform.written_bytes(&device);
+    let baseline = counter.as_ref().and_then(WrittenBytes::read).unwrap_or(0);
+    let committed = || {
+        counter
+            .as_ref()?
+            .read()
+            .map(|now| now.saturating_sub(baseline))
+    };
+
     let mut image = File::open(&plan.image_path)?;
     let mut device = OpenOptions::new().write(true).open(&plan.device_path)?;
 
@@ -65,8 +81,9 @@ pub fn execute(
         plan.image_size_bytes,
         progress,
         cancel,
+        &committed,
     )?;
-    flush_write(progress, &device)?;
+    flush_write(progress, &device, plan.image_size_bytes, &committed)?;
     drop(device);
 
     if plan.verify {
@@ -94,9 +111,64 @@ pub fn execute(
 /// yet. See [`partition_io::sync_device`]'s doc comment for the macOS
 /// device-node quirk this already had to work around once, on the other
 /// write path.
-fn flush_write(progress: &dyn ProgressSink, device: &File) -> Result<()> {
+///
+/// This is where most of a fast-looking write's real time is spent, so it
+/// samples `committed` on a second thread while `fsync` blocks: the phase
+/// that used to be a motionless bar (the whole reason it was given a name in
+/// 1.5.4) now advances through the flush with the device's own numbers. The
+/// sampler is deliberately the only thing that thread does -- no I/O against
+/// the device it's reporting on -- so it can't slow down the flush it's
+/// watching.
+fn flush_write(
+    progress: &dyn ProgressSink,
+    device: &File,
+    total_size: u64,
+    committed: &(impl Fn() -> Option<u64> + Sync),
+) -> Result<()> {
     progress.on_phase(Phase::Flushing);
-    partition_io::sync_device(device).map_err(ArgosError::Io)
+
+    let flushing = AtomicBool::new(true);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while flushing.load(Ordering::Relaxed) {
+                if let Some(bytes) = committed() {
+                    progress.on_progress(bytes.min(total_size), total_size);
+                }
+                std::thread::sleep(SAMPLE_INTERVAL);
+            }
+        });
+
+        let result = partition_io::sync_device(device).map_err(ArgosError::Io);
+        flushing.store(false, Ordering::Relaxed);
+        result
+    })
+}
+
+/// How often the flush phase asks the device how far it has got. Frequent
+/// enough to look live, rare enough that reading a sysfs file is nothing next
+/// to the flush itself.
+const SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Ejects a device the helper has just finished writing.
+///
+/// This lives on the privileged side because that is where the privilege is.
+/// `argos-cli` used to do it right after the helper exited, and on a stock
+/// Ubuntu that fails: `/dev/sdX` is `root:disk` mode 0660 and the user
+/// running `argos` is typically not in `disk`, so `eject` couldn't even open
+/// the device -- "cannot open /dev/sdg: Permission denied", on the very
+/// device the write had just succeeded on (reported from real hardware, on a
+/// user in `adm cdrom sudo dip plugdev users lpadmin` and no `disk`).
+///
+/// Re-resolves the device rather than trusting the path alone, the same
+/// posture [`execute`] takes -- though without
+/// [`protocol::validate_refreshed_device`]'s full refusal, since ejecting is
+/// not destructive and the write it follows has already been verified.
+pub fn eject_device(device_path: &str) -> Result<()> {
+    let platform = platform_select::current_platform();
+    let device = platform
+        .refresh(device_path, None)?
+        .ok_or_else(|| ArgosError::DeviceNotFound(device_path.to_string()))?;
+    platform.eject(&device)
 }
 
 /// Re-runs verification against a device without writing again: hashes
@@ -137,6 +209,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingProgress {
         phases: Mutex<Vec<Phase>>,
+        progress: Mutex<Vec<(u64, u64)>>,
     }
 
     impl ProgressSink for RecordingProgress {
@@ -144,7 +217,12 @@ mod tests {
             self.phases.lock().unwrap().push(phase);
         }
 
-        fn on_progress(&self, _bytes_done: u64, _bytes_total: u64) {}
+        fn on_progress(&self, bytes_done: u64, bytes_total: u64) {
+            self.progress
+                .lock()
+                .unwrap()
+                .push((bytes_done, bytes_total));
+        }
     }
 
     /// The regression this guards: a write that only ever called the
@@ -158,9 +236,33 @@ mod tests {
         let progress = Arc::new(RecordingProgress::default());
         let device = tempfile::tempfile().unwrap();
 
-        flush_write(progress.as_ref(), &device).unwrap();
+        flush_write(progress.as_ref(), &device, 100, &|| None).unwrap();
 
         let phases = progress.phases.lock().unwrap();
         assert_eq!(*phases, vec![Phase::Flushing]);
+    }
+
+    /// The flush is where a fast-looking write actually spends its time, and
+    /// it used to show a motionless bar for all of it. It now samples the
+    /// device's own counter while `fsync` blocks -- so a flush that takes
+    /// long enough to sample at all reports what the device has taken, and
+    /// never more than the write's own total.
+    #[test]
+    fn flushing_reports_progress_from_the_device_counter() {
+        let progress = Arc::new(RecordingProgress::default());
+        // Big enough that the flush outlasts at least one sample interval,
+        // rather than racing the sampler's first tick.
+        let mut device = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut device, &vec![0u8; 32 * 1024 * 1024]).unwrap();
+
+        // Runs away past the total, the way a device-wide counter can when
+        // something else touches the same disk.
+        flush_write(progress.as_ref(), &device, 1000, &|| Some(u64::MAX)).unwrap();
+
+        let reported = progress.progress.lock().unwrap();
+        assert!(
+            reported.iter().all(|&(done, total)| done <= total),
+            "progress must never exceed the total: {reported:?}"
+        );
     }
 }
