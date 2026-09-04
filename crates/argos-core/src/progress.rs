@@ -11,6 +11,15 @@ pub enum Phase {
     Unmounting,
     Checksumming,
     Writing,
+    /// Forcing the OS to actually commit what `Writing` handed it to the
+    /// physical device, rather than trusting that the write loop finishing
+    /// means the bytes are there (backlog #35's sibling problem: a plain
+    /// `std::fs::File` write is absorbed into the page cache and can report
+    /// success in milliseconds while the kernel is still flushing gigabytes
+    /// to a slow USB stick in the background -- this phase is what makes
+    /// the wait visible instead of leaving `Verifying`'s progress bar
+    /// looking stalled for however long that takes).
+    Flushing,
     Verifying,
     /// Creating the GPT for a Windows installer write (phase 3 M3, backlog
     /// #43).

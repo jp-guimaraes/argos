@@ -3,6 +3,23 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The DD-mode write path never forced a real flush to the device.**
+  Reported from real hardware: a 5.8GB Ubuntu ISO write to a USB stick
+  looked done almost instantly, then verification stalled with no visible
+  progress. `device.flush()` is a no-op default on `std::fs::File`, which
+  doesn't override it -- a plain `write()` only queues bytes in the page
+  cache, so the write loop finishing meant nothing about whether the OS had
+  actually committed anything to the physical device yet. Verification's
+  read-back was landing behind whatever the kernel was still flushing in
+  the background, which is what looked like a hang. Replaced with a real
+  `fsync` (the same `partition_io::sync_device` the Windows write path
+  already used), and added a `Flushing` progress phase so the wait is
+  visible instead of looking like a stalled bar.
+
 ## [1.5.3] - 2026-09-04
 
 ### Changed
