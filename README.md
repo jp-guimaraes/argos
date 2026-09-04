@@ -16,9 +16,10 @@ wide range of Linux distributions and, ideally, on macOS as well.
 
 ## Status
 
-Argos has reached v1.0, and **phase 3 (Windows installer media) is
-implemented and validated on real hardware** — see `[Unreleased]` in the
-changelog.
+Argos delivers phase 3 (Windows installer media) validated on real hardware
+from both hosts and on both firmwares — see the
+[latest release](https://github.com/jp-guimaraes/argos/releases/latest) and
+[`CHANGELOG.md`](CHANGELOG.md) for what shipped.
 
 - **Images**: Linux ISOs (including isohybrid images), written byte-for-byte
   in "DD mode"; and Windows 10/11 installer ISOs, written as a FAT32 volume
@@ -41,8 +42,45 @@ test the project.
 
 ## Installation
 
-Pre-built binaries for Linux (`x86_64-unknown-linux-gnu`) and macOS
-(`aarch64-apple-darwin`, `x86_64-apple-darwin`) are attached to each
+### Homebrew (macOS)
+
+```sh
+brew install jp-guimaraes/argos/argos
+```
+
+Builds from source (there is no pre-built bottle yet); a Rust toolchain is
+pulled in automatically as a build dependency. See
+[`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos).
+
+### apt / `.deb` (Debian, Ubuntu)
+
+Download `argos_<version>_amd64.deb` from the
+[latest release](https://github.com/jp-guimaraes/argos/releases/latest),
+then:
+
+```sh
+sudo apt install ./argos_<version>_amd64.deb
+```
+
+A single runtime dependency (`libc6`) -- no `mkfs.ntfs`, no `ntfs-3g`,
+nothing else. See `packaging/README.md` for how the package is built.
+
+### Arch / pacman
+
+Not on the AUR yet -- `packaging/aur/PKGBUILD` is in this repository and
+validated in CI, but publishing it needs the maintainer's own AUR account
+(see `packaging/README.md`). Until then, build it locally:
+
+```sh
+git clone https://github.com/jp-guimaraes/argos.git
+cd argos/packaging/aur
+makepkg -si
+```
+
+### Pre-built binaries
+
+For any other platform: Linux (`x86_64-unknown-linux-gnu`) and macOS
+(`aarch64-apple-darwin`, `x86_64-apple-darwin`) tarballs are attached to each
 [GitHub Release](https://github.com/jp-guimaraes/argos/releases) -- download
 the tarball for your platform, extract it, and put `argos` and
 `argos-helper` somewhere on your `PATH` (both binaries must stay in the same
@@ -50,9 +88,6 @@ directory; `argos` looks for `argos-helper` next to itself first). Neither
 binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on
 first launch until you approve it once in System Settings -> Privacy &
 Security.
-
-See [Releases](https://github.com/jp-guimaraes/argos/releases) for the
-current tarballs.
 
 ### Via `cargo install`
 
@@ -67,6 +102,19 @@ directory (`~/.cargo/bin` by default), which is what puts them next to each
 other. Passing only `argos-cli` installs `argos` without the helper binary it
 needs at runtime -- always install both together.
 
+> **macOS with Homebrew's `rustup`**: `cargo install` puts its binaries in
+> `~/.cargo/bin`, and Homebrew's keg-only `rustup` formula does **not** add
+> that directory to your `PATH` — the official `rustup-init` installer does,
+> which is why this bites Homebrew users specifically. If `argos` comes back
+> as `command not found` immediately after a successful install, that is all
+> this is:
+>
+> ```sh
+> export PATH="$HOME/.cargo/bin:$PATH"
+> ```
+>
+> Add it to your `~/.zshrc` to make it stick.
+
 ### From source
 
 ```sh
@@ -78,7 +126,11 @@ cargo build --release -p argos-cli -p argos-privileged
 
 ## Inspiration
 
-A good source of inspiration is
-[Rufus](https://github.com/pbatard/rufus), a free-software tool for Windows.
-Argos aims to bring the same reliability to a cross-platform tool that isn't
-limited to Windows.
+At this point, it is clear that Rufus is the primary inspiration for this software. Argos aims to bring that same rock-solid reliability to a cross-platform tool that isn't limited to Windows.
+After using Rufus over the years, I always thought "Rufus" sounded like a great dog name. Naturally, this project needed another great dog name to honor the tradition of pairing dependable bootable USB tools with canine names, so Argos it is! 
+The backronym came afterward, and it is deliberately not in English: 
+**A**ssistente de **R**ebolar **G**ueri-gueris em **O**utros **S**istemas
+
+This is Brazilian Portuguese—specifically, regional slang from the Brazilian Northeast. Two words won't survive a standard dictionary lookup: rebolar here does not mean "to shake hips/dance," but to fling or to toss; and gueri-gueri translates to doodad or knick-knack—a small thing nobody bothers to name properly. Roughly translated, it means "Assistant for Flinging Doodads onto Other Systems", which feels like an honest description of writing an ISO to a flash drive.
+
+Argos was also planned as an experiment to test the current state of AI-assisted software development using agent harnesses. Rust was deliberately chosen because I had zero prior experience with it. On top of that, it involved low-level tasks requiring interaction with hardware, disk partitions, and system BIOS/UEFI. Watching the agents navigate these problems was both fun and eye-opening. A lot of tokens were burned, but a genuinely useful tool was built in less than a week.
