@@ -41,6 +41,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # mandoc ships on macOS by default; not on Ubuntu. The man-page test
+      # (argos-cli's write_man_page) treats it as a bonus check rather than
+      # a hard dependency when it's missing, but installing it here means
+      # both OSes actually exercise it instead of one silently skipping.
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y mandoc
       - run: cargo test --workspace
 
   loop-device-tests:
