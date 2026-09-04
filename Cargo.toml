@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.0"
+version = "1.5.1"
 edition = "2021"
 # 1.75 until W1's UDF-support correction (backlog #27): real Windows install
 # media turned out to need UDF reading (hadris-udf, MSRV 1.88), not just
@@ -34,12 +34,12 @@ ctrlc = "3"
 # `version` instead. argos-platform-windows is intentionally left without one
 # below: it's a stub nothing published here depends on, so it stays
 # unpublished for now.
-argos-core = { path = "crates/argos-core", version = "1.5.0" }
-argos-platform = { path = "crates/argos-platform", version = "1.5.0" }
-argos-platform-linux = { path = "crates/argos-platform-linux", version = "1.5.0" }
-argos-platform-macos = { path = "crates/argos-platform-macos", version = "1.5.0" }
+argos-core = { path = "crates/argos-core", version = "1.5.1" }
+argos-platform = { path = "crates/argos-platform", version = "1.5.1" }
+argos-platform-linux = { path = "crates/argos-platform-linux", version = "1.5.1" }
+argos-platform-macos = { path = "crates/argos-platform-macos", version = "1.5.1" }
 argos-platform-windows = { path = "crates/argos-platform-windows" }
-argos-privileged = { path = "crates/argos-privileged", version = "1.5.0" }
+argos-privileged = { path = "crates/argos-privileged", version = "1.5.1" }
 
 thiserror = "2"
 sha2 = "0.10"
