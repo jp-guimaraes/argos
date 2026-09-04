@@ -21,7 +21,6 @@ use argos_core::{preflight, verify};
 use argos_platform::PlatformOps;
 use protocol::{VerifyPlan, WritePlan};
 use std::fs::{File, OpenOptions};
-use std::io::Write;
 
 /// Re-validates the target device, unmounts it, writes `plan.image_path` to
 /// `plan.device_path`, and (unless `plan.verify` is false) reads it back to
@@ -67,7 +66,7 @@ pub fn execute(
         progress,
         cancel,
     )?;
-    device.flush().map_err(ArgosError::Io)?;
+    flush_write(progress, &device)?;
     drop(device);
 
     if plan.verify {
@@ -81,6 +80,23 @@ pub fn execute(
     }
 
     Ok(written_hash)
+}
+
+/// Forces what [`dd_mode::write_stream`] handed the OS out to the physical
+/// device before anything downstream trusts it's actually there.
+///
+/// Not `device.flush()`: that's a no-op default on `std::fs::File`, which
+/// doesn't override it. A plain `write()` only queues bytes in the page
+/// cache -- the kernel can report success in milliseconds while it's still
+/// flushing gigabytes to a slow USB stick in the background, so without a
+/// real `fsync` here, "Done" (and, if verify runs next, the read-back it
+/// does) can both happen against data that isn't actually on the device
+/// yet. See [`partition_io::sync_device`]'s doc comment for the macOS
+/// device-node quirk this already had to work around once, on the other
+/// write path.
+fn flush_write(progress: &dyn ProgressSink, device: &File) -> Result<()> {
+    progress.on_phase(Phase::Flushing);
+    partition_io::sync_device(device).map_err(ArgosError::Io)
 }
 
 /// Re-runs verification against a device without writing again: hashes
@@ -109,4 +125,42 @@ pub fn execute_verify(plan: &VerifyPlan, progress: &dyn ProgressSink) -> Result<
     verify::verify_written_image(&mut device, plan.iso_size_bytes, &expected_hash, progress)?;
 
     Ok(expected_hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Records the sequence of phases it's told about -- enough to assert
+    /// ordering without pulling in a real progress bar.
+    #[derive(Default)]
+    struct RecordingProgress {
+        phases: Mutex<Vec<Phase>>,
+    }
+
+    impl ProgressSink for RecordingProgress {
+        fn on_phase(&self, phase: Phase) {
+            self.phases.lock().unwrap().push(phase);
+        }
+
+        fn on_progress(&self, _bytes_done: u64, _bytes_total: u64) {}
+    }
+
+    /// The regression this guards: a write that only ever called the
+    /// no-op `File::flush()` reported success (and, with verify on, read
+    /// back) without ever forcing the OS to actually commit the bytes.
+    /// Reported from real hardware -- a fast USB write that looked done
+    /// instantly, then stalled during verify behind the kernel's own
+    /// background writeback of everything `write_stream` had only queued.
+    #[test]
+    fn flushing_a_write_reports_the_flushing_phase_and_syncs() {
+        let progress = Arc::new(RecordingProgress::default());
+        let device = tempfile::tempfile().unwrap();
+
+        flush_write(progress.as_ref(), &device).unwrap();
+
+        let phases = progress.phases.lock().unwrap();
+        assert_eq!(*phases, vec![Phase::Flushing]);
+    }
 }
