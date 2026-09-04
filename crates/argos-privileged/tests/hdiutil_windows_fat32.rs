@@ -94,6 +94,7 @@ fn write_plan(image: &AttachedImage, iso_path: &std::path::Path) -> WriteWindows
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso_path.to_path_buf(),
         layout: WindowsLayout::Fat32,
+        eject: false,
     }
 }
 

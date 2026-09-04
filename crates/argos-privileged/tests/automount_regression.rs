@@ -96,6 +96,7 @@ fn write_and_verify_survive_a_mounted_partition_from_a_previous_write() {
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.path().to_path_buf(),
         layout: WindowsLayout::Fat32,
+        eject: false,
     };
     let verify_plan = VerifyWindowsPlan {
         device_path: image.device_node.clone(),
@@ -163,6 +164,7 @@ fn holding_the_device_open_blocks_macos_from_mounting_it() {
             expected_size_bytes: DEVICE_SIZE,
             iso_path: iso.path().to_path_buf(),
             layout: WindowsLayout::Fat32,
+            eject: false,
         },
         &NoopProgress,
         &CancelToken::new(),
