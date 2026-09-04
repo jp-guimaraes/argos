@@ -22,8 +22,14 @@ pub struct Args {
     pub layout: WindowsLayout,
 }
 
-pub fn run(args: Args) -> Result<()> {
+pub fn run(mut args: Args) -> Result<()> {
     let platform = current_platform();
+
+    // See helper::canonicalize_iso_path's doc comment: a relative ISO path
+    // cannot survive to the Plan sent across the privilege boundary, since
+    // argos-helper resolves it against its own (elevator-dependent) working
+    // directory, not the shell's.
+    args.iso = helper::canonicalize_iso_path(&args.iso)?;
 
     // Resolved unprivileged, before elevating, purely so a typo'd device
     // path fails fast with a clear error instead of only after a sudo/pkexec

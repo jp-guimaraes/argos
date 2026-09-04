@@ -26,8 +26,15 @@ pub struct Args {
     pub layout: WindowsLayout,
 }
 
-pub fn run(args: Args) -> Result<()> {
+pub fn run(mut args: Args) -> Result<()> {
     let platform = current_platform();
+
+    // Before anything else: see helper::canonicalize_iso_path's doc comment
+    // for why a relative ISO path cannot survive to the Plan sent across the
+    // privilege boundary, and why doing this here (rather than leaving it to
+    // fail inside argos-helper) turns a confusing, late, pathless error into
+    // an immediate, specific one.
+    args.iso = helper::canonicalize_iso_path(&args.iso)?;
 
     let device = platform
         .refresh(&args.device, None)?
