@@ -94,3 +94,55 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes
+
+  update-homebrew-tap:
+    name: bump the Homebrew tap
+    # Reported from real use: the tap sat pinned to v1.5.1 through four
+    # releases (1.5.2-1.5.5) because bumping it was a manual step nobody
+    # remembered, and `brew install`/`brew upgrade` served the stale version
+    # silently -- no error, just old bits. This closes that gap the same way
+    # `release` above closes "the GitHub Release lagged the tag": make the
+    # step automatic and part of what a tag push does, not a followup
+    # someone has to recall.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      # A second checkout, of the *other* repo -- `HOMEBREW_TAP_TOKEN` is a
+      # fine-grained PAT scoped to jp-guimaraes/homebrew-argos only, since
+      # the default `GITHUB_TOKEN` above is scoped to this repo and cannot
+      # push there. Missing/expired token: this step's checkout fails loudly
+      # rather than silently skipping, which is the right failure mode for
+      # "the tap didn't get bumped" to actually be noticed.
+      - name: Checkout the Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: jp-guimaraes/homebrew-argos
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Point the formula at this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          url="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+          # The formula builds from this same source-archive URL (not the
+          # release binaries above), so its sha256 has to match *that*
+          # tarball exactly -- computed fresh here rather than reused from
+          # anywhere, since GitHub's archive tarballs are not guaranteed
+          # byte-identical to anything built earlier in this workflow.
+          sha256=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
+          if [ -z "$sha256" ]; then
+            echo "could not compute a sha256 for $url" >&2
+            exit 1
+          fi
+          sed -i "s#archive/refs/tags/v[0-9.]*\.tar\.gz#archive/refs/tags/${TAG}.tar.gz#" Formula/argos.rb
+          sed -i "s/sha256 \"[0-9a-f]*\"/sha256 \"${sha256}\"/" Formula/argos.rb
+
+      - name: Commit and push, if the formula actually changed
+        run: |
+          git config user.name "argos-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Formula/argos.rb
+          git diff --cached --quiet && { echo "formula already up to date"; exit 0; }
+          git commit -m "Bump to ${{ github.ref_name }}"
+          git push
