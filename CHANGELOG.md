@@ -3,7 +3,13 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.5.2] - 2026-09-04
+
+Also the first tag to actually exercise the `.deb`-building step
+`release.yml` gained in this release -- it was added and merged *after*
+v1.5.1 had already been tagged, so v1.5.1's GitHub Release went out built
+by the old workflow and carries no `.deb`, despite the changelog below
+describing it as done. This tag is what makes it real.
 
 ### Added
 
@@ -16,6 +22,15 @@ All notable changes to Argos are documented here. Loosely follows
   `sudo apt install ./argos_<version>_amd64.deb`. See `packaging/README.md`
   for how it's built and two non-obvious things `cargo-deb` needed correcting
   for.
+- **A Homebrew tap** (macOS): `brew install jp-guimaraes/argos/argos`. See
+  [`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos).
+- **An AUR `PKGBUILD`** for pacman-based distros (Arch, and derivatives like
+  Omarchy), same shape as the `.deb`: both binaries, completions and man
+  page generated from the built binary, one runtime dependency
+  (`gcc-libs`). Built and `namcap`-checked on every push (CI). Not
+  published to the AUR itself yet -- that needs the maintainer's own AUR
+  account -- so for now, build it locally from `packaging/aur/`. See
+  `packaging/README.md`.
 
 ### Changed
 
@@ -25,7 +40,9 @@ All notable changes to Argos are documented here. Loosely follows
   only takes effect when it does the build itself -- a workspace build done
   ahead of time (as packaging, and cross-compiled release builds, both do)
   skipped it silently. Smaller binaries on every distribution channel as a
-  side effect, not just the `.deb`.
+  side effect, not just the `.deb`. Note this doesn't reach a plain `cargo
+  install` from crates.io -- that builds each crate outside the workspace,
+  so the workspace-level profile setting doesn't apply there.
 
 ## [1.5.1] - 2026-09-04
 
