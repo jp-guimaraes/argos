@@ -3,6 +3,25 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **Unmounting uses `umount2(2)` instead of shelling out to `umount(8)`**
+  (M7.1, #46). One fewer runtime dependency for a distribution package to
+  declare, and one fewer program whose presence or output could change under
+  us. Note the argument changed with it: `umount(8)` accepts either the source
+  device or the mountpoint, the syscall takes only the mountpoint.
+
+### Fixed
+
+- **A USB stick whose label contains a space could not be unmounted.**
+  `/proc/mounts` escapes space, tab, newline and backslash as `\040`, `\011`,
+  `\012` and `\134`, and Argos read those fields verbatim -- so a stick
+  auto-mounted at `/media/jp/My USB` was seen as `/media/jp/My\040USB`, a path
+  that does not exist. Found while replacing the `umount` shell-out, which
+  passes the mountpoint straight to the kernel and so has no tolerance for it.
+
 ## [1.5.0] - 2026-09-03
 
 Phase 3: **self-contained Windows installer media**, on Linux *and* macOS,
