@@ -5,6 +5,17 @@ All notable changes to Argos are documented here. Loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`argos write` now also accepts `--iso <path>`**, in addition to the
+  existing positional form. Reported from real use, within hours of the
+  README/man page documenting `verify`'s `--iso`: the same flag typed for
+  `write` was a hard error, since its ISO had always been positional-only.
+  Both forms parse to the same value; giving neither or both is a clear
+  error rather than one being silently preferred. Positional remains what
+  every example leads with -- this only stops the other form from being a
+  hard error.
+
 ### Fixed
 
 - **The DD-mode write path never forced a real flush to the device.**
