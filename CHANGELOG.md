@@ -6,12 +6,23 @@ All notable changes to Argos are documented here. Loosely follows
 ## [Unreleased]
 
 ### Changed
+- **`argos completions <shell>` and a hidden `argos man`** (#46). Both are
+  generated from the same `clap` definition the CLI already carries, so a
+  Homebrew formula, PKGBUILD or `.deb` never has to keep a hand-written copy
+  in step with the real flags. `argos man` is hidden because its audience is
+  packaging, not people at a terminal.
 
 - **Unmounting uses `umount2(2)` instead of shelling out to `umount(8)`**
   (M7.1, #46). One fewer runtime dependency for a distribution package to
   declare, and one fewer program whose presence or output could change under
   us. Note the argument changed with it: `umount(8)` accepts either the source
   device or the mountpoint, the syscall takes only the mountpoint.
+
+### Removed
+
+- The `xtask` crate. Its only task rebuilt `crates/argos-privileged/assets/uefi-ntfs.img`,
+  which was deleted along with the NTFS write path, and its only dependency
+  existed to serve that task.
 
 ### Fixed
 
