@@ -137,6 +137,8 @@ need for the next step comes from this output (e.g. `/dev/sdb` on Linux,
 
 ```sh
 argos write path/to/some.iso --device /dev/sdb
+# or, equivalently:
+argos write --iso path/to/some.iso --device /dev/sdb
 ```
 
 `argos` re-elevates itself (`pkexec` on Linux where available, `sudo`
@@ -165,8 +167,9 @@ argos verify /dev/sdb --iso path/to/some.iso
 
 Re-checks a device against the image it was supposedly written from,
 without writing anything -- useful after the fact, or if `write` was run
-with `--no-verify`. Note the argument order flips relative to `write`: the
-device is positional here and the ISO is `--iso`.
+with `--no-verify`. Unlike `write`, the device here is always positional
+and the ISO is always `--iso` -- `write` accepts the ISO either way
+precisely so a habit formed on one command doesn't break on the other.
 
 Run `argos <command> --help` for every flag (`--no-verify`, `--no-eject`,
 `--i-know-what-im-doing` for a disk Argos doesn't recognize as removable
