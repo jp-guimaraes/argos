@@ -5,6 +5,20 @@ All notable changes to Argos are documented here. Loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`argos man` now documents every subcommand's own flags on one page**,
+  instead of `clap_mangen`'s default: a thin top-level page whose
+  SUBCOMMANDS section cross-references `argos-list(1)`, `argos-write(1)`
+  and so on as if they were separate manual pages -- which nothing in this
+  project generates or installs, so `man argos-write` reported nothing
+  found. `list`, `write`, `verify` and `completions` each get their own
+  `.SH` block (synopsis, description, options) inlined into `argos(1)`
+  instead, the way `dd(1)`/`rsync(1)` document a whole tool on one page.
+  Also gives `--help` (both the top-level and per-subcommand) fuller
+  prose, including an EXAMPLES block covering the same three-command flow
+  as the README's new Usage section.
+
 ### Fixed
 
 - **`argos write`/`argos verify` failed on a relative ISO path, elevating
