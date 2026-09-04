@@ -23,11 +23,45 @@ pub fn parse_proc_mounts(contents: &str) -> Vec<MountEntry> {
             let source = fields.next()?;
             let mountpoint = fields.next()?;
             Some(MountEntry {
-                source: source.to_string(),
-                mountpoint: mountpoint.to_string(),
+                source: unescape_proc_mounts_field(source),
+                mountpoint: unescape_proc_mounts_field(mountpoint),
             })
         })
         .collect()
+}
+
+/// Undoes the octal escaping `/proc/mounts` applies to the four characters
+/// that would otherwise break its whitespace-separated format: space
+/// (`\040`), tab (`\011`), newline (`\012`) and backslash (`\134`).
+///
+/// Not cosmetic. A USB stick labelled with a space auto-mounts at something
+/// like `/media/jp/My USB`, which appears here as `My\040USB` -- and
+/// `umount2(2)` takes the mountpoint verbatim, so without this it would be
+/// handed a path that does not exist and the unmount would fail on exactly
+/// the sticks people actually own.
+///
+/// Anything that is not a backslash followed by three octal digits is left
+/// alone, so a path that legitimately contains a backslash survives.
+fn unescape_proc_mounts_field(field: &str) -> String {
+    if !field.contains('\\') {
+        return field.to_string();
+    }
+    let bytes = field.as_bytes();
+    let mut out = String::with_capacity(field.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() {
+            let digits = &field[i + 1..i + 4];
+            if let Ok(code) = u8::from_str_radix(digits, 8) {
+                out.push(code as char);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Strips a trailing partition number from a Linux block device path, e.g.
@@ -122,6 +156,48 @@ pub fn whole_disk_containing_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case that motivated unescaping: a stick whose label has a space
+    /// auto-mounts at a path with a space, and `/proc/mounts` writes it as
+    /// `\040`. `umount2(2)` takes the mountpoint verbatim, so leaving the
+    /// escape in place means handing the kernel a path that does not exist.
+    #[test]
+    fn a_mountpoint_with_a_space_is_unescaped() {
+        let entries = parse_proc_mounts("/dev/sdb1 /media/jp/My\\040USB vfat rw,relatime 0 0\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].mountpoint, "/media/jp/My USB");
+        assert_eq!(entries[0].source, "/dev/sdb1");
+    }
+
+    #[test]
+    fn every_character_proc_mounts_escapes_is_undone() {
+        assert_eq!(unescape_proc_mounts_field("a\\040b"), "a b");
+        assert_eq!(unescape_proc_mounts_field("a\\011b"), "a\tb");
+        assert_eq!(unescape_proc_mounts_field("a\\012b"), "a\nb");
+        assert_eq!(unescape_proc_mounts_field("a\\134b"), "a\\b");
+    }
+
+    /// A backslash that is not an escape sequence has to survive, or a path
+    /// that legitimately contains one would be mangled.
+    #[test]
+    fn a_backslash_that_is_not_an_escape_is_left_alone() {
+        assert_eq!(unescape_proc_mounts_field("/mnt/a\\bc"), "/mnt/a\\bc");
+        assert_eq!(
+            unescape_proc_mounts_field("/mnt/trailing\\"),
+            "/mnt/trailing\\"
+        );
+        // \\9 is not octal.
+        assert_eq!(unescape_proc_mounts_field("/mnt/\\901"), "/mnt/\\901");
+    }
+
+    #[test]
+    fn ordinary_paths_are_returned_unchanged() {
+        assert_eq!(unescape_proc_mounts_field("/dev/sdb1"), "/dev/sdb1");
+        assert_eq!(
+            unescape_proc_mounts_field("/media/user/USBSTICK"),
+            "/media/user/USBSTICK"
+        );
+    }
 
     const SAMPLE: &str = "\
 /dev/nvme0n1p2 / ext4 rw,relatime 0 0

@@ -79,16 +79,7 @@ impl argos_platform::PlatformOps for LinuxPlatform {
                 .iter()
                 .any(|d| d == &whole_disk)
         }) {
-            let status = std::process::Command::new("umount")
-                .arg(&mount.source)
-                .status()
-                .map_err(ArgosError::Io)?;
-            if !status.success() {
-                return Err(ArgosError::Io(std::io::Error::other(format!(
-                    "umount {} exited with {status}",
-                    mount.source
-                ))));
-            }
+            unmount_path(&mount.mountpoint)?;
         }
         Ok(())
     }
@@ -111,6 +102,47 @@ impl argos_platform::PlatformOps for LinuxPlatform {
             &dm::resolve_mount_source,
         ))
     }
+}
+
+/// Unmounts one filesystem with `umount2(2)`, replacing a shell-out to
+/// `umount(8)` (M7.1, backlog #46).
+///
+/// Two reasons beyond tidiness: one fewer runtime dependency for a
+/// distribution package to declare, and one fewer program whose presence,
+/// exit codes or messages could change under us.
+///
+/// Note the argument. `umount(8)` accepts either the source device or the
+/// mountpoint; the syscall takes **only the mountpoint**, which is why this
+/// is passed `mount.mountpoint` where the shell-out was passed
+/// `mount.source`.
+#[cfg(target_os = "linux")]
+fn unmount_path(mountpoint: &str) -> Result<()> {
+    let target = std::ffi::CString::new(mountpoint).map_err(|_| {
+        ArgosError::Io(std::io::Error::other(format!(
+            "mountpoint {mountpoint} contains a NUL byte and cannot be unmounted"
+        )))
+    })?;
+
+    // SAFETY: `target` is a valid NUL-terminated C string that outlives the
+    // call, and `umount2` only reads through the pointer.
+    if unsafe { libc::umount2(target.as_ptr(), 0) } == 0 {
+        return Ok(());
+    }
+
+    let err = std::io::Error::last_os_error();
+    Err(ArgosError::Io(std::io::Error::new(
+        err.kind(),
+        format!("could not unmount {mountpoint}: {err}"),
+    )))
+}
+
+/// This backend only ever runs on Linux; the stub exists because the crate is
+/// a workspace member and so is compiled on every host (see its `Cargo.toml`).
+#[cfg(not(target_os = "linux"))]
+fn unmount_path(mountpoint: &str) -> Result<()> {
+    Err(ArgosError::Io(std::io::Error::other(format!(
+        "unmounting {mountpoint} needs umount2(2), which exists only on Linux"
+    ))))
 }
 
 fn read_proc_mounts() -> Result<Vec<MountEntry>> {
