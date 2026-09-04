@@ -4,6 +4,27 @@ Argos is a free-software tool for creating bootable installer USB drives, in
 the spirit of [Rufus](https://github.com/pbatard/rufus) but built to run
 cross-platform.
 
+## The name
+
+**Argos** was picked to echo *Rufus*: both are dog names. Argos is also
+Odysseus's dog in the *Odyssey* — the one who waits twenty years and is the
+only one who recognizes him when he finally comes home, which is not a bad
+thing to name a tool you want people to trust with their only USB stick.
+
+The backronym came afterwards, and it is deliberately **not** in English:
+
+> **A**ssistente de **R**ebolar **G**ueri-gueris em **O**utros **S**istemas
+
+That is Brazilian Portuguese, in the Northeastern register the author speaks.
+Two words do not survive a dictionary: *rebolar* here does not mean "to sway"
+but **to fling** or **to toss**, and a *gueri-gueri* is a **doodad** — a small
+thing nobody bothers to name properly. Roughly, *"Assistant for Flinging
+Doodads onto Other Systems"*, which is an honest description of writing an ISO
+to a USB drive.
+
+*Outros sistemas* carries the joke: Rufus runs on Windows, and Argos is for
+the **other** systems — both the ones it runs on and the ones it writes for.
+
 ## Goal
 
 Argos should be able to create installer USB drives for both Windows and
@@ -16,9 +37,9 @@ wide range of Linux distributions and, ideally, on macOS as well.
 
 ## Status
 
-Argos has reached v1.0, and **phase 3 (Windows installer media) is
-implemented and validated on real hardware** — see `[Unreleased]` in the
-changelog.
+Argos is at **v1.5.0**, which delivers phase 3 (Windows installer media)
+validated on real hardware from both hosts and on both firmwares — see
+[`CHANGELOG.md`](CHANGELOG.md).
 
 - **Images**: Linux ISOs (including isohybrid images), written byte-for-byte
   in "DD mode"; and Windows 10/11 installer ISOs, written as a FAT32 volume
@@ -66,6 +87,19 @@ the separate, privilege-separated `argos-privileged` crate -- see
 directory (`~/.cargo/bin` by default), which is what puts them next to each
 other. Passing only `argos-cli` installs `argos` without the helper binary it
 needs at runtime -- always install both together.
+
+> **macOS with Homebrew's `rustup`**: `cargo install` puts its binaries in
+> `~/.cargo/bin`, and Homebrew's keg-only `rustup` formula does **not** add
+> that directory to your `PATH` — the official `rustup-init` installer does,
+> which is why this bites Homebrew users specifically. If `argos` comes back
+> as `command not found` immediately after a successful install, that is all
+> this is:
+>
+> ```sh
+> export PATH="$HOME/.cargo/bin:$PATH"
+> ```
+>
+> Add it to your `~/.zshrc` to make it stick.
 
 ### From source
 
