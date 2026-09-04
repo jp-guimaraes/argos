@@ -3,14 +3,17 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.5.1] - 2026-09-04
 
-### Changed
+### Added
+
 - **`argos completions <shell>` and a hidden `argos man`** (#46). Both are
   generated from the same `clap` definition the CLI already carries, so a
   Homebrew formula, PKGBUILD or `.deb` never has to keep a hand-written copy
   in step with the real flags. `argos man` is hidden because its audience is
   packaging, not people at a terminal.
+
+### Changed
 
 - **Unmounting uses `umount2(2)` instead of shelling out to `umount(8)`**
   (M7.1, #46). One fewer runtime dependency for a distribution package to
