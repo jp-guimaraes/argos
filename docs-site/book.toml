@@ -1,0 +1,11 @@
+[book]
+title = "Argos"
+description = "Documentation for Argos, a free-software, cross-platform tool for creating bootable installer USB drives."
+authors = ["Argos contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/jp-guimaraes/argos"
+edit-url-template = "https://github.com/jp-guimaraes/argos/edit/main/docs-site/{path}"
+site-url = "/argos/"
