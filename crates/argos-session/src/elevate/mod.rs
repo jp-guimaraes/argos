@@ -22,7 +22,11 @@ use argos_privileged::protocol::{Event, Plan};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
+// Only the macOS FIFO source needs a channel and a clock; Linux's graphical
+// route is `pkexec`, an ordinary child with ordinary pipes.
+#[cfg(target_os = "macos")]
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
 /// How the user will be asked to authorize the write.
@@ -43,6 +47,7 @@ pub enum ElevationUi {
 
 /// How long to keep draining events after the elevated process has exited,
 /// so anything it wrote just before exiting is not lost to the race.
+#[cfg(target_os = "macos")]
 const DRAIN_GRACE: Duration = Duration::from_millis(250);
 
 /// An elevated `argos-helper` that has already been handed its `Plan`.
@@ -106,9 +111,15 @@ impl Running {
 /// that ends the loop when the helper is gone.
 enum EventStream {
     Pipe(std::io::Lines<BufReader<ChildStdout>>),
+    /// macOS only. Linux's graphical route is `pkexec`, which is an ordinary
+    /// child process with ordinary pipes -- the FIFO machinery exists purely
+    /// because `do shell script` gives no pipes at all, so on Linux it would
+    /// be dead code rather than an unused branch.
+    #[cfg(target_os = "macos")]
     Fifo(FifoEvents),
 }
 
+#[cfg(target_os = "macos")]
 struct FifoEvents {
     lines: Receiver<String>,
     /// Our own writer reference on the events FIFO. Dropping it is what
@@ -120,14 +131,20 @@ struct FifoEvents {
 
 impl EventStream {
     /// The next event line, or `None` when there will not be another.
+    ///
+    /// `child` is consulted only by the FIFO source, which is macOS-only: a
+    /// pipe ends at EOF on its own, so there is nothing to poll for.
     fn next_line(&mut self, child: &mut Child) -> Option<String> {
+        let _ = &child;
         match self {
             EventStream::Pipe(lines) => lines.next().and_then(std::result::Result::ok),
+            #[cfg(target_os = "macos")]
             EventStream::Fifo(fifo) => fifo.next_line(child),
         }
     }
 
     fn shut_down(&mut self) {
+        #[cfg(target_os = "macos")]
         if let EventStream::Fifo(fifo) = self {
             // Drop our writer reference first: that is the EOF the reader
             // thread is waiting for, and without it the join below hangs.
@@ -139,6 +156,7 @@ impl EventStream {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl FifoEvents {
     fn next_line(&mut self, child: &mut Child) -> Option<String> {
         loop {
@@ -166,7 +184,7 @@ impl FifoEvents {
     }
 }
 
-/// A temporary directory that removes itself, holding the FIFOs the
+/// A temporary directory that removes itself, holding the FIFOs the macOS
 /// graphical route talks over. The `Plan` never exists as a file -- it only
 /// ever transits a FIFO -- so even a leaked directory leaks nothing.
 struct RunDir(PathBuf);
