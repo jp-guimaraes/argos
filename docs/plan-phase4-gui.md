@@ -466,17 +466,22 @@ on ubuntu and macos). Ordered to retire risk early.
 **G0 is already done** — section 4 is its report. The macOS elevation route is
 proven against a protocol-faithful stub, so nothing downstream is speculative.
 
+Tracked on GitHub the way phase 3 was (epic #47, one issue per milestone):
+**epic #97**, with G1–G9 as issues #88–#96. Each carries its own sub-task
+checklist and the `diff:`/`host:` routing labels; this table is the summary,
+those issues are the executable breakdown.
+
 | # | Scope | Acceptance |
 |---|---|---|
-| **G1** | `argos-session` created; the extraction in 5.1; `argos-cli` refactored onto it | `cargo test --workspace` green with **no test deleted**; before/after transcripts of `argos list`, `argos write` (DD and Windows, aborted at the prompt), `argos verify`, `argos --help`, `argos man \| md5` prove byte-identical output |
-| **G2** | Typed `Phase`/`PhaseWire`; `SessionError` carrying `exit_code`; CLI exits with the helper's real code; the stale doc comment removed | Round-trip tests for both wire forms; CLI's printed phases unchanged; CHANGELOG entry naming the exit-code fix as user-visible |
-| **G3** | The `Elevator` abstraction with section 4's route; the polkit policy; the no-agent error; a hidden `--elevation graphical` flag to drive it from a terminal | **A real write to a real USB stick on macOS through the auth dialog**; cancel and force-quit confirmed against the real helper; **`argos-helper` has a zero-line diff** |
-| **G4** | eframe window; device combo, refresh, poll, `reconcile`; file picker and drag-and-drop; detected kind; the layout checkbox; capacity; the confirmation modal. Write not yet wired | Reducer, predicate and `reconcile` tests; builds clippy-clean on both OSes with the new apt step |
-| **G5** | Worker thread; throttled event stream; progress and ETA; cancel; result panels; eject | **Real hardware write from the GUI on both hosts**, with the checkbox producing GPT unchecked and MBR checked (verified with `fdisk -l` / `diskutil list`); cancel confirmed on both. README's "No GUI exists today" updated |
-| **G6** | `Lang`/`Strings`; detection; config; language menu; error localization; the `xml:lang` and `[pt_BR]` strings | Placeholder-parity tests; manual check on a `pt_BR` desktop and a `pt-BR` Mac |
-| **G7** | Linux packaging: `.deb` assets, `.desktop`, icons, policy, PKGBUILD, `desktop-file-validate` in CI | lintian with no `E:`; namcap green; CI installs the `.deb` and asserts the paths |
-| **G8** | macOS packaging: `build-macos-app.sh`, icon, the `lipo`/`.dmg` release job, Gatekeeper docs, the Homebrew cask PR | A tagged pre-release producing 3 tarballs + `.deb` + universal `.dmg`; `lipo -info` shows both arches |
-| **G9** | Real-hardware validation and docs: a "Guiding decisions (phase 4)" section recording M-GUI.1–5, a phase-4 status row, `docs-site` and `po/pt-BR.po` | A lab machine booting from media written by the GUI |
+| **G1** [#88](https://github.com/jp-guimaraes/argos/issues/88) | `argos-session` created; the extraction in 5.1; `argos-cli` refactored onto it | `cargo test --workspace` green with **no test deleted**; before/after transcripts of `argos list`, `argos write` (DD and Windows, aborted at the prompt), `argos verify`, `argos --help`, `argos man \| md5` prove byte-identical output |
+| **G2** [#89](https://github.com/jp-guimaraes/argos/issues/89) | Typed `Phase`/`PhaseWire`; `SessionError` carrying `exit_code`; CLI exits with the helper's real code; the stale doc comment removed | Round-trip tests for both wire forms; CLI's printed phases unchanged; CHANGELOG entry naming the exit-code fix as user-visible |
+| **G3** [#90](https://github.com/jp-guimaraes/argos/issues/90) | The `Elevator` abstraction with section 4's route; the polkit policy; the no-agent error; a hidden `--elevation graphical` flag to drive it from a terminal | **A real write to a real USB stick on macOS through the auth dialog**; cancel and force-quit confirmed against the real helper; **`argos-helper` has a zero-line diff** |
+| **G4** [#91](https://github.com/jp-guimaraes/argos/issues/91) | eframe window; device combo, refresh, poll, `reconcile`; file picker and drag-and-drop; detected kind; the layout checkbox; capacity; the confirmation modal. Write not yet wired | Reducer, predicate and `reconcile` tests; builds clippy-clean on both OSes with the new apt step |
+| **G5** [#92](https://github.com/jp-guimaraes/argos/issues/92) | Worker thread; throttled event stream; progress and ETA; cancel; result panels; eject | **Real hardware write from the GUI on both hosts**, with the checkbox producing GPT unchecked and MBR checked (verified with `fdisk -l` / `diskutil list`); cancel confirmed on both. README's "No GUI exists today" updated |
+| **G6** [#93](https://github.com/jp-guimaraes/argos/issues/93) | `Lang`/`Strings`; detection; config; language menu; error localization; the `xml:lang` and `[pt_BR]` strings | Placeholder-parity tests; manual check on a `pt_BR` desktop and a `pt-BR` Mac |
+| **G7** [#94](https://github.com/jp-guimaraes/argos/issues/94) | Linux packaging: `.deb` assets, `.desktop`, icons, policy, PKGBUILD, `desktop-file-validate` in CI | lintian with no `E:`; namcap green; CI installs the `.deb` and asserts the paths |
+| **G8** [#95](https://github.com/jp-guimaraes/argos/issues/95) | macOS packaging: `build-macos-app.sh`, icon, the `lipo`/`.dmg` release job, Gatekeeper docs, the Homebrew cask PR | A tagged pre-release producing 3 tarballs + `.deb` + universal `.dmg`; `lipo -info` shows both arches |
+| **G9** [#96](https://github.com/jp-guimaraes/argos/issues/96) | Real-hardware validation and docs: a "Guiding decisions (phase 4)" section recording M-GUI.1–5, a phase-4 status row, `docs-site` and `po/pt-BR.po` | A lab machine booting from media written by the GUI |
 
 Once G1 and G2 land, **G3 and G4 can run in parallel** on separate branches —
 G4 needs only the `Elevator` signature, not its macOS implementation. That
