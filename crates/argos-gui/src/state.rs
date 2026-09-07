@@ -24,19 +24,7 @@ pub enum AppState {
         prepared: Box<PreparedWrite>,
         typed: String,
     },
-    /// Reached once G5 (#92) wires the confirmation to `session::spawn`.
-    ///
-    /// Present already, and covered by the tests below, because the rule it
-    /// carries is the one #104 measured: a Cancel button must go inert the
-    /// moment the run leaves the copy loop. That rule belongs to the state
-    /// machine, and building the state machine first means G5 wires a
-    /// transition rather than retrofitting a guarantee. Not wired here
-    /// because G5's own acceptance -- a real write from the window -- is
-    /// blocked on #102 until the macOS elevation question is settled.
-    #[allow(
-        dead_code,
-        reason = "constructed by G5 (#92); the rule it carries is tested now"
-    )]
+    /// A write or a verify is under way through the elevated helper.
     Running(RunState),
     Done {
         outcome: Outcome,
@@ -65,6 +53,13 @@ pub struct RunState {
     pub cancel_requested: bool,
     /// What the helper reported about ejecting, once it has.
     pub eject_note: Option<String>,
+    /// `execute_verify` takes no `CancelToken` at all -- unlike a write, it
+    /// never listens for one, so the CLI's own `ctrlc` handler for `argos
+    /// verify` writes a byte nobody reads. Showing a Cancel button here would
+    /// repeat that: something that looks live and is not, the exact failure
+    /// mode #104 exists to avoid. So verify shows no button at all, rather
+    /// than a permanently-disabled one.
+    pub is_verify: bool,
 }
 
 /// What a worker thread sends back to the UI thread.
@@ -76,11 +71,8 @@ pub enum WorkerMsg {
     Classified(Result<Option<argos_session::ImageKind>, ArgosError>),
     Prepared(Result<Box<PreparedWrite>, ArgosError>),
     /// The elevated helper is up; this is the handle a Cancel press drives.
-    #[allow(dead_code, reason = "sent by G5 (#92); the reduction is tested now")]
     Started(Canceller),
-    #[allow(dead_code, reason = "sent by G5 (#92); the reduction is tested now")]
     Event(SessionEvent),
-    #[allow(dead_code, reason = "sent by G5 (#92); the reduction is tested now")]
     Finished(Result<Outcome, ArgosError>),
 }
 
@@ -97,6 +89,10 @@ pub enum WorkerMsg {
 ///
 /// `None` means the helper has not announced a phase yet, which is still
 /// inside the cancellable part -- nothing has been written.
+///
+/// This only judges the *phase*; a verify run is never cancellable
+/// regardless of phase, which [`RunState::is_cancellable`] accounts for
+/// separately, since `execute_verify` never consults the token at all.
 pub fn is_cancellable(phase: Option<Phase>) -> bool {
     match phase {
         None => true,
@@ -210,15 +206,21 @@ fn apply_event(run: &mut RunState, event: SessionEvent) {
 }
 
 impl RunState {
-    #[allow(
-        dead_code,
-        reason = "constructed by G5 (#92); exercised by the tests below"
-    )]
     pub fn new(device_id: String, bytes_total: u64) -> Self {
         RunState {
             bytes_total,
-            device_id: device_id.clone(),
+            device_id,
             ..Default::default()
+        }
+    }
+
+    /// A verify run: same shape, but never offers to cancel, since
+    /// `execute_verify` never listens for it. See the doc comment on
+    /// [`Self::is_verify`].
+    pub fn for_verify(device_id: String) -> Self {
+        RunState {
+            is_verify: true,
+            ..Self::new(device_id, 0)
         }
     }
 
@@ -234,7 +236,7 @@ impl RunState {
     }
 
     pub fn is_cancellable(&self) -> bool {
-        !self.cancel_requested && is_cancellable(self.phase)
+        !self.is_verify && !self.cancel_requested && is_cancellable(self.phase)
     }
 }
 
@@ -329,6 +331,21 @@ mod tests {
         assert!(run.is_cancellable());
         run.phase = Some(Phase::Flushing);
         assert!(!run.is_cancellable(), "a fsync cannot be interrupted");
+    }
+
+    /// `execute_verify` never consults a `CancelToken` at all, so a verify
+    /// run is never cancellable -- not even in the copy-loop-equivalent
+    /// phase that would make a write cancellable. Checked in the one phase
+    /// most likely to be mistaken for cancellable.
+    #[test]
+    fn a_verify_run_is_never_cancellable_even_mid_copy() {
+        let mut run = RunState::for_verify("/dev/sdz".into());
+        assert!(run.is_verify);
+        run.phase = Some(Phase::CopyingFiles);
+        assert!(
+            !run.is_cancellable(),
+            "execute_verify never checks the token"
+        );
     }
 
     #[test]
