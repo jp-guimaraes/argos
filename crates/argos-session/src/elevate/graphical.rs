@@ -107,6 +107,9 @@ pub(super) fn spawn(plan: &Plan, helper_path: &Path) -> Result<Running> {
         canceller: Canceller::new(Box::new(plan_channel)),
         child,
         stderr,
+        // osascript reports a dismissed dialog in its stderr, not in an exit
+        // code of its own, so there is no per-elevator status to read here.
+        elevator: super::Elevator::Other,
         _rundir: Some(rundir),
     })
 }
