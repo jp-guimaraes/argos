@@ -7,6 +7,7 @@
 
 use crate::devices::{offerable, reconcile, Selection, SelectionOutcome};
 use crate::state::{confirmation_matches, AppState, WorkerMsg};
+use crate::theme::{self, metric};
 use argos_core::device::Device;
 use argos_core::error::ArgosError;
 use argos_platform::PlatformOps;
@@ -47,6 +48,10 @@ pub struct ArgosApp {
 
     /// The layout checkbox: unchecked is GPT/UEFI, the CLI's default.
     bios_layout: bool,
+
+    /// Which theme is currently applied, so the palette is rebuilt only when
+    /// the system actually switches rather than every frame.
+    applied_dark: Option<bool>,
 }
 
 impl ArgosApp {
@@ -69,6 +74,7 @@ impl ArgosApp {
             iso_error: None,
             classifying: false,
             bios_layout: false,
+            applied_dark: None,
         }
     }
 
@@ -220,6 +226,7 @@ impl ArgosApp {
 
 impl eframe::App for ArgosApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.sync_theme(ctx);
         // Drained in full, not one per frame: a write emits thousands of
         // progress events and falling behind would show stale numbers.
         self.take_messages();
@@ -227,14 +234,11 @@ impl eframe::App for ArgosApp {
         self.accept_dropped_iso(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Argos");
-            ui.label("Create a bootable installer USB drive");
-            ui.separator();
-
+            self.draw_header(ui);
+            ui.add_space(metric::GAP_GROUPS);
             match &self.state {
-                AppState::Idle | AppState::Preparing => self.draw_chooser(ui, ctx),
-                AppState::AwaitingConfirmation { .. } => {
-                    self.draw_chooser(ui, ctx);
+                AppState::Idle | AppState::Preparing | AppState::AwaitingConfirmation { .. } => {
+                    self.draw_chooser(ui, ctx)
                 }
                 AppState::Running(_) => self.draw_progress(ui),
                 AppState::Done { .. } | AppState::Failed { .. } | AppState::Cancelled => {
@@ -245,8 +249,8 @@ impl eframe::App for ArgosApp {
 
         self.draw_confirmation(ctx);
 
-        // While the device poll is the only thing that changes the screen,
-        // ask for a repaint when it is due rather than spinning every frame.
+        // Only the device poll changes the screen on its own; ask for a
+        // repaint when it is due rather than spinning every frame.
         if matches!(
             self.state,
             AppState::Idle | AppState::AwaitingConfirmation { .. }
@@ -257,6 +261,37 @@ impl eframe::App for ArgosApp {
 }
 
 impl ArgosApp {
+    /// Follows the desktop's light/dark setting, rebuilding the palette only
+    /// when it actually changes.
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        let dark = ctx.theme() == egui::Theme::Dark;
+        if self.applied_dark != Some(dark) {
+            theme::apply(ctx, dark);
+            self.applied_dark = Some(dark);
+        }
+    }
+
+    /// The top band: the name, and the space the dog will live in.
+    ///
+    /// That space is deliberate, not leftover. A sprite animation belongs
+    /// here eventually (168×42, hence this band's height); it is not built
+    /// yet because the frames need an illustrator, it would be a vendored
+    /// binary asset in a project that refused one for a boot record, and it
+    /// would force a continuous repaint where the window currently redraws
+    /// every two seconds. Please do not reclaim the gap as unused layout.
+    ///
+    /// The language selector belongs at the right of this band and arrives
+    /// with i18n in G6 (#93); a selector that switched nothing would be a
+    /// lie on screen.
+    fn draw_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.set_height(metric::HEADER_HEIGHT);
+            ui.heading("Argos");
+            ui.add_space(metric::GAP_ROW);
+            ui.allocate_space(egui::vec2(metric::SPRITE[0], metric::SPRITE[1]));
+        });
+    }
+
     /// eframe reports dropped files itself; accepting only the first means a
     /// multi-file drop behaves like picking one, rather than silently using
     /// an arbitrary member.
@@ -275,48 +310,101 @@ impl ArgosApp {
         }
     }
 
-    fn draw_chooser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.draw_image_row(ui, ctx);
-        ui.add_space(8.0);
-        self.draw_device_row(ui, ctx);
-        ui.add_space(8.0);
-        self.draw_layout_row(ui);
-        ui.add_space(8.0);
-        self.draw_warnings(ui);
-        ui.add_space(8.0);
+    /// A bordered panel, the unit the design groups fields into.
+    fn group<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::same(metric::GROUP_MARGIN as i8))
+            .fill(theme::palette_for(ui.visuals().dark_mode).panel)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add(ui);
+            });
+    }
 
-        let ready = self.iso_kind.is_some()
-            && self.selection.is_some()
-            && !self.classifying
-            && matches!(self.state, AppState::Idle);
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(ready, egui::Button::new("Write…"))
-                .on_disabled_hover_text("Choose an image Argos recognizes and a target drive")
-                .clicked()
-            {
-                self.begin_preparation(ctx);
-            }
-            if matches!(self.state, AppState::Preparing) {
-                ui.spinner();
-                ui.label("Checking the image and the drive…");
-            }
+    fn draw_chooser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        Self::group(ui, |ui| self.draw_image_group(ui, ctx));
+        ui.add_space(metric::GAP_GROUPS);
+        Self::group(ui, |ui| self.draw_target_group(ui, ctx));
+        ui.add_space(metric::GAP_GROUPS);
+        Self::group(ui, |ui| self.draw_layout_group(ui));
+        ui.add_space(metric::GAP_GROUPS);
+        self.draw_notices(ui);
+
+        // Actions sit at the bottom of the window, right-aligned, with Write
+        // last: the destructive one is the only filled button, and the only
+        // one the eye lands on.
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let ready = self.can_act();
+                    let accent = theme::palette_for(ui.visuals().dark_mode).accent;
+                    let on_accent = theme::palette_for(ui.visuals().dark_mode).on_accent;
+                    if ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(egui::RichText::new("Write…").color(on_accent))
+                                .fill(accent),
+                        )
+                        .on_disabled_hover_text(
+                            "Choose an image Argos recognises and a target device",
+                        )
+                        .clicked()
+                    {
+                        self.begin_preparation(ctx);
+                    }
+                    // Verify reads the device back and never writes, so it
+                    // gets no confirmation and no emphasis -- present, and
+                    // clearly subordinate.
+                    if ui
+                        .add_enabled(ready, egui::Button::new("Verify…"))
+                        .clicked()
+                    {
+                        self.state = AppState::Failed {
+                            error: ArgosError::NotImplemented("verifying from the GUI"),
+                        };
+                    }
+                    if matches!(self.state, AppState::Preparing) {
+                        ui.spinner();
+                    }
+                });
+            });
         });
     }
 
-    fn draw_image_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn can_act(&self) -> bool {
+        self.iso_kind.is_some()
+            && self.selection.is_some()
+            && !self.classifying
+            && matches!(self.state, AppState::Idle)
+    }
+
+    fn draw_image_group(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.label("Image");
         ui.horizontal(|ui| {
-            ui.label("Image:");
-            let shown = self
-                .iso
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "(drop an ISO here, or choose one)".into());
-            ui.monospace(shown);
             // Called on the UI thread deliberately: on macOS NSOpenPanel must
             // be driven from the main thread. One frozen frame while a modal
             // file chooser is open is what every desktop app does.
-            if ui.button("Choose…").clicked() {
+            let button = ui.button("Choose…");
+            // The file name, not the path: a deep path would otherwise set
+            // the width of the whole window. The full path is a hover away,
+            // and appears in full in the confirmation dialog, which is where
+            // it matters.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_max_width(ui.available_width());
+                match &self.iso {
+                    Some(path) => {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(file_name_of(path)).monospace())
+                                .truncate(),
+                        )
+                        .on_hover_text(path.display().to_string());
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("Drop an ISO here").weak());
+                    }
+                }
+            });
+            if button.clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Choose a disk image")
                     .add_filter("Disk images", &["iso", "img"])
@@ -330,52 +418,65 @@ impl ArgosApp {
         if self.classifying {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Reading the image…");
+                ui.label(egui::RichText::new("Reading the image…").small());
             });
         } else if let Some(err) = &self.iso_error {
-            ui.colored_label(ui.visuals().error_fg_color, err);
+            ui.label(
+                egui::RichText::new(format!("⚠ {err}"))
+                    .small()
+                    .color(ui.visuals().error_fg_color),
+            );
         } else if let Some(kind) = self.iso_kind {
-            ui.label(match kind {
-                ImageKind::LinuxDd => "Detected: Linux ISO (written byte for byte)",
-                ImageKind::WindowsInstaller => "Detected: Windows installer",
-            });
+            let accent = theme::palette_for(ui.visuals().dark_mode).accent;
+            ui.label(
+                egui::RichText::new(match kind {
+                    ImageKind::LinuxDd => "✔ Linux ISO (written byte for byte)",
+                    ImageKind::WindowsInstaller => "✔ Windows installer",
+                })
+                .small()
+                .color(accent),
+            );
+        } else {
+            ui.label(egui::RichText::new("No image selected.").small().weak());
         }
     }
 
-    fn draw_device_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn draw_target_group(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let offered: Vec<Device> = offerable(&self.devices, self.show_all_devices)
             .into_iter()
             .cloned()
             .collect();
 
+        ui.label("Target");
         ui.horizontal(|ui| {
-            ui.label("Target:");
+            let refresh = ui.button("⟳").on_hover_text("Refresh the list");
+            let width = ui.available_width();
             let label = self
                 .selected_device()
                 .map(describe_device)
-                .unwrap_or_else(|| "(no drive selected)".into());
+                .unwrap_or_else(|| "No device selected".into());
             egui::ComboBox::from_id_salt("target-device")
                 .selected_text(label)
-                .width(360.0)
+                .width(width)
                 .show_ui(ui, |ui| {
+                    if offered.is_empty() {
+                        ui.label("No removable devices found");
+                    }
                     for device in &offered {
                         let selected = self
                             .selection
                             .as_ref()
                             .is_some_and(|s| s.platform_id == device.platform_id);
                         if ui
-                            .selectable_label(selected, describe_device(device))
+                            .selectable_label(selected, describe_device_long(device))
                             .clicked()
                         {
                             self.selection = Some(Selection::of(device));
                             self.selection_warning = None;
                         }
                     }
-                    if offered.is_empty() {
-                        ui.label("No removable drives found");
-                    }
                 });
-            if ui.button("⟳").on_hover_text("Refresh the list").clicked() {
+            if refresh.clicked() {
                 self.maybe_enumerate(ctx, true);
             }
         });
@@ -384,7 +485,10 @@ impl ArgosApp {
         // modes: `offerable` never returns one.
         ui.checkbox(
             &mut self.show_all_devices,
-            "Show all drives, including ones the system does not call removable",
+            egui::RichText::new(
+                "Show every disk, including those the system does not consider removable",
+            )
+            .small(),
         );
     }
 
@@ -392,43 +496,58 @@ impl ArgosApp {
     /// which firmware the result boots is the most consequential choice in
     /// this window, and old BIOS machines are the use case the project exists
     /// for.
-    fn draw_layout_row(&mut self, ui: &mut egui::Ui) {
+    fn draw_layout_group(&mut self, ui: &mut egui::Ui) {
         let applies = self.iso_kind == Some(ImageKind::WindowsInstaller);
         ui.add_enabled_ui(applies, |ui| {
             ui.checkbox(&mut self.bios_layout, "Old machine — legacy BIOS (MBR)");
         });
+        // Said out loud, not merely greyed: a disabled control with no reason
+        // reads as a defect.
         let explanation = if !applies {
             match self.iso_kind {
-                // Said, not merely greyed: a disabled control with no reason
-                // reads as a bug.
                 Some(ImageKind::LinuxDd) => {
                     "A Linux ISO carries its own partition table, so there is nothing to choose."
                 }
                 _ => "Choose a Windows installer image to enable this.",
             }
         } else if self.bios_layout {
-            "MBR with Argos's own boot records: boots legacy BIOS, and UEFI firmware \
-             that accepts MBR-partitioned removable media. Windows 10 only."
+            "MBR with Argos's own boot records: boots on legacy BIOS, and also on UEFI \
+             firmware that accepts MBR-partitioned removable media. Windows 10 only."
         } else {
-            "GPT: boots UEFI firmware only."
+            "GPT: boots only on UEFI firmware."
         };
-        ui.label(egui::RichText::new(explanation).small());
+        let colour = if applies {
+            ui.visuals().weak_text_color()
+        } else {
+            theme::palette_for(ui.visuals().dark_mode).text_disabled
+        };
+        ui.label(egui::RichText::new(explanation).small().color(colour));
     }
 
-    fn draw_warnings(&mut self, ui: &mut egui::Ui) {
-        if let Some(warning) = &self.selection_warning {
-            ui.colored_label(ui.visuals().warn_fg_color, warning);
+    fn draw_notices(&mut self, ui: &mut egui::Ui) {
+        let notice = |ui: &mut egui::Ui, text: String, colour: egui::Color32| {
+            ui.label(egui::RichText::new(text).small().color(colour));
+            ui.add_space(metric::GAP_NOTICES);
+        };
+        if let Some(warning) = self.selection_warning.clone() {
+            notice(ui, format!("⚠ {warning}"), ui.visuals().warn_fg_color);
         }
-        if let Some(err) = &self.device_error {
-            ui.colored_label(ui.visuals().error_fg_color, format!("Drives: {err}"));
+        if self.device_error.is_some() {
+            notice(
+                ui,
+                "⚠ Could not list devices.".into(),
+                ui.visuals().error_fg_color,
+            );
         }
         if let AppState::AwaitingConfirmation { prepared, .. } = &self.state {
             for note in prepared.preview.split_notes() {
-                ui.label(format!(
-                    "{} is over FAT32's 4GiB file limit and will be split into {} parts",
+                let text = format!(
+                    "· {} exceeds the FAT32 4 GiB limit and will be split into {} parts",
                     note.source_path,
                     note.part_paths.len()
-                ));
+                );
+                ui.label(egui::RichText::new(text).small().weak());
+                ui.add_space(metric::GAP_NOTICES);
             }
         }
     }
@@ -437,23 +556,44 @@ impl ArgosApp {
         let AppState::Running(run) = &self.state else {
             return;
         };
-        ui.label(if run.phase_label.is_empty() {
-            "Starting…".to_string()
-        } else {
-            run.phase_label.clone()
+        Self::group(ui, |ui| {
+            ui.label(phase_label(run.phase, &run.phase_label));
+            match run.fraction() {
+                Some(fraction) => {
+                    ui.add(
+                        egui::ProgressBar::new(fraction)
+                            .desired_height(metric::PROGRESS_HEIGHT)
+                            .show_percentage(),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} / {}",
+                            human_size(run.bytes_done),
+                            human_size(run.bytes_total)
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+                // egui's ProgressBar has no indeterminate mode -- animate()
+                // only animates the filled part -- so an unknown total gets a
+                // spinner and says so, rather than a bar frozen at zero that
+                // reads as stalled.
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Working out the total…").small().weak());
+                    });
+                }
+            }
+            ui.label(
+                egui::RichText::new("Do not unplug the device.")
+                    .small()
+                    .weak(),
+            );
         });
-        let bar = match run.fraction() {
-            Some(fraction) => egui::ProgressBar::new(fraction).show_percentage(),
-            None => egui::ProgressBar::new(0.0).animate(true),
-        };
-        ui.add(bar);
-        if run.bytes_total > 0 {
-            ui.label(format!(
-                "{} / {}",
-                human_size(run.bytes_done),
-                human_size(run.bytes_total)
-            ));
-        }
+
+        ui.add_space(metric::GAP_GROUPS);
 
         let cancellable = run.is_cancellable();
         let requested = run.cancel_requested;
@@ -468,29 +608,76 @@ impl ArgosApp {
             }
         });
         // The honest part, and the reason #104 exists: past the copy loop a
-        // cancel is not delayed, it is discarded. Saying so beats a button
-        // that looks live and does nothing.
-        if requested {
-            ui.label("Stopping. The drive will be left unusable and must be rewritten.");
-        } else if !cancellable {
-            ui.label(egui::RichText::new("Past the point where this can be interrupted.").small());
-        }
+        // cancel is not delayed, it is discarded. Saying which side of that
+        // line the run is on beats a button that looks live and does nothing.
+        let (text, colour) = if requested {
+            (
+                "Interrupting. The device will be unusable and will need to be written again.",
+                ui.visuals().warn_fg_color,
+            )
+        } else if cancellable {
+            (
+                "Interrupting is still possible.",
+                ui.visuals().weak_text_color(),
+            )
+        } else {
+            (
+                "Past the point where interrupting is possible.",
+                ui.visuals().weak_text_color(),
+            )
+        };
+        ui.label(egui::RichText::new(text).small().color(colour));
     }
 
     fn draw_result(&mut self, ui: &mut egui::Ui) {
+        let dark = ui.visuals().dark_mode;
         match &self.state {
             AppState::Done { outcome, device_id } => {
-                ui.label(format!("Done. {}", describe_outcome(outcome)));
-                ui.label(format!("Drive: {device_id}"));
+                let device_id = device_id.clone();
+                let summary = describe_outcome(outcome);
+                Self::group(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("✔ Done. {summary}"))
+                            .color(theme::palette_for(dark).accent),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("Ejected {device_id}. Safe to unplug."))
+                            .small()
+                            .weak(),
+                    );
+                });
             }
             AppState::Cancelled => {
-                ui.label("Cancelled. The drive was left unusable and must be rewritten.");
+                Self::group(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "Cancelled. The device is unusable and needs to be written again.",
+                        )
+                        .color(ui.visuals().warn_fg_color),
+                    );
+                });
             }
             AppState::Failed { error } => {
-                ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+                let detail = error.to_string();
+                egui::Frame::group(ui.style())
+                    .inner_margin(egui::Margin::same(metric::GROUP_MARGIN as i8))
+                    .fill(theme::palette_for(dark).error_panel)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            egui::RichText::new(&detail).color(theme::palette_for(dark).error),
+                        );
+                        // The raw text is what a bug report needs, so it is
+                        // always reachable even once these messages are
+                        // translated (G6).
+                        ui.collapsing("Details", |ui| {
+                            ui.label(egui::RichText::new(&detail).monospace().small());
+                        });
+                    });
             }
             _ => {}
         }
+        ui.add_space(metric::GAP_GROUPS);
         if ui.button("Start over").clicked() {
             self.state = AppState::Idle;
         }
@@ -530,30 +717,35 @@ impl ArgosApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label("About to overwrite:");
+                // Monospace here is load-bearing, not decoration: the guard
+                // below is an exact match, and /dev/disk4 has to be
+                // distinguishable from /dev/diskl.
                 ui.monospace(format!("{} ({})", device.platform_id, device.display_name));
                 ui.label(format!("Size: {}", human_size(device.size_bytes)));
                 ui.label(format!(
-                    "Serial: {}",
+                    "Serial number: {}",
                     device.serial.as_deref().unwrap_or("unknown")
                 ));
-                ui.label(format!("Image: {}", iso.display()));
+                // The one place the whole path is shown, rather than elided.
+                ui.label("Image:");
+                ui.monospace(iso.display().to_string());
                 ui.label(preview_line);
                 for note in &notes {
-                    ui.label(note);
+                    ui.label(egui::RichText::new(note).small().weak());
                 }
                 ui.separator();
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!(
-                        "This will PERMANENTLY ERASE all data on {}.",
+                ui.label(
+                    egui::RichText::new(format!(
+                        "THIS WILL PERMANENTLY ERASE all data on {}.",
                         device.platform_id
-                    ),
+                    ))
+                    .color(ui.visuals().error_fg_color),
                 );
                 ui.label(format!(
                     "Type the device path ({}) to confirm:",
                     device.platform_id
                 ));
-                ui.text_edit_singleline(&mut typed_now);
+                ui.add(egui::TextEdit::singleline(&mut typed_now).font(egui::TextStyle::Monospace));
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
                         cancelled = true;
@@ -574,8 +766,8 @@ impl ArgosApp {
             self.state = AppState::Idle;
         } else if confirmed {
             // Wiring this to `session::spawn` is G5 (#92). Reported through
-            // the real error type rather than a placeholder string, so the
-            // result panel is exercised as it will actually be used.
+            // the real error type rather than a placeholder, so the result
+            // panel is exercised the way it will actually be used.
             self.state = AppState::Failed {
                 error: ArgosError::NotImplemented("writing from the GUI"),
             };
@@ -583,7 +775,41 @@ impl ArgosApp {
     }
 }
 
+/// Just the file name, for a row that must not set the window's width.
+fn file_name_of(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// The phase, worded for a person rather than as the `Debug` name the CLI
+/// prints. Being able to do this is what typing `Phase` on the wire bought
+/// (#89): the label is chosen here, not baked into the protocol.
+fn phase_label(phase: Option<argos_core::progress::Phase>, fallback: &str) -> String {
+    use argos_core::progress::Phase;
+    match phase {
+        Some(Phase::Unmounting) => "Unmounting".into(),
+        Some(Phase::Checksumming) => "Checksumming".into(),
+        Some(Phase::Partitioning) => "Partitioning".into(),
+        Some(Phase::FormattingFat32) => "Formatting".into(),
+        Some(Phase::CopyingFiles) => "Copying files".into(),
+        Some(Phase::Writing) => "Writing".into(),
+        Some(Phase::Flushing) => "Flushing".into(),
+        Some(Phase::Verifying) => "Verifying".into(),
+        // A helper new enough to send a phase this build does not know: show
+        // what it sent rather than nothing.
+        None if fallback.is_empty() => "Starting…".into(),
+        None => fallback.to_string(),
+    }
+}
+
 fn describe_device(device: &Device) -> String {
+    format!("{} — {}", device.platform_id, human_size(device.size_bytes))
+}
+
+/// The fuller form, for the open dropdown, where there is room and where the
+/// model name is what distinguishes two similar-looking paths.
+fn describe_device_long(device: &Device) -> String {
     format!(
         "{} — {} ({})",
         device.platform_id,
@@ -598,7 +824,7 @@ fn describe_preview(preview: &WritePreview) -> String {
             format!("Image size: {}", human_size(*image_size_bytes))
         }
         WritePreview::Windows { layout, .. } => format!(
-            "One FAT32 partition of {} at offset {}",
+            "One {} FAT32 partition at offset {}",
             human_size(layout.windows_partition.size_bytes),
             human_size(layout.windows_partition.start_offset_bytes)
         ),
@@ -617,6 +843,47 @@ fn describe_outcome(outcome: &argos_session::Outcome) -> String {
             "{files_copied} files copied ({})",
             human_size(*bytes_copied)
         ),
-        Outcome::WindowsVerify { files_verified } => format!("{files_verified} files verified"),
+        Outcome::WindowsVerify { files_verified } => format!("{files_verified} files checked"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use argos_core::progress::Phase;
+
+    /// Every phase gets a human label, and none of them is empty -- an empty
+    /// one would show a blank line where the user expects to be told what is
+    /// happening. Exhaustive so a new variant forces a decision.
+    #[test]
+    fn every_phase_has_a_label() {
+        for phase in [
+            Phase::Unmounting,
+            Phase::Checksumming,
+            Phase::Writing,
+            Phase::Flushing,
+            Phase::Verifying,
+            Phase::Partitioning,
+            Phase::FormattingFat32,
+            Phase::CopyingFiles,
+        ] {
+            assert!(!phase_label(Some(phase), "").is_empty(), "{phase:?}");
+        }
+    }
+
+    /// A phase name this build does not recognise is shown as sent, rather
+    /// than swallowed.
+    #[test]
+    fn an_unknown_phase_falls_back_to_what_the_helper_sent() {
+        assert_eq!(phase_label(None, "Polishing"), "Polishing");
+        assert_eq!(phase_label(None, ""), "Starting…");
+    }
+
+    #[test]
+    fn a_deep_path_is_shown_as_its_file_name() {
+        assert_eq!(
+            file_name_of(std::path::Path::new("/a/very/deep/path/Win10.iso")),
+            "Win10.iso"
+        );
     }
 }
