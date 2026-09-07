@@ -9,3 +9,13 @@ src = "src"
 git-repository-url = "https://github.com/jp-guimaraes/argos"
 edit-url-template = "https://github.com/jp-guimaraes/argos/edit/main/docs-site/{path}"
 site-url = "/argos/"
+additional-js = ["theme/lang-switcher.js"]
+additional-css = ["theme/lang-switcher.css"]
+
+# mdbook-i18n-helpers (https://github.com/google/mdbook-i18n-helpers): turns
+# the msgid/msgstr pairs in po/<lang>.po into a translated build when invoked
+# with MDBOOK_BOOK__LANGUAGE=<lang> (see docs-site/README.md). With no
+# language set (the default `mdbook build`), this preprocessor is a no-op and
+# the book renders the English source as-is.
+[preprocessor.gettext]
+after = ["links"]

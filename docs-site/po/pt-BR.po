@@ -1,0 +1,1838 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Argos\n"
+"POT-Creation-Date: 2026-09-06T20:55:40-03:00\n"
+"PO-Revision-Date: 2026-09-06T20:55:40-03:00\n"
+"Last-Translator: Automatically generated\n"
+"Language-Team: none\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: pt_BR\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: src/SUMMARY.md:1
+msgid "Summary"
+msgstr "Sumário"
+
+#: src/SUMMARY.md:3
+msgid "Overview"
+msgstr "Visão geral"
+
+#: src/SUMMARY.md:4
+msgid "Architecture"
+msgstr "Arquitetura"
+
+#: src/SUMMARY.md:5
+msgid "Contributing"
+msgstr "Contribuindo"
+
+#: src/SUMMARY.md:6 src/changelog.md:1
+msgid "Changelog"
+msgstr ""
+
+#: src/overview.md:1
+msgid "Argos"
+msgstr ""
+
+#: src/overview.md:3
+msgid ""
+"Argos is a free-software tool for creating bootable installer USB drives, in "
+"the spirit of [Rufus](https://github.com/pbatard/rufus) but built to run "
+"cross-platform."
+msgstr "Argos é uma ferramenta de software livre para criar pen drives de instalação inicializáveis, no espírito do [Rufus](https://github.com/pbatard/rufus), mas construída para rodar multiplataforma."
+
+#: src/overview.md:7
+msgid "Goal"
+msgstr "Objetivo"
+
+#: src/overview.md:9
+msgid ""
+"Argos should be able to create installer USB drives for both Windows and "
+"Linux distributions, targeting both legacy MBR/BIOS and GPT/UEFI machines."
+msgstr "Argos deve ser capaz de criar pen drives de instalação para distribuições Windows e Linux, cobrindo tanto máquinas legadas MBR/BIOS quanto GPT/UEFI."
+
+#: src/overview.md:12
+msgid "Requirements"
+msgstr "Requisitos"
+
+#: src/overview.md:14
+msgid ""
+"The software should be reliable and fast, and should be installable across a "
+"wide range of Linux distributions and, ideally, on macOS as well."
+msgstr "O software deve ser confiável e rápido, e deve ser instalável numa ampla gama de distribuições Linux e, idealmente, também no macOS."
+
+#: src/overview.md:17 src/architecture.md:498 src/architecture.md:500
+msgid "Status"
+msgstr ""
+
+#: src/overview.md:19
+msgid ""
+"Argos delivers phase 3 (Windows installer media) validated on real hardware "
+"from both hosts and on both firmwares — see the [latest release](https://"
+"github.com/jp-guimaraes/argos/releases/latest) and [`CHANGELOG.md`]"
+"(CHANGELOG.md) for what shipped."
+msgstr "Argos entrega a fase 3 (mídia de instalação do Windows) validada em hardware real, a partir dos dois hosts e nos dois firmwares — veja o [último release](https://github.com/jp-guimaraes/argos/releases/latest) e o [`CHANGELOG.md`](CHANGELOG.md) para o que foi lançado."
+
+#: src/overview.md:24
+msgid ""
+"**Images**: Linux ISOs (including isohybrid images), written byte-for-byte "
+"in \"DD mode\"; and Windows 10/11 installer ISOs, written as a FAT32 volume "
+"with `install.wim` split into `install.swm` parts where it exceeds FAT32's 4 "
+"GiB file limit."
+msgstr "**Imagens**: ISOs Linux (incluindo imagens isohybrid), gravadas byte a byte no \"modo DD\"; e ISOs de instalação do Windows 10/11, gravadas como um volume FAT32 com o `install.wim` dividido em partes `install.swm` quando ultrapassa o limite de 4 GiB de arquivo do FAT32."
+
+#: src/overview.md:28
+msgid ""
+"**Targets**: UEFI firmware (`--layout fat32`) and legacy BIOS machines (`--"
+"layout fat32-bios`, which carries Argos's own MBR and FAT32 boot records). "
+"Both confirmed to reach Windows Setup's disk selection on real machines."
+msgstr "**Alvos**: firmware UEFI (`--layout fat32`) e máquinas BIOS legadas (`--layout fat32-bios`, que carrega o próprio MBR e os registros de boot FAT32 do Argos). Ambos confirmados chegando à tela de seleção de disco do instalador do Windows em máquinas reais."
+
+#: src/overview.md:32
+msgid ""
+"**Hosts**: Linux and macOS, both implemented — including for Windows media, "
+"which needs no `mkfs`, no FUSE and no Windows machine anywhere in the "
+"process. Windows-as-host is out of scope for now."
+msgstr "**Hosts**: Linux e macOS, ambos implementados — inclusive para mídia do Windows, que não precisa de `mkfs`, FUSE nem de nenhuma máquina Windows em todo o processo. Windows como host está fora de escopo por enquanto."
+
+#: src/overview.md:35
+msgid ""
+"**Interface**: a CLI (`argos`), architected so a GUI can be added later "
+"without reworking the core logic. No GUI exists today."
+msgstr "**Interface**: uma CLI (`argos`), arquitetada para que uma GUI possa ser adicionada depois sem retrabalhar a lógica principal. Nenhuma GUI existe hoje."
+
+#: src/overview.md:38
+msgid ""
+"See [`docs/architecture.md`](docs/architecture.md) for the full design and a "
+"per-area status table, [`CHANGELOG.md`](CHANGELOG.md) for what shipped in "
+"each release, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to build and "
+"test the project."
+msgstr "Veja [`docs/architecture.md`](docs/architecture.md) para o design completo e uma tabela de status por área, [`CHANGELOG.md`](CHANGELOG.md) para o que foi lançado em cada versão, e [`CONTRIBUTING.md`](CONTRIBUTING.md) para como compilar e testar o projeto."
+
+#: src/overview.md:43
+msgid "Installation"
+msgstr "Instalação"
+
+#: src/overview.md:45
+msgid "Homebrew (macOS)"
+msgstr ""
+
+#: src/overview.md:51
+msgid ""
+"Builds from source (there is no pre-built bottle yet); a Rust toolchain is "
+"pulled in automatically as a build dependency. See [`jp-guimaraes/homebrew-"
+"argos`](https://github.com/jp-guimaraes/homebrew-argos)."
+msgstr "Compila a partir do código-fonte (ainda não há bottle pré-compilado); um toolchain Rust é baixado automaticamente como dependência de build. Veja [`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos)."
+
+#: src/overview.md:55
+msgid "apt / `.deb` (Debian, Ubuntu)"
+msgstr ""
+
+#: src/overview.md:57
+msgid ""
+"Download `argos_<version>_amd64.deb` from the [latest release](https://"
+"github.com/jp-guimaraes/argos/releases/latest), then:"
+msgstr "Baixe `argos_<version>_amd64.deb` do [último release](https://github.com/jp-guimaraes/argos/releases/latest), depois:"
+
+#: src/overview.md:65
+msgid ""
+"A single runtime dependency (`libc6`) -- no `mkfs.ntfs`, no `ntfs-3g`, "
+"nothing else. See `packaging/README.md` for how the package is built."
+msgstr "Uma única dependência de runtime (`libc6`) -- nada de `mkfs.ntfs`, nada de `ntfs-3g`. Veja `packaging/README.md` para como o pacote é construído."
+
+#: src/overview.md:68
+msgid "Arch / pacman"
+msgstr ""
+
+#: src/overview.md:70
+msgid ""
+"Not on the AUR yet -- `packaging/aur/PKGBUILD` is in this repository and "
+"validated in CI, but publishing it needs the maintainer's own AUR account "
+"(see `packaging/README.md`). Until then, build it locally:"
+msgstr "Ainda não está na AUR -- o `packaging/aur/PKGBUILD` está neste repositório e validado no CI, mas publicá-lo depende da conta AUR do mantenedor (veja `packaging/README.md`). Até lá, compile localmente:"
+
+#: src/overview.md:80
+msgid "Pre-built binaries"
+msgstr "Binários pré-compilados"
+
+#: src/overview.md:82
+msgid ""
+"For any other platform: Linux (`x86_64-unknown-linux-gnu`) and macOS "
+"(`aarch64-apple-darwin`, `x86_64-apple-darwin`) tarballs are attached to "
+"each [GitHub Release](https://github.com/jp-guimaraes/argos/releases) -- "
+"download the tarball for your platform, extract it, and put `argos` and "
+"`argos-helper` somewhere on your `PATH` (both binaries must stay in the same "
+"directory; `argos` looks for `argos-helper` next to itself first). Neither "
+"binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on "
+"first launch until you approve it once in System Settings -> Privacy & "
+"Security."
+msgstr "Para qualquer outra plataforma: pacotes Linux (`x86_64-unknown-linux-gnu`) e macOS (`aarch64-apple-darwin`, `x86_64-apple-darwin`) são anexados a cada [Release do GitHub](https://github.com/jp-guimaraes/argos/releases) -- baixe o pacote da sua plataforma, extraia, e coloque `argos` e `argos-helper` em algum lugar do seu `PATH` (os dois binários precisam ficar no mesmo diretório; `argos` procura por `argos-helper` primeiro ao lado de si mesmo). Nenhum dos binários é assinado ainda, então o Gatekeeper do macOS vai recusar rodar `argos` na primeira execução até você aprovar uma vez em Ajustes do Sistema -> Privacidade e Segurança."
+
+#: src/overview.md:92
+msgid "Via `cargo install`"
+msgstr ""
+
+#: src/overview.md:98
+msgid ""
+"Installs both `argos` (from the `argos-cli` crate) and `argos-helper` (from "
+"the separate, privilege-separated `argos-privileged` crate -- see [`docs/"
+"architecture.md`](docs/architecture.md)) into `cargo`'s install directory "
+"(`~/.cargo/bin` by default), which is what puts them next to each other. "
+"Passing only `argos-cli` installs `argos` without the helper binary it needs "
+"at runtime -- always install both together."
+msgstr "Instala tanto o `argos` (do crate `argos-cli`) quanto o `argos-helper` (do crate separado `argos-privileged`, com privilégios isolados -- veja [`docs/architecture.md`](docs/architecture.md)) no diretório de instalação do `cargo` (`~/.cargo/bin` por padrão), que é o que os coloca lado a lado. Instalar só `argos-cli` instala o `argos` sem o binário auxiliar de que ele precisa em tempo de execução -- instale sempre os dois juntos."
+
+#: src/overview.md:105
+msgid ""
+"**macOS with Homebrew's `rustup`**: `cargo install` puts its binaries in "
+"`~/.cargo/bin`, and Homebrew's keg-only `rustup` formula does **not** add "
+"that directory to your `PATH` — the official `rustup-init` installer does, "
+"which is why this bites Homebrew users specifically. If `argos` comes back "
+"as `command not found` immediately after a successful install, that is all "
+"this is:"
+msgstr "**macOS com o `rustup` do Homebrew**: o `cargo install` coloca seus binários em `~/.cargo/bin`, e a fórmula keg-only `rustup` do Homebrew **não** adiciona esse diretório ao seu `PATH` -- já o instalador oficial `rustup-init` adiciona, e é por isso que isso pega especificamente usuários de Homebrew. Se `argos` volta como `command not found` logo após uma instalação bem-sucedida, é só isso:"
+
+#: src/overview.md:113
+msgid "\"$HOME/.cargo/bin:$PATH\""
+msgstr ""
+
+#: src/overview.md:116
+msgid "Add it to your `~/.zshrc` to make it stick."
+msgstr "Adicione isso ao seu `~/.zshrc` para que fique permanente."
+
+#: src/overview.md:118
+msgid "From source"
+msgstr "A partir do código-fonte"
+
+#: src/overview.md:123
+msgid ""
+"# binaries land in target/release/argos and target/release/argos-helper\n"
+msgstr "# os binários ficam em target/release/argos e target/release/argos-helper\n"
+
+#: src/overview.md:127
+msgid "Usage"
+msgstr "Uso"
+
+#: src/overview.md:133
+msgid ""
+"Lists every disk Argos can see and whether it looks safe to write to (not a "
+"system disk, removable, on a USB bus). Start here -- the device path you "
+"need for the next step comes from this output (e.g. `/dev/sdb` on Linux, `/"
+"dev/diskN` on macOS)."
+msgstr "Lista todos os discos que o Argos consegue ver e se parecem seguros para gravação (não é disco de sistema, é removível, está num barramento USB). Comece por aqui -- o caminho do dispositivo que você precisa no próximo passo vem dessa saída (ex.: `/dev/sdb` no Linux, `/dev/diskN` no macOS)."
+
+#: src/overview.md:139
+msgid "# or, equivalently:\n"
+msgstr "# ou, equivalentemente:\n"
+
+#: src/overview.md:144
+msgid ""
+"`argos` re-elevates itself (`pkexec` on Linux where available, `sudo` "
+"otherwise) to run `argos-helper`, which does the actual write -- expect a "
+"password prompt. Before anything is touched, it prints exactly what it's "
+"about to do and asks you to type the device path back to confirm:"
+msgstr "`argos` se reeleva (`pkexec` no Linux quando disponível, `sudo` caso contrário) para rodar o `argos-helper`, que faz a gravação de fato -- espere um prompt de senha. Antes de tocar em qualquer coisa, ele imprime exatamente o que vai fazer e pede para você digitar o caminho do dispositivo de volta para confirmar:"
+
+#: src/overview.md:159
+msgid ""
+"A Linux or Windows installer ISO is detected automatically. Windows media "
+"defaults to `--layout fat32` (GPT/UEFI); add `--layout fat32-bios` for "
+"legacy BIOS/MBR machines instead. Linux ISOs are always written byte-for-"
+"byte (\"DD mode\") and `--layout` is ignored for them."
+msgstr "Uma ISO de instalação Linux ou Windows é detectada automaticamente. Mídia do Windows usa por padrão `--layout fat32` (GPT/UEFI); adicione `--layout fat32-bios` para máquinas BIOS/MBR legadas. ISOs Linux são sempre gravadas byte a byte (\"modo DD\") e `--layout` é ignorado para elas."
+
+#: src/overview.md:168
+msgid ""
+"Re-checks a device against the image it was supposedly written from, without "
+"writing anything -- useful after the fact, or if `write` was run with `--no-"
+"verify`. Unlike `write`, the device here is always positional and the ISO is "
+"always `--iso` -- `write` accepts the ISO either way precisely so a habit "
+"formed on one command doesn't break on the other."
+msgstr "Reconfere um dispositivo contra a imagem da qual ele supostamente foi gravado, sem gravar nada -- útil depois do fato, ou se `write` rodou com `--no-verify`. Diferente de `write`, aqui o dispositivo é sempre posicional e a ISO é sempre `--iso` -- `write` aceita a ISO das duas formas justamente para que um hábito formado num comando não quebre no outro."
+
+#: src/overview.md:174
+msgid ""
+"Run `argos <command> --help` for every flag (`--no-verify`, `--no-eject`, `--"
+"i-know-what-im-doing` for a disk Argos doesn't recognize as removable but "
+"you're sure about), or see the man page (`argos man`, or installed "
+"automatically by the `.deb`/Homebrew/AUR packages above) and `argos "
+"completions <shell>` for tab completion."
+msgstr "Rode `argos <command> --help` para ver todas as flags (`--no-verify`, `--no-eject`, `--i-know-what-im-doing` para um disco que o Argos não reconhece como removível mas que você tem certeza), ou veja a página de manual (`argos man`, ou instalada automaticamente pelos pacotes `.deb`/Homebrew/AUR acima) e `argos completions <shell>` para autocompletar no shell."
+
+#: src/overview.md:180
+msgid "Inspiration"
+msgstr "Inspiração"
+
+#: src/overview.md:182
+msgid ""
+"At this point, it is clear that Rufus is the primary inspiration for this "
+"software. Argos aims to bring that same rock-solid reliability to a cross-"
+"platform tool that isn't limited to Windows. After using Rufus over the "
+"years, I always thought \"Rufus\" sounded like a great dog name. Naturally, "
+"this project needed another great dog name to honor the tradition of pairing "
+"dependable bootable USB tools with canine names, so Argos it is! The "
+"backronym came afterward, and it is deliberately not in English: "
+"**A**ssistente de **R**ebolar **G**ueri-gueris em **O**utros **S**istemas"
+msgstr "A essa altura, é claro que o Rufus é a principal inspiração para este software. O Argos busca trazer essa mesma confiabilidade inabalável para uma ferramenta multiplataforma que não fica limitada ao Windows. Depois de usar o Rufus por anos, sempre achei que \"Rufus\" soava como um ótimo nome de cachorro. Naturalmente, este projeto precisava de outro grande nome de cachorro para honrar a tradição de batizar ferramentas confiáveis de pen drive inicializável com nomes caninos, então Argos foi a escolha! O backronimo veio depois, e é deliberadamente em português: **A**ssistente de **R**ebolar **G**ueri-gueris em **O**utros **S**istemas"
+
+#: src/overview.md:187
+msgid ""
+"This is Brazilian Portuguese—specifically, regional slang from the Brazilian "
+"Northeast. Two words won't survive a standard dictionary lookup: rebolar "
+"here does not mean \"to shake hips/dance,\" but to fling or to toss; and "
+"gueri-gueri translates to doodad or knick-knack—a small thing nobody bothers "
+"to name properly. Roughly translated, it means \"Assistant for Flinging "
+"Doodads onto Other Systems\", which feels like an honest description of "
+"writing an ISO to a flash drive."
+msgstr "É uma expressão regional do Nordeste brasileiro. Duas palavras não sobrevivem a uma consulta de dicionário padrão: aqui, rebolar não significa \"dançar/requebrar\", e sim jogar ou atirar; e gueri-gueri quer dizer treco ou bugiganga -- uma coisinha qualquer que ninguém se dá ao trabalho de nomear direito. Traduzindo livremente, seria algo como \"Assistente para Jogar Trecos em Outros Sistemas\", uma descrição bem honesta de gravar uma ISO num pen drive."
+
+#: src/overview.md:189
+msgid ""
+"Argos was also planned as an experiment to test the current state of AI-"
+"assisted software development using agent harnesses. Rust was deliberately "
+"chosen because I had zero prior experience with it. On top of that, it "
+"involved low-level tasks requiring interaction with hardware, disk "
+"partitions, and system BIOS/UEFI. Watching the agents navigate these "
+"problems was both fun and eye-opening. A lot of tokens were burned, but a "
+"genuinely useful tool was built in less than a week."
+msgstr "Argos também foi planejado como um experimento para testar o estado atual do desenvolvimento de software assistido por IA usando agent harnesses. O Rust foi escolhido de propósito porque eu não tinha nenhuma experiência prévia com ele. Além disso, envolvia tarefas de baixo nível exigindo interação com hardware, partições de disco e BIOS/UEFI do sistema. Ver os agentes navegando esses problemas foi divertido e revelador ao mesmo tempo. Muitos tokens foram queimados, mas uma ferramenta genuinamente útil foi construída em menos de uma semana."
+
+#: src/architecture.md:1
+msgid "Argos architecture"
+msgstr ""
+
+#: src/architecture.md:3
+msgid ""
+"Argos creates bootable installer USB drives, in the spirit of [Rufus]"
+"(https://github.com/pbatard/rufus) but built to run on Linux and macOS "
+"hosts. This document describes the design and tracks the current "
+"implementation status against the product backlog. See the repository "
+"history for the full backlog (epics E0-E11) that this was planned from."
+msgstr ""
+
+#: src/architecture.md:9
+msgid "Guiding decisions (v1)"
+msgstr ""
+
+#: src/architecture.md:11
+msgid "**Language**: Rust."
+msgstr ""
+
+#: src/architecture.md:12
+msgid ""
+"**Interface**: CLI first. The crate boundaries below are chosen so a future "
+"GUI can sit on top of `argos-core` + `argos-platform` without changes to "
+"either."
+msgstr ""
+
+#: src/architecture.md:15
+msgid ""
+"**Image scope**: Linux ISOs only, written byte-for-byte (\"DD mode\") when "
+"the ISO is an isohybrid image -- which covers essentially every mainstream "
+"distro today, since the image already embeds a valid MBR/GPT and BIOS/UEFI "
+"bootloaders. Non-hybrid ISOs are refused with a clear error rather than half-"
+"supported. Windows images (`install.wim` splitting, NTFS, UEFI:NTFS) are an "
+"explicit phase 2, not attempted here."
+msgstr ""
+
+#: src/architecture.md:21
+msgid ""
+"**Hosts**: Linux and macOS. Windows-as-host is a stub crate only (see below)."
+msgstr ""
+
+#: src/architecture.md:22
+msgid ""
+"**Top priority**: never write to the wrong disk. Every device-safety "
+"decision layers multiple independent signals rather than trusting a single "
+"OS-reported flag, and the negative test suite (never write a disk flagged as "
+"a system disk) is treated as the most important test in the project."
+msgstr ""
+
+#: src/architecture.md:26
+msgid ""
+"**No shelling out** to `dd`/`parted`/`sgdisk`/`mkfs`. `gptman`/`mbrman`/ "
+"`fatfs` (pure Rust) cover partition-table and FAT needs for phase 2; the "
+"only accepted external-process calls are unmount/eject helpers (`umount`/"
+"`eject` on Linux, `diskutil` on macOS)."
+msgstr ""
+
+#: src/architecture.md:31
+msgid "Guiding decisions (phase 2: Windows ISO support, backlog #27)"
+msgstr ""
+
+#: src/architecture.md:33
+msgid ""
+"v1's \"Linux ISOs only, DD mode\" scope (above) was always meant to be "
+"revisited once it shipped. Windows install-media support breaks the \"Argos "
+"never creates/alters a partition table\" invariant v1 relied on, so -- per "
+"the project's own rule that this needed an explicit architecture decision "
+"before being touched -- these were decided in a 2026-08-30 planning session, "
+"ahead of implementation, and are tracked as backlog issue #27 (sub-epics W1-"
+"W6):"
+msgstr ""
+
+#: src/architecture.md:40
+msgid ""
+"**Implementation/test platform: Linux first.** The highest-risk new piece is "
+"creating a real NTFS partition, which is native and mature on Linux "
+"(`ntfs-3g`/`mkfs.ntfs`) but on macOS depends on `ntfs-3g` via Homebrew "
+"running on macFUSE (kext approval, historically fragile) -- not reliably "
+"testable there. The macOS backend is deferred; `argos-core`'s planning logic "
+"(image classification, partition-plan arithmetic) stays host-agnostic from "
+"the start, same as v1's split."
+msgstr ""
+
+#: src/architecture.md:47
+msgid ""
+"**FAT32 4GB limit (`install.wim`/`.esd`) workaround: UEFI:NTFS**, Rufus's "
+"current method -- a small FAT32 boot partition (loads the UEFI:NTFS driver) "
+"plus a large NTFS partition holding the Windows files untouched, no "
+"splitting. The boot partition is always an exact copy of [`pbatard/uefi-"
+"ntfs`](https://github.com/pbatard/uefi-ntfs)'s pre-built, Secure-Boot-signed "
+"`.img` (the same artifact Rufus vendors as `res/uefi/uefi-ntfs.img`), so "
+"it's a plain `dd` of a vendored binary -- `argos_core::write::dd_mode` "
+"already covers that, and no FAT32-writing crate is needed. Splitting "
+"`install.wim` into `.swm` (`wimlib`, Rufus's older method, useful for very "
+"old BIOS-only compatibility) is deliberately deferred to the backlog. (Phase "
+"3 update: that deferral ended -- the FAT32 + WIM-split layout is now the "
+"_strategic replacement_ for UEFI:NTFS, not a compatibility fallback; see "
+"`docs/plan-phase3-self-contained.md` §2. M3 (#43) implemented the FAT32 "
+"layout as `--layout fat32`: `partition::windows::WindowsFat32Plan` (one "
+"Microsoft Basic Data partition \\-- deliberately _not_ ESP-typed: firmware "
+"boots removable FAT32 media by scanning for `\\efi\\boot\\bootx64.efi` "
+"regardless, and basic-data is what Rufus ships, the most-travelled path), "
+"formatted and populated via pure-Rust `fatfs` over `argos-"
+"privileged::partition_io::PartitionWindow`, a Read+Write+Seek view bounded "
+"to the partition's byte range of the open whole-device fd -- no `mkfs`, no "
+"mount, no partition device nodes, no partition-table reread, zero external "
+"processes in the write path. FAT32 refuses >4GiB-1 files with a dedicated "
+"error (exit 26) until M2's WIM splitter slots into the copy pipeline -- it "
+"has since landed, and M5 put FAT32 media booting real UEFI _and_ legacy-BIOS "
+"machines to Windows Setup's disk selection from both hosts. **M4.3 decision: "
+"NTFS is retired, not merely demoted** -- `fat32` is the only layout Argos "
+"produces (plus `fat32-bios` for legacy BIOS, M6); see the Status table below "
+"for the scope of what came out of the tree with it.)"
+msgstr ""
+
+#: src/architecture.md:76
+msgid ""
+"**`gptman`** (pure-Rust GPT), **`cdfs`** (ISO9660 reader, used here under "
+"the local dependency name `cdfs` but backed by the `newtua-cdfs` fork -- see "
+"below), and **`hadris-udf`** (pure-Rust UDF/ECMA-167 reader, added after W1 "
+"validation showed real Windows media needs it -- see the correction below) "
+"are the only new dependencies this needs. (Phase 3 update: `hadris-udf` has "
+"since been replaced at runtime by Argos's own `image::udf` module -- see the "
+"correction below and `docs/plan-phase3-self-contained.md` -- and survives "
+"only as a dev-dependency fixture generator.)"
+msgstr ""
+
+#: src/architecture.md:84
+msgid ""
+"This relaxes v1's \"no shelling out\" rule specifically to call `mkfs.ntfs`/"
+"`ntfs-3g` as an external process on Linux to format and mount the NTFS "
+"partition -- the same posture v1 already accepted for `unmount`/`eject` "
+"helpers. Creating the partition table itself stays pure-Rust (`gptman`)."
+msgstr ""
+
+#: src/architecture.md:89
+msgid ""
+"**`cdfs` dependency: the `newtua-cdfs` fork, not the canonical crate.** The "
+"canonical `cdfs` crate on crates.io hard-depends on `fuser` (FUSE bindings) "
+"and a `clap`\\-based mount binary, neither of which `argos-core` uses or "
+"wants as a transitive dependency. `newtua-cdfs` (maintained by the same team "
+"as The Unarchiver) is a \"forced fork\" that strips exactly that and nothing "
+"else, publishing its library under the same crate name (`cdfs`) and API -- "
+"`argos-core`'s `Cargo.toml` depends on it as `cdfs = { package = \"newtua-"
+"cdfs\", ... }` so the rest of the codebase is unaffected by the rename."
+msgstr ""
+
+#: src/architecture.md:97
+msgid ""
+"**Correction (post-W1 validation): real Windows installer media is UDF, not "
+"ISO9660 -- this is the norm, not a rare edge case.** The original planning "
+"above treated a UDF bridge as a risk unique to unusually large multi-edition "
+"images. Testing `image::windows` against a real, official Windows 10 22H2 "
+"ISO (single edition, nothing unusual) during W1 disproved that: it's "
+"mastered as an ISO9660+UDF bridge, with the ISO9660 layer exposing only a "
+"stub `README.TXT` -- `bootmgr`, `sources/`, and everything else live in the "
+"UDF layer exclusively. `cdfs` (ISO9660-only) could not see any of it. "
+"`image::windows` therefore tries UDF first, falling back to `cdfs` only for "
+"genuinely ISO9660-only Windows-shaped images -- which in practice means this "
+"crate's own synthetic test fixtures, not real media. The UDF backend was "
+"originally [`hadris-udf`](https://github.com/hxyulin/hadris) (the reason the "
+"workspace's `rust-version` moved from 1.75 to 1.88; `gptman` stayed pinned "
+"to its 1.x line regardless); phase 3's M1 (backlog \\#40) replaced it with "
+"Argos's own `image::udf` module after `hadris-udf`'s whole-file-in-memory "
+"read caused a real OOM (#38) and its private extent resolution made "
+"streaming impossible to add from outside. `hadris-udf` remains a dev-"
+"dependency only, generating UDF test fixtures as an independent "
+"implementation `image::udf` is verified against."
+msgstr ""
+
+#: src/architecture.md:117
+msgid "Crate layout"
+msgstr ""
+
+#: src/architecture.md:130
+msgid ""
+"`argos-core` never imports anything OS-specific for disk access; it receives "
+"plain data (`Device`, byte streams, sizes) from whichever `argos-platform-*` "
+"crate is selected for the current OS. That split is what makes ISO "
+"classification, checksumming, and the safety judgement unit-testable with "
+"ordinary files and in-memory buffers -- no root, no real hardware."
+msgstr ""
+
+#: src/architecture.md:136
+msgid "`argos-core`"
+msgstr ""
+
+#: src/architecture.md:138
+msgid ""
+"`device`: the `Device` model and `Bus` enum, plus the single safety gate "
+"`Device::is_safe_to_write()` (requires: not a system disk, OS-reported "
+"removable, USB bus -- all three, never just one)."
+msgstr ""
+
+#: src/architecture.md:141
+msgid ""
+"`error`: `ArgosError`, a `thiserror` enum mapped to stable CLI exit codes."
+msgstr ""
+
+#: src/architecture.md:142
+msgid ""
+"`progress`: `ProgressSink` trait and a `CancelToken` for cooperative "
+"cancellation. Cancelling never tries to \"undo\" a partial write -- the "
+"device is reported as inconsistent and must be rewritten in full. The FAT32 "
+"Windows path goes one step further and _invalidates_ what it leaves, because "
+"unlike DD mode its partial media would otherwise mount and look plausible."
+msgstr ""
+
+#: src/architecture.md:147
+msgid ""
+"`image::isohybrid`: classifies an ISO from its first couple of sectors "
+"(embedded MBR signature + partition entry, El Torito boot catalog, a best-"
+"effort GPT/UEFI hint) into `Hybrid` / `ElToritoOnly` / `PlainData`. Only "
+"`Hybrid` is writable in DD mode."
+msgstr ""
+
+#: src/architecture.md:151
+msgid ""
+"`image::udf` (phase 3, M1 / backlog #40): Argos's own minimal, read-only UDF/"
+"ECMA-167 reader with **streaming** file access -- anchor/volume descriptor "
+"sequence parsing (tag checksum + CRC verified on every descriptor), type-1 "
+"partition maps, File/Extended File Entries, short and long allocation "
+"descriptors, embedded data, sparse extents, and allocation-extent "
+"continuation chains. A file read materializes only the extent list and "
+"serves content in caller-sized chunks through a shared `Mutex`\\-guarded "
+"source, so a multi-GB `install.wim` costs a few MB of RAM to copy (measured: "
+"3.5MB peak RSS streaming a 512MB file), not its own size. Anything outside "
+"scope (metadata partitions, extended ADs, non-2048-byte blocks) is refused "
+"with a clear error, never misread."
+msgstr ""
+
+#: src/architecture.md:162
+msgid ""
+"`image::windows` (backlog #27, W1): recognizes an official Windows installer "
+"ISO by the presence of `bootmgr` + `sources/boot.wim` at its root, rather "
+"than fixed byte offsets, since a Windows ISO carries no embedded MBR/GPT to "
+"probe. Tries `image::udf` first, falling back to `cdfs` (see the phase 2 "
+"guiding decisions above, including the post-W1 correction on why UDF has to "
+"come first). `WindowsIso` is a thin read-only wrapper (list files with their "
+"sizes, open one by path) over whichever backend recognized the image, reused "
+"by `windows_fat32` to copy the extracted files onto the FAT32 partition -- "
+"both backends stream, so the copy runs in constant memory."
+msgstr ""
+
+#: src/architecture.md:172
+msgid ""
+"`image::checksum`: streaming SHA-256, used both to fingerprint the source "
+"ISO and (once E5/E6 land) to verify what was actually written."
+msgstr ""
+
+#: src/architecture.md:174
+msgid ""
+"`preflight`: capacity and source/target-collision checks that run in the "
+"unprivileged process before the user is even asked to confirm anything -- "
+"the same pattern balenaEtcher uses in its renderer process before handing "
+"work to its privileged sidecar. `check_windows_fat32_capacity` (phase 3 M3, "
+"backlog #43) is the Windows-write equivalent of `check_capacity`: it "
+"compares the device against `WindowsFat32Plan::total_bytes_required` instead "
+"of the raw ISO size, since the partition needs overhead margin and GPT/MBR "
+"structures on top of that. An earlier `check_windows_memory` guard (#38, "
+"found running the retired NTFS path's W6 against real hardware) briefly "
+"guarded the UDF backend's whole-file-in-memory read -- a real Windows 10 "
+"ISO's `install.wim` had pushed a 7.7GB-RAM machine into memory pressure "
+"severe enough for `systemd-oomd` to kill an unrelated process sharing `argos-"
+"helper`'s cgroup. It was retired together with the cost it guarded when "
+"`image::udf`'s streaming reader (phase 3 M1, #40) made the copy constant-"
+"memory; its exit code (25) stays reserved rather than reused."
+msgstr ""
+
+#: src/architecture.md:189
+msgid ""
+"`partition::windows` (phase 3 M3/M6, backlog #43/#45): pure arithmetic, no "
+"disk I/O. `WindowsFat32Plan::new` (GPT) and `WindowsMbrPlan::new` (MBR, M6) "
+"lay out the single FAT32 partition -- a 1 MiB-aligned start (the same "
+"convention Windows Setup/Rufus/`parted` use), a sector-rounded size with a "
+"fixed overhead margin on top of the extracted (and, where needed, WIM-split) "
+"files' raw byte total (deliberately generous and uncalibrated; M5's real-"
+"hardware pass is what told us it didn't need adjusting) -- and "
+"`total_bytes_required` folds in the GPT/MBR structure overhead for the "
+"capacity preflight check above. `windows_fat32` turns either plan into a "
+"real partition table via `gptman`/`mbrman`."
+msgstr ""
+
+#: src/architecture.md:199
+msgid ""
+"`verify` (phase 3 M3, backlog #43): `verify_windows_fat32_layout` and "
+"`verify_windows_file_hash` are the Windows-write path's counterpart to "
+"`verify_written_image` above -- deliberately _not_ a reuse of it, since that "
+"function assumes one meaningful whole-device hash, and a partitioned write "
+"has none. Both are pure comparisons over plain data (`ObservedPartition` "
+"wraps a partition type GUID + region, carrying no `gptman` type -- only "
+"`argos-privileged`, which does the actual reading, links that crate), so "
+"they're unit-tested the same way as everything else here: no disk, no "
+"privilege. `argos_privileged::windows_fat32::execute_verify_windows_fat32` "
+"is what actually reads a real GPT/MBR and the FAT32 filesystem and calls "
+"into these."
+msgstr ""
+
+#: src/architecture.md:212
+msgid "`argos-platform` / `argos-platform-linux`"
+msgstr ""
+
+#: src/architecture.md:214
+msgid ""
+"`PlatformOps` is intentionally small and free of Unix-specific assumptions "
+"(no `/dev/sdX` parsing baked into the trait) so a real Windows backend could "
+"implement it later without the trait changing."
+msgstr ""
+
+#: src/architecture.md:218
+msgid ""
+"Three methods the NTFS write path added (backlog #27, W3) -- "
+"`reread_partition_table`, `mount_ntfs_partition`, `unmount_path` -- were "
+"removed from the trait and every backend along with that path itself "
+"(decision point M4.3): the FAT32 layout needs none of them, writing directly "
+"into the partition's byte range of the open whole-device fd instead of "
+"reading/formatting/mounting a filesystem node."
+msgstr ""
+
+#: src/architecture.md:225
+msgid ""
+"The Linux backend enumerates disks by reading `/sys/block/*` directly (size, "
+"removable flag, vendor/model) and cross-referencing the udev database at `/"
+"run/udev/data/b<major>:<minor>` for a more reliable bus classification and "
+"serial number, when udev has recorded the device. Reading the udev database "
+"as flat text files -- rather than linking `libudev` via bindgen -- is a "
+"deliberate v1 simplification: no extra system libraries needed to build."
+msgstr ""
+
+#: src/architecture.md:232
+msgid ""
+"That sysfs/udev verdict is then cross-checked against UDisks2 over D-Bus "
+"(`udisks2.rs`, using `zbus`'s blocking API), when `udisksd` is reachable: "
+"this is the \"two sources, cross-referenced\" defense in depth from the "
+"original design notes, matching what desktop file managers show. The cross-"
+"check can only push the result to be _more_ conservative, never less -- if "
+"UDisks2 disagrees that a device is a removable USB disk, "
+"`os_reports_removable` is cleared regardless of what sysfs/udev concluded on "
+"their own. When UDisks2 isn't running (headless servers, containers, minimal "
+"installs) or the D-Bus call fails for any reason, `Udisks2Snapshot::fetch()` "
+"returns `None` and enumeration falls back to sysfs/udev alone, unchanged "
+"from before this existed. One non-obvious wrinkle found while wiring this up "
+"against this machine's real `udisksd`: a single UDisks2 `Drive` object backs "
+"_several_ `Block` objects (the whole disk plus each of its partitions, all "
+"pointing at the same `Drive`), so building the device-path lookup has to key "
+"on the block device that lacks a `Partition` interface, not on the drive "
+"object path itself (an earlier attempt collapsed a disk's own entry to "
+"whichever partition happened to be processed last)."
+msgstr ""
+
+#: src/architecture.md:250
+msgid ""
+"System-disk detection parses `/proc/mounts` and flags a disk as a system "
+"disk if any of its partitions is mounted at `/`, `/boot`, `/boot/efi`, or `/"
+"home`. This is a second, independent signal on top of the bus/removable "
+"check in `Device::is_safe_to_write` -- a disk must clear both to be offered "
+"for writing. Mount sources are resolved through any device-mapper stack in "
+"between (`dm.rs`) before that check: LVM, software RAID, dm-crypt, and "
+"multipath are all just `dm-N` block devices from the kernel's perspective, "
+"and `/proc/mounts` only ever shows the top of that stack (e.g. `/dev/mapper/"
+"vg-home`), never the physical partition underneath. Without this resolution, "
+"a disk holding an LVM physical volume for `/home` -- a common desktop Linux "
+"layout -- would never be recognized as a system disk, and an ISO stored on "
+"such a filesystem would never trip the source/target collision check either. "
+"The recursive walk itself is pure and unit-tested with fake multi-level "
+"stacks (LVM, dm-crypt-under-LVM, striped volumes); reading the real `/sys/"
+"block/*/slaves` relationship and resolving a `/dev/mapper/*` symlink to its "
+"`dm-N` target are validated against a real `dmsetup` + loop-device stack in "
+"`tests/dm_resolution.rs` (root-gated, mirroring `argos-privileged`'s loop-"
+"device tests)."
+msgstr ""
+
+#: src/architecture.md:269
+msgid "`argos-platform-macos`"
+msgstr ""
+
+#: src/architecture.md:271
+msgid ""
+"Enumerates disks via `diskutil list -plist` (top-level `WholeDisks`) plus "
+"one `diskutil info -plist <id>` per disk, parsed defensively in "
+"`diskutil.rs` (a missing/renamed key degrades to a documented default rather "
+"than panicking or failing the listing -- covers the \"diskutil's plist "
+"schema changes between macOS versions\" risk called out in the backlog). "
+"Synthesized APFS-container pseudo-disks (`VirtualOrPhysical == \"Virtual\"`) "
+"are excluded outright, the same way `argos-platform-linux` drops loop/dm/md/"
+"zram entries -- they aren't a real, independently writable block device. An "
+"internal physical disk is still _returned_, though: system-disk detection "
+"cross-references `diskutil info -plist /`, walking through its APFS "
+"container to the physical store backing it (the Apple Silicon case the "
+"backlog flags -- the boot volume's `ParentWholeDisk` is a virtual container, "
+"not the real internal SSD, until that walk happens) to flag the true system "
+"disk, while `RemovableMedia` and `BusProtocol` (only `\"USB\"` maps to "
+"`Bus::Usb`) independently keep any internal disk from passing "
+"`Device::is_safe_to_write` even if that cross-reference ever fails. "
+"`unmount`/`eject` shell out to `diskutil unmountDisk`/`diskutil eject`; "
+"`backing_device_of` shells out to `df -P`, since (unlike `diskutil info`) it "
+"accepts an arbitrary file path rather than just a device identifier or a "
+"volume's own mount point."
+msgstr ""
+
+#: src/architecture.md:291
+msgid ""
+"Verified end-to-end on a real Apple Silicon Mac, both internal and external: "
+"unit tests on the parsing/decision logic (fixtures captured verbatim from "
+"this machine's `diskutil` output, including a real external USB stick -- the "
+"previously-synthetic external fixture has since been confirmed against real "
+"hardware), plus manual runs of the full `PlatformOps` surface against this "
+"machine's real disks. `list_removable_disks` correctly enumerated the "
+"internal disk (filtered of its three APFS-container pseudo-disks, flagged as "
+"the system disk via the container walk-up, `is_safe_to_write() == false`) "
+"alongside a plugged-in USB stick (`bus == Usb`, `is_safe_to_write() == "
+"true`); `refresh` re-resolved the USB stick by platform id; "
+"`backing_device_of` resolved a real file's backing device; `unmount` cleanly "
+"unmounted both of the USB stick's partitions (`diskutil unmountDisk`); "
+"`eject` logically removed it from the OS (`diskutil eject`), confirmed by it "
+"disappearing from `diskutil list`."
+msgstr ""
+
+#: src/architecture.md:306
+msgid ""
+"The DD-mode write itself (`argos-helper`, separate from E3's enumeration "
+"scope) has since been verified too: `argos write` against a real physical "
+"USB drive, using the real Alpine Linux 3.24.1 (`virt` flavor) ISO. The write "
+"completed, `argos-helper`'s own post-write verification passed, and the "
+"written bytes were independently re-read straight off `/dev/diskN` with "
+"`sudo dd | shasum -a 256` (outside Argos entirely) and matched Alpine's "
+"published SHA-256 exactly. macOS additionally popped its own \"disk not "
+"readable\" dialog afterward (Disk Arbitration not recognizing the freshly "
+"Linux-formatted disk) -- expected and harmless, same as any raw `dd`\\-"
+"written Linux USB on macOS; dismissed with Ignore, never Initialize."
+msgstr ""
+
+#: src/architecture.md:317
+msgid ""
+"That Alpine `virt` drive booted on the test UEFI machine (a Microsoft "
+"Surface) but hung part way through the kernel's own hardware initialization, "
+"past the point Argos or the bootloader are involved -- consistent with "
+"`virt`'s minimal driver set meeting Surface's non-standard firmware/"
+"controllers, not with a bad write (the byte-exact re-hash above already "
+"rules that out). A second write to the same drive, this time a real, "
+"official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified against "
+"Canonical's published `SHA256SUMS` before writing; `argos-helper`'s own post-"
+"write verification passing was this run's write-correctness check, rather "
+"than a second external re-hash), booted successfully on that same Surface -- "
+"full live GNOME session, not just a bootloader handoff. Confirms the DD-mode "
+"write path end-to-end on macOS with real, popular-distro media, matching "
+"what Linux already confirmed with the same ISO family."
+msgstr ""
+
+#: src/architecture.md:332
+msgid "`argos-platform-windows`"
+msgstr ""
+
+#: src/architecture.md:334
+msgid ""
+"Returns `ArgosError::NotImplemented` from every method and has no public "
+"constructor -- it exists only so `argos-cli` already depends on the trait "
+"and picks a backend via `#[cfg(target_os = ...)]`, and so the trait itself "
+"is proven not to have crept in a Unix bias. It cannot be instantiated, only "
+"type-checked, since Windows-as-host is out of v1 scope entirely."
+msgstr ""
+
+#: src/architecture.md:340
+msgid "`argos-privileged`"
+msgstr ""
+
+#: src/architecture.md:342
+msgid ""
+"This is `argos-helper`, the one binary that runs as root. It reads a single "
+"[`protocol::WritePlan`](../crates/argos-privileged/src/protocol.rs) as JSON "
+"on stdin, re-resolves the target device by serial + size through the "
+"platform backend (`protocol::validate_refreshed_device` is the TOCTOU guard: "
+"it refuses the write if the device changed, disappeared, or now looks like a "
+"system disk, regardless of what the plan claims), then runs the DD-mode "
+"write and (unless `--no-verify` was passed) the post-write verification, "
+"reporting progress and the outcome as one JSON `Event` per stdout line. It "
+"parses no ISO and talks to no D-Bus/plist/UDisks2 API. The crate is split "
+"into a library (`protocol`, reused by `argos-cli` to build plans and parse "
+"events) and the `argos-helper` binary that is the only thing here meant to "
+"actually run privileged."
+msgstr ""
+
+#: src/architecture.md:354
+msgid ""
+"**Cancellation is wired end-to-end** (M7.5, backlog #35). `argos` keeps the "
+"helper's stdin open for the whole write instead of closing it after the plan "
+"line; a `SIGINT` handler writes `protocol::CANCEL_SIGNAL` into it, and a "
+"watcher thread in `argos-helper` turns that byte -- or the pipe simply "
+"closing, which is what a parent that died outright leaves behind -- into a "
+"`CancelToken` the write loop checks on every buffer."
+msgstr ""
+
+#: src/architecture.md:361
+msgid ""
+"The helper **ignores `SIGINT` itself**. Ctrl-C in a terminal goes to the "
+"whole foreground process group and the privilege broker leaves the helper in "
+"it, so the default disposition would kill it mid-write, before the write "
+"path could act on the cancellation at all. Cancellation therefore has "
+"exactly one channel, and the helper stays alive long enough to use it -- "
+"which matters because the FAT32 path does real work on the way out: it "
+"destroys the volume's boot sectors, so half-written media cannot be mistaken "
+"for good media. `SIGKILL` still cannot be caught, and media left behind that "
+"way is exactly what `ArgosError::Cancelled` has always described."
+msgstr ""
+
+#: src/architecture.md:371
+msgid ""
+"**The NTFS write path (backlog #27, W3/W4) was retired at decision point "
+"M4.3**, once the FAT32 layout below was validated on real hardware from both "
+"hosts, on both firmwares (see the phase 2 guiding decisions above, and `docs/"
+"plan-phase3-self-contained.md` §5 / `docs/plan-linux-validation.md` for the "
+"record of that validation). `windows::execute_write_windows_image`/ "
+"`execute_verify_windows_image`, the `WindowsPartitionPlan` two-partition "
+"layout, the vendored `uefi-ntfs.img` boot image, the `mkfs.ntfs`/`ntfs-3g` "
+"shell-outs, and the three `PlatformOps` methods that existed only to support "
+"them (`reread_partition_table`, `mount_ntfs_partition`, `unmount_path`) are "
+"all gone from the tree, not merely superseded in the CLI's default. Everyone "
+"sending Argos a `Plan::WriteWindowsImage`/`VerifyWindowsImage` with "
+"`WindowsLayout::Fat32`/`Fat32Bios` -- the only variants left -- reaches "
+"`windows_fat32::execute_write_windows_fat32`/`execute_verify_windows_fat32` "
+"instead; an old plan JSON with no `layout` key at all now defaults to "
+"`Fat32` rather than the retired `Ntfs` (`protocol.rs`'s backward-compatible "
+"`#[serde(default)]` still parses it, it simply means something different now "
+"than it did before M4.3, since the old meaning no longer exists to preserve)."
+msgstr ""
+
+#: src/architecture.md:389
+msgid ""
+"`windows_fat32::execute_write_windows_fat32` is `execute`'s Windows-write "
+"equivalent, dispatched via the same `WriteWindowsImage` `Plan` variant. In "
+"one privileged elevation -- CONTRIBUTING.md's scoped exception to this "
+"crate's \"keep it minimal\" rule covers exactly this -- it re-validates the "
+"device (`validate_refreshed_device_for_windows_write`), re-classifies and re-"
+"lists the source ISO itself (never trusting the plan's idea of what's on "
+"it), plans which files copy verbatim and which need WIM-splitting "
+"(`plan_copy_actions`, phase 3 M2.3/M3.5, backlog #42/#43), builds a "
+"`WindowsFat32Plan`/`WindowsMbrPlan` (GPT or MBR, per `plan.layout`), writes "
+"the partition table via `gptman`/`mbrman`, then formats and populates the "
+"one FAT32 partition through `fatfs` over a `partition_io::PartitionWindow`/"
+"`SizedDevice` -- a `Read+Write+Seek` view bounded to the partition's byte "
+"range of the open whole-device fd. No `mkfs`, no mount, no partition device "
+"nodes, no partition-table reread: the whole write is this process talking to "
+"one file descriptor. Every file is hashed in the same pass it's copied "
+"(`image::checksum::copy_and_hash`); an oversized `install.wim` streams "
+"through `image::wim`'s splitter into `.swm` parts instead (UDF read -> "
+"splitter -> `fatfs` write, still one pass). `repair_directory_entries` runs "
+"after the copy -- see below for why. Exercised against a real file-backed "
+"loop device in `crates/argos-privileged/tests/write_windows_fat32.rs` (root "
+"+ `losetup` gated, no `mkfs.ntfs`/`ntfs-3g`/`--partscan` needed -- that "
+"difference from the retired NTFS path _is_ M3's acceptance criterion), and "
+"validated on real hardware from both hosts (see above)."
+msgstr ""
+
+#: src/architecture.md:414
+msgid ""
+"`windows_fat32::execute_verify_windows_fat32` is the same write path's "
+"verification counterpart, dispatched via `VerifyWindowsImage`, following the "
+"same read-only posture `execute_verify`'s `VerifyPlan` established (no "
+"TOCTOU refusal window, no `expected_serial`/`expected_size_bytes`). It re-"
+"derives the expected layout from the source ISO exactly like the write path "
+"does, reads the real GPT/MBR off the device and checks it against the plan "
+"(`argos_core::verify::verify_windows_fat32_layout`/ `verify_mbr_layout`), "
+"then reads the FAT32 filesystem back -- read-only, still no mount -- and "
+"hashes every file `WindowsIso` lists against a fresh read of the source ISO "
+"(`argos_core::verify::verify_windows_file_hash`, one call per file)."
+msgstr ""
+
+#: src/architecture.md:426
+msgid ""
+"**`fatfs`'s directory-entry defects, and why the repair pass stays** (phase "
+"3 L4, backlog #56). `fatfs` 0.3.6 writes two things the FAT specification "
+"forbids: long-filename entries in front of `.` and `..`, which must be a "
+"directory's first two entries, and a `..` pointing at the root's real "
+"cluster where the specification requires zero when the parent is the root. "
+"Both are repaired after the copy by "
+"`windows_fat32::repair_directory_entries` rather than avoided at the source."
+msgstr ""
+
+#: src/architecture.md:434
+msgid ""
+"The decision was between tracking an upstream fix, vendoring a patch, and "
+"keeping that repair pass. **The repair pass stays**, for now, because the "
+"upstream fix exists but is unreleased: crates.io serves 0.3.6, while [`rust-"
+"fatfs`](https://github.com/rafalh/rust-fatfs) master -- an unreleased 0.4.0, "
+"actively maintained -- already fixes both defects, each exactly where the "
+"analysis in #56 pointed (`create_dir` asks `is_root_dir()` before filling in "
+"`..`; `write_entry` skips the long-name entries for `.` and `..`, its own "
+"comment noting they \"need to be at the first two slots\"). Verified rather "
+"than read: the same reproduction program compiled against each version "
+"writes `..` as cluster 2 under 0.3.6 and cluster 0 under master, and "
+"`fsck.vfat -n` exits 1 on the first and 0 with clean output on the second. "
+"Master also initializes the FSINFO free-cluster count, which is why our "
+"media still draws that one remaining (spec-legal, status-neutral) `fsck` "
+"note."
+msgstr ""
+
+#: src/architecture.md:448
+msgid ""
+"So there is nothing to contribute upstream and nothing to vendor -- only a "
+"release to wait for. Adopting master early is not a version bump: it "
+"replaced the I/O surface with its own `IoBase`/`ReadWriteSeek` traits (`std` "
+"types go through `StdIoWrapper`), so `windows_fat32` would need reworking. "
+"When 0.4.0 ships, `repair_directory_entries` and the FSINFO note should go "
+"with it, and the FAT conformance tests on both hosts are what will say "
+"whether they can."
+msgstr ""
+
+#: src/architecture.md:455
+msgid "`argos-cli`"
+msgstr ""
+
+#: src/architecture.md:457
+msgid ""
+"`argos list` lists every physical disk visible to the current platform "
+"backend and marks whether each is safe to write to."
+msgstr ""
+
+#: src/architecture.md:460
+msgid ""
+"`argos write` runs the full flow: refresh the target device, apply the non-"
+"negotiable safety gate (a system disk is refused unconditionally; a non-"
+"removable disk needs `--i-know-what-im-doing`), classify the ISO (refusing "
+"anything that isn't a hybrid image), run the capacity and source/target "
+"collision preflight checks, require the user to retype the exact device path "
+"to confirm, then hand a `WritePlan` to `argos-helper` via `pkexec` "
+"(preferred on Linux) or `sudo`, rendering its progress as an `indicatif` "
+"bar, then ejects the device (`--no-eject` skips this) -- best-effort, the "
+"same posture the `PlatformOps::eject` implementations already take "
+"internally, so a failed eject warns rather than turning an otherwise-"
+"successful write into a failure. Notably, `argos write` still does _not_ "
+"call `unmount` before opening the device -- see the Status table below."
+msgstr ""
+
+#: src/architecture.md:473
+msgid ""
+"`argos verify` re-runs post-write verification against a device without "
+"writing again, hashing the ISO (the `Checksumming` phase) and comparing it "
+"against a fresh read of the device (`argos_core::verify`), via the same "
+"`argos-helper` elevation path `argos write` uses -- reading a raw device "
+"needs the same privilege writing does. The `argos`\\<\\->`argos-helper` IPC "
+"is a tagged `Plan` (`Write`/`Verify`/`WriteWindowsImage`/"
+"`VerifyWindowsImage`) rather than always a `WritePlan`."
+msgstr ""
+
+#: src/architecture.md:481
+msgid ""
+"Both commands classify the image DD-mode-first (backlog #27, W5): if "
+"`image::classify` doesn't recognize a hybrid Linux image, they try "
+"`image::windows::classify` next, and only fall through to `UnsupportedIso` "
+"if neither matches. On a Windows-installer match, `write` computes the same "
+"`WindowsPartitionPlan` `execute_write_windows_image` will independently "
+"recompute (purely for display -- the privileged side never trusts it) and "
+"shows the two-partition layout it's about to create in place of a single "
+"image size, before the same retype-the-device-path confirmation; `--no-"
+"verify` has no effect on a Windows write, since "
+"`execute_write_windows_image` never verifies inline (see its own doc comment "
+"for why splitting that into a second privileged call wasn't worth it) -- "
+"`write` prints a reminder to run `argos verify` afterward instead. Neither "
+"command attempts a Windows image on a non-Linux host at all: both check `cfg!"
+"(target_os = \"linux\")` themselves, before any preflight work or "
+"confirmation prompt, and fail with a specific `WindowsImageRequiresLinux` "
+"error rather than only discovering `NotImplemented` deep inside `argos-"
+"helper` after an elevation prompt."
+msgstr ""
+
+#: src/architecture.md:500
+msgid "Area"
+msgstr ""
+
+#: src/architecture.md:502
+msgid ""
+"Domain model, errors, progress/cancellation, ISO classification, checksum, "
+"preflight checks"
+msgstr ""
+
+#: src/architecture.md:502 src/architecture.md:503
+msgid "Implemented, unit-tested"
+msgstr ""
+
+#: src/architecture.md:503
+msgid "DD-mode write engine, post-write verification"
+msgstr ""
+
+#: src/architecture.md:504
+msgid "Linux disk enumeration"
+msgstr ""
+
+#: src/architecture.md:504
+msgid ""
+"Implemented (sysfs + udev database, cross-checked against UDisks2/D-Bus when "
+"reachable) and LVM/RAID/dm-crypt-aware system-disk detection; pure parsing/"
+"resolution logic unit-tested, and the D-Bus and device-mapper glue each "
+"confirmed against this machine's real `udisksd` and a real `dmsetup` stack"
+msgstr ""
+
+#: src/architecture.md:505
+msgid "macOS disk enumeration (`diskutil -plist`)"
+msgstr ""
+
+#: src/architecture.md:505
+msgid ""
+"Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/"
+"eject/backing_device_of) against a real Mac, both its internal disk and a "
+"plugged-in USB stick"
+msgstr ""
+
+#: src/architecture.md:506
+msgid "Privileged helper (`argos-helper`)"
+msgstr ""
+
+#: src/architecture.md:506
+msgid ""
+"Implemented; end-to-end write+verify passes against a real file-backed Linux "
+"loop device, a real macOS `hdiutil`\\-attached disk image, and real physical "
+"USB drives on both Linux and macOS, including the TOCTOU re-validation guard "
+"in each case"
+msgstr ""
+
+#: src/architecture.md:507
+msgid "`argos list` / `argos write`"
+msgstr ""
+
+#: src/architecture.md:507
+msgid ""
+"Implemented and manually verified against real physical USB hardware on "
+"**both platforms**. Linux: first with a synthetic isohybrid-signed image, "
+"then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified "
+"against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, "
+"confirmation flow, `pkexec` elevation, write, and post-write verification "
+"all passed, and the written bytes were independently re-hashed outside Argos "
+"and matched the official ISO checksum exactly; the resulting drive was "
+"confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux "
+"3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) "
+"written the same way, with the same independent `sudo dd \\| shasum` re-hash "
+"matching exactly (that drive booted but hung mid-kernel-init on the UEFI "
+"test machine, a Surface -- consistent with `virt`'s minimal driver set, not "
+"a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop "
+"ISO (checksum-verified, `argos-helper`'s own post-write verification "
+"passing) to the same drive **booted successfully on that same Surface**, "
+"full live session. `argos write` now ejects the device automatically after a "
+"successful write (`--no-eject` to skip), and `argos-helper` now unmounts it "
+"immediately before opening it for write (the `Unmounting` phase) -- closing "
+"#20, the safe-open precondition the guiding decisions above call for, which "
+"nothing called until now. A no-op, not an error, when nothing was mounted. A "
+"third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO "
+"(checksum-verified against Canonical's published `SHA256SUMS`) written to "
+"the same physical USB drive, was carried to a real, old BIOS/legacy machine "
+"(no UEFI at all) and **booted successfully in legacy MBR mode** -- "
+"confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is "
+"still separately unconfirmed, but macOS-written media now covers both UEFI "
+"and BIOS). Progress feedback (`indicatif`) is currently invisible when "
+"stdout isn't a real terminal -- tracked separately."
+msgstr ""
+
+#: src/architecture.md:508
+msgid "`argos verify` (standalone)"
+msgstr ""
+
+#: src/architecture.md:508
+msgid ""
+"Implemented. `execute_verify`'s core logic is confirmed for real against "
+"both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), "
+"via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents "
+"written the same way, exercised by CI). The full CLI path -- device "
+"resolution, `sudo` elevation, progress bar, final printout -- was manually "
+"run end-to-end on this Mac against a real physical USB drive: `argos write` "
+"then a separate `argos verify` invocation both reported the same SHA-256 "
+"(`e73a6241...`), matching Alpine's published checksum."
+msgstr ""
+
+#: src/architecture.md:509
+msgid "Windows ISO support (backlog #27)"
+msgstr ""
+
+#: src/architecture.md:509
+msgid ""
+"W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback "
+"detection + read-only file-tree wrapper -- corrected mid-implementation "
+"after real-media testing showed official Windows ISOs are UDF bridges, not "
+"plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-"
+"partition layout arithmetic + `preflight::check_windows_capacity`), W3 "
+"(`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot "
+"image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 "
+"(`execute_verify_windows_image`: GPT layout + boot partition + per-file hash "
+"verification), and W5 (`argos write`/`argos verify` both classify DD-mode-"
+"first then try the Windows-installer shape, showing the two-partition layout "
+"before confirming, refusing early and honestly on non-Linux hosts). W1 "
+"confirmed end-to-end (classify, list 906 files, extract and byte-verify "
+"individual files including a 5.18GB `install.wim` listed correctly) against "
+"a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/"
+"preflight logic re-confirmed against that same real ISO (correctly routed as "
+"non-DD/Windows-installer, correct two-partition layout and capacity pass/"
+"fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-"
+"device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`\\-gated) "
+"confirmed passing for real in CI. First real-hardware W6 attempt (real "
+"Windows 10 ISO to a physical USB drive) surfaced a real memory-exhaustion "
+"bug (#38, `install.wim`'s whole-file-in-memory UDF read plus a memory-"
+"constrained machine OOM-killed an unrelated process); first mitigated with a "
+"`check_windows_memory` preflight refusal, then fixed for real by "
+"`image::udf`, Argos's own streaming UDF reader (phase 3 M1, #40 -- constant-"
+"memory copy confirmed at 3.5MB peak RSS streaming a 512MB fixture file; the "
+"preflight guard and `hadris-udf` runtime dependency were retired with it). "
+"`image::udf` since re-validated against **both** real official ISOs (M1.5): "
+"Windows 10 22H2 (5.18GB `install.wim`) and Windows 11 25H2 (7.58GB "
+"`install.wim`, checksum-verified against Microsoft's published SHA-256), "
+"each streamed at **3MiB peak RSS** with a digest byte-identical to macOS's "
+"own native UDF driver reading the same file. Phase 3 M3 (#43) added the pure-"
+"Rust FAT32 single-partition layout behind \\`\\--layout fat32"
+msgstr ""
+
+#: src/architecture.md:510
+msgid "Packaging/distribution"
+msgstr ""
+
+#: src/architecture.md:510
+msgid ""
+"GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-"
+"darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/"
+"release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step "
+"(`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging "
+"script were both confirmed by actually running them on this machine, though "
+"no tag has been pushed yet so the workflow itself hasn't run for real. "
+"crates.io publish and a Homebrew tap not started -- both need decisions/"
+"credentials only the project owner has (a crates.io account/token; a tap "
+"repo name and org)."
+msgstr ""
+
+#: src/architecture.md:512
+msgid "Prior art consulted"
+msgstr ""
+
+#: src/architecture.md:514
+msgid ""
+"[Popsicle](https://github.com/pop-os/popsicle) (Rust, PopOS) -- closest "
+"prior art in the same language; confirmed D-Bus/UDisks2 as a viable Linux "
+"enumeration path and the CLI/core workspace split."
+msgstr ""
+
+#: src/architecture.md:517
+msgid ""
+"[balenaEtcher](https://etcher.balena.io/) -- confirmed the privileged-"
+"sidecar pattern (`argos-helper`) and the pre-write capacity/source-target-"
+"collision checks now in `argos_core::preflight`."
+msgstr ""
+
+#: src/architecture.md:520
+msgid ""
+"[Ventoy](https://www.ventoy.net/) -- reference disk layout (protective MBR + "
+"GPT + separate ESP) for a possible future multi-ISO / persistent partition "
+"mode, out of v1 scope."
+msgstr ""
+
+#: src/contributing.md:1
+msgid "Contributing to Argos"
+msgstr ""
+
+#: src/contributing.md:3
+msgid ""
+"Argos is early-stage; the current state of the project is tracked as a "
+"backlog of epics and stories in [`docs/architecture.md`](docs/"
+"architecture.md), which also documents the design decisions behind the "
+"current crate layout."
+msgstr ""
+
+#: src/contributing.md:7
+msgid "Getting set up"
+msgstr ""
+
+#: src/contributing.md:9
+msgid ""
+"Install a stable Rust toolchain (1.88+). Via [`mise`](https://mise.jdx.dev): "
+"`mise use -g rust@latest`. Via [`rustup`](https://rustup.rs) works too."
+msgstr ""
+
+#: src/contributing.md:11
+msgid "`cargo build --workspace`"
+msgstr ""
+
+#: src/contributing.md:12
+msgid "`cargo test --workspace`"
+msgstr ""
+
+#: src/contributing.md:13
+msgid ""
+"Before sending a change: `cargo fmt --all` and `cargo clippy --workspace --"
+"all-targets -- -D warnings` (this is exactly what CI runs)."
+msgstr ""
+
+#: src/contributing.md:16
+msgid ""
+"The write-path integration tests exercise a real file-backed loop device and "
+"need root: `sudo -E cargo test -p argos-privileged --features test-overrides "
+"--test loop_device_write -- --ignored --nocapture`. They are `#[ignore]`d "
+"and skip themselves cleanly without root, so the regular `cargo test --"
+"workspace` above never needs it."
+msgstr ""
+
+#: src/contributing.md:22
+msgid "Workspace layout"
+msgstr ""
+
+#: src/contributing.md:24
+msgid ""
+"`crates/argos-core` -- all platform-agnostic logic (device model, ISO "
+"classification, checksums, the write engine). No direct disk/OS I/O; must "
+"stay testable with plain files and in-memory buffers."
+msgstr ""
+
+#: src/contributing.md:27
+msgid ""
+"`crates/argos-platform` -- the `PlatformOps` trait every OS backend "
+"implements."
+msgstr ""
+
+#: src/contributing.md:29
+msgid ""
+"`crates/argos-platform-linux`, `crates/argos-platform-macos`, `crates/argos-"
+"platform-windows` -- OS-specific implementations of that trait. The Windows "
+"one is a deliberate stub (out of v1 scope) that exists only to keep the "
+"trait honestly cross-platform."
+msgstr ""
+
+#: src/contributing.md:33
+msgid ""
+"`crates/argos-privileged` -- `argos-helper`, the one binary meant to run as "
+"root. Keep it minimal and dumb by design (see the doc comment in its "
+"`main.rs`) -- do not add D-Bus or other heavy dependencies to this crate. "
+"**Scoped exception** (backlog #27, decided when W3 landed; the write path "
+"itself was replaced by phase 3's pure-Rust FAT32 layout, decision point "
+"M4.3, but the exception still holds for it): the Windows installer write "
+"path does read the source ISO's file tree here, via "
+"`argos_core::image::windows`/`cdfs`, so it can copy those files onto the "
+"freshly-formatted FAT32 partition and hash each one as it goes -- in a "
+"single privileged elevation, matching every other write path's UX, rather "
+"than splitting the operation across two separate `pkexec`/`sudo` prompts or "
+"redesigning the one-shot IPC protocol into a stateful one. Don't take this "
+"as license to grow the ISO-parsing surface here further; it's accepted "
+"specifically because the copy step cannot happen anywhere else without one "
+"of those two costs."
+msgstr ""
+
+#: src/contributing.md:48
+msgid "`crates/argos-cli` -- the `argos` command-line tool."
+msgstr ""
+
+#: src/contributing.md:50
+msgid "Safety-critical code"
+msgstr ""
+
+#: src/contributing.md:52
+msgid ""
+"Anything touching device selection or the write path exists to answer one "
+"question: _is it safe to write to this disk?_ Changes to "
+"`argos_core::device::Device::is_safe_to_write`, the platform crates' "
+"enumeration logic, or the privileged helper's re-validation should:"
+msgstr ""
+
+#: src/contributing.md:57
+msgid ""
+"come with tests (unit tests for pure logic, the negative \"never write a "
+"system disk\" suite for anything device-selection related), and"
+msgstr ""
+
+#: src/contributing.md:59
+msgid "err on the side of refusing a device rather than guessing it's safe."
+msgstr ""
+
+#: src/contributing.md:61
+msgid "Commit messages"
+msgstr ""
+
+#: src/contributing.md:63
+msgid ""
+"Commit messages are written in English, regardless of the language used in "
+"discussion or planning."
+msgstr ""
+
+#: src/contributing.md:66
+msgid "License"
+msgstr ""
+
+#: src/contributing.md:68
+msgid ""
+"By contributing, you agree that your contributions will be licensed under "
+"either the MIT license or the Apache License 2.0, at the user's option, as "
+"described in [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE)."
+msgstr ""
+
+#: src/changelog.md:3
+msgid ""
+"All notable changes to Argos are documented here. Loosely follows [Keep a "
+"Changelog](https://keepachangelog.com/en/1.1.0/)."
+msgstr ""
+
+#: src/changelog.md:6
+msgid "\\[1.5.4\\] - 2026-09-04"
+msgstr ""
+
+#: src/changelog.md:8 src/changelog.md:73 src/changelog.md:108
+#: src/changelog.md:149 src/changelog.md:273
+msgid "Added"
+msgstr ""
+
+#: src/changelog.md:10
+msgid ""
+"**`argos write` now also accepts `--iso <path>`**, in addition to the "
+"existing positional form. Reported from real use, within hours of the README/"
+"man page documenting `verify`'s `--iso`: the same flag typed for `write` was "
+"a hard error, since its ISO had always been positional-only. Both forms "
+"parse to the same value; giving neither or both is a clear error rather than "
+"one being silently preferred. Positional remains what every example leads "
+"with -- this only stops the other form from being a hard error."
+msgstr ""
+
+#: src/changelog.md:19 src/changelog.md:50 src/changelog.md:130
+#: src/changelog.md:189
+msgid "Fixed"
+msgstr ""
+
+#: src/changelog.md:21
+msgid ""
+"**The DD-mode write path never forced a real flush to the device.** Reported "
+"from real hardware: a 5.8GB Ubuntu ISO write to a USB stick looked done "
+"almost instantly, then verification stalled with no visible progress. "
+"`device.flush()` is a no-op default on `std::fs::File`, which doesn't "
+"override it -- a plain `write()` only queues bytes in the page cache, so the "
+"write loop finishing meant nothing about whether the OS had actually "
+"committed anything to the physical device yet. Verification's read-back was "
+"landing behind whatever the kernel was still flushing in the background, "
+"which is what looked like a hang. Replaced with a real `fsync` (the same "
+"`partition_io::sync_device` the Windows write path already used), and added "
+"a `Flushing` progress phase so the wait is visible instead of looking like a "
+"stalled bar."
+msgstr ""
+
+#: src/changelog.md:34
+msgid "\\[1.5.3\\] - 2026-09-04"
+msgstr ""
+
+#: src/changelog.md:36 src/changelog.md:94 src/changelog.md:116
+msgid "Changed"
+msgstr ""
+
+#: src/changelog.md:38
+msgid ""
+"**`argos man` now documents every subcommand's own flags on one page**, "
+"instead of `clap_mangen`'s default: a thin top-level page whose SUBCOMMANDS "
+"section cross-references `argos-list(1)`, `argos-write(1)` and so on as if "
+"they were separate manual pages -- which nothing in this project generates "
+"or installs, so `man argos-write` reported nothing found. `list`, `write`, "
+"`verify` and `completions` each get their own `.SH` block (synopsis, "
+"description, options) inlined into `argos(1)` instead, the way `dd(1)`/"
+"`rsync(1)` document a whole tool on one page. Also gives `--help` (both the "
+"top-level and per-subcommand) fuller prose, including an EXAMPLES block "
+"covering the same three-command flow as the README's new Usage section."
+msgstr ""
+
+#: src/changelog.md:52
+msgid ""
+"**`argos write`/`argos verify` failed on a relative ISO path, elevating via "
+"`pkexec`.** Reported from real hardware: `argos write some.iso --device /dev/"
+"sdg`, run from the directory holding the ISO, passed the confirmation prompt "
+"and started unmounting, then failed with a bare \"No such file or "
+"directory\" and no further explanation. `pkexec` resets the working "
+"directory before running the elevated `argos-helper` (the same cwd-reset "
+"hardening any setuid-style launcher applies, so a relative path can't "
+"resolve somewhere the caller didn't intend) -- `sudo` commonly preserves it, "
+"which is why this went unnoticed on macOS. The ISO path is now resolved to "
+"absolute in `argos` itself, before the confirmation prompt, so a bad path "
+"fails immediately and by name instead of well after the user has already "
+"confirmed a write."
+msgstr ""
+
+#: src/changelog.md:65
+msgid "\\[1.5.2\\] - 2026-09-04"
+msgstr ""
+
+#: src/changelog.md:67
+msgid ""
+"Also the first tag to actually exercise the `.deb`\\-building step "
+"`release.yml` gained in this release -- it was added and merged _after_ "
+"v1.5.1 had already been tagged, so v1.5.1's GitHub Release went out built by "
+"the old workflow and carries no `.deb`, despite the changelog below "
+"describing it as done. This tag is what makes it real."
+msgstr ""
+
+#: src/changelog.md:75
+msgid ""
+"**A Debian/Ubuntu `.deb` package** (backlog #46). `packaging/build-deb.sh` "
+"builds `argos` and `argos-helper` together, generates shell completions and "
+"the man page from the built binary (never a hand-maintained copy), and "
+"produces a package with a single dependency (`libc6`) -- no `mkfs.ntfs`, no "
+"`ntfs-3g`, nothing else. Built and `lintian`\\-checked on every push (CI) "
+"and attached to every GitHub Release. Install with: `sudo apt install ./"
+"argos_<version>_amd64.deb`. See `packaging/README.md` for how it's built and "
+"two non-obvious things `cargo-deb` needed correcting for."
+msgstr ""
+
+#: src/changelog.md:84
+msgid ""
+"**A Homebrew tap** (macOS): `brew install jp-guimaraes/argos/argos`. See "
+"[`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-"
+"argos)."
+msgstr ""
+
+#: src/changelog.md:86
+msgid ""
+"**An AUR `PKGBUILD`** for pacman-based distros (Arch, and derivatives like "
+"Omarchy), same shape as the `.deb`: both binaries, completions and man page "
+"generated from the built binary, one runtime dependency (`gcc-libs`). Built "
+"and `namcap`\\-checked on every push (CI). Not published to the AUR itself "
+"yet -- that needs the maintainer's own AUR account -- so for now, build it "
+"locally from `packaging/aur/`. See `packaging/README.md`."
+msgstr ""
+
+#: src/changelog.md:96
+msgid ""
+"**Release binaries are now stripped** (`[profile.release] strip = true`). "
+"Found missing while packaging the `.deb`: Debian's `lintian` flags an "
+"unstripped binary as a packaging error, and `cargo-deb`'s own stripping only "
+"takes effect when it does the build itself -- a workspace build done ahead "
+"of time (as packaging, and cross-compiled release builds, both do) skipped "
+"it silently. Smaller binaries on every distribution channel as a side "
+"effect, not just the `.deb`. Note this doesn't reach a plain `cargo install` "
+"from crates.io -- that builds each crate outside the workspace, so the "
+"workspace-level profile setting doesn't apply there."
+msgstr ""
+
+#: src/changelog.md:106
+msgid "\\[1.5.1\\] - 2026-09-04"
+msgstr ""
+
+#: src/changelog.md:110
+msgid ""
+"**`argos completions <shell>` and a hidden `argos man`** (#46). Both are "
+"generated from the same `clap` definition the CLI already carries, so a "
+"Homebrew formula, PKGBUILD or `.deb` never has to keep a hand-written copy "
+"in step with the real flags. `argos man` is hidden because its audience is "
+"packaging, not people at a terminal."
+msgstr ""
+
+#: src/changelog.md:118
+msgid ""
+"**Unmounting uses `umount2(2)` instead of shelling out to `umount(8)`** "
+"(M7.1, #46). One fewer runtime dependency for a distribution package to "
+"declare, and one fewer program whose presence or output could change under "
+"us. Note the argument changed with it: `umount(8)` accepts either the source "
+"device or the mountpoint, the syscall takes only the mountpoint."
+msgstr ""
+
+#: src/changelog.md:124 src/changelog.md:212
+msgid "Removed"
+msgstr ""
+
+#: src/changelog.md:126
+msgid ""
+"The `xtask` crate. Its only task rebuilt `crates/argos-privileged/assets/"
+"uefi-ntfs.img`, which was deleted along with the NTFS write path, and its "
+"only dependency existed to serve that task."
+msgstr ""
+
+#: src/changelog.md:132
+msgid ""
+"**A USB stick whose label contains a space could not be unmounted.** `/proc/"
+"mounts` escapes space, tab, newline and backslash as `\\040`, `\\011`, "
+"`\\012` and `\\134`, and Argos read those fields verbatim -- so a stick auto-"
+"mounted at `/media/jp/My USB` was seen as `/media/jp/My\\040USB`, a path "
+"that does not exist. Found while replacing the `umount` shell-out, which "
+"passes the mountpoint straight to the kernel and so has no tolerance for it."
+msgstr ""
+
+#: src/changelog.md:139
+msgid "\\[1.5.0\\] - 2026-09-03"
+msgstr ""
+
+#: src/changelog.md:141
+msgid ""
+"Phase 3: **self-contained Windows installer media**, on Linux _and_ macOS, "
+"for **UEFI _and_ legacy BIOS** machines. See [`docs/plan-phase3-self-"
+"contained.md`](docs/plan-phase3-self-contained.md) for the plan this "
+"delivers against."
+msgstr ""
+
+#: src/changelog.md:146
+msgid ""
+"The headline: producing Windows install media no longer requires a Windows "
+"machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob."
+msgstr ""
+
+#: src/changelog.md:151
+msgid ""
+"**`image::udf`** — Argos's own streaming UDF reader (M1, #40). Official "
+"Windows ISOs are UDF bridges, and the previous dependency read whole files "
+"into memory, which OOMed on a 5GB `install.wim`. Copying now runs in "
+"constant memory: **3 MiB peak RSS** streaming a 7.58GB file, with a digest "
+"byte-identical to macOS's own UDF driver reading the same file."
+msgstr ""
+
+#: src/changelog.md:156
+msgid ""
+"**`image::wim`** — Argos's own WIM reader and splitter (M2, #42). Splits "
+"`install.wim` into `install.swm` parts under FAT32's 4GiB limit by "
+"redistributing whole stored resources verbatim: nothing is decompressed or "
+"re-encoded, so the lookup table's SHA-1s stay valid by construction and no "
+"XPRESS/LZX codec is needed. Validated against wimlib as an external oracle "
+"(including `wimlib-imagex apply` reproducing a source tree byte for byte "
+"from our parts) and, ultimately, by Windows Setup itself on real hardware."
+msgstr ""
+
+#: src/changelog.md:163
+msgid ""
+"**`--layout fat32`** — a single pure-Rust FAT32 partition (M3, #43), written "
+"directly into the partition's byte range of the open device: no `mkfs`, no "
+"mount, no partition device nodes, no kernel filesystem driver. GPT-"
+"partitioned; boots UEFI firmware via the ISO's own `bootx64.efi`."
+msgstr ""
+
+#: src/changelog.md:167
+msgid ""
+"**`--layout fat32-bios`** — the same media, MBR-partitioned and carrying "
+"**Argos's own boot records** (M6, #45): an MBR bootstrap in 279 of the 440 "
+"bytes available, and a FAT32 volume boot record in 418 of 420, both written "
+"from scratch in 16-bit assembly under MIT/Apache rather than porting `ms-"
+"sys`'s GPL binary blobs. Boots legacy BIOS machines."
+msgstr ""
+
+#: src/changelog.md:172
+msgid ""
+"**Windows write support on macOS** (M4, #34) — enabled by the FAT32 route, "
+"which superseded the original macFUSE/`ntfs-3g` plan entirely."
+msgstr ""
+
+#: src/changelog.md:174
+msgid ""
+"**`tools/mediadiff.py`** — dumps a written device's full structure (MBR, "
+"GPT, BPB, FAT, directory tree) and diffs two dumps, with ~25 conformance "
+"checks. Written to run a differential diagnosis against Rufus-made media; it "
+"is what found the stale-GPT bug below."
+msgstr ""
+
+#: src/changelog.md:179
+msgid ""
+"**End-to-end write cancellation** (M7.5, #35). Ctrl-C during a write now "
+"reaches the privileged helper: `argos` keeps the helper's stdin open and a "
+"`SIGINT` handler writes `protocol::CANCEL_SIGNAL` into it, a watcher thread "
+"in the helper turns that into a `CancelToken`, and the write path checks it "
+"on every buffer. The helper **ignores `SIGINT` itself** -- Ctrl-C reaches "
+"the whole foreground process group, and letting the default disposition kill "
+"the helper would stop it before it could act on the cancellation. The pipe "
+"closing counts as a cancellation too, so a parent that dies outright still "
+"stops the write."
+msgstr ""
+
+#: src/changelog.md:191
+msgid ""
+"**`argos --version` reported `0.1.0`.** The workspace version was never "
+"bumped, so v1.0.0 shipped — tagged, released and published — announcing "
+"itself as a pre-1.0 build. Set to `1.5.0` here, which is also the first "
+"version string the binary has ever agreed with the changelog on."
+msgstr ""
+
+#: src/changelog.md:196
+msgid ""
+"A stale GPT surviving underneath the MBR layout (#59). `mbrman` writes "
+"sector 0 and nothing else, so a stick recycled from `--layout fat32` kept "
+"its entire GPT — primary header, entry array, and backup header in the "
+"device's last sector, CRCs intact — under a non-protective MBR. Windows "
+"refuses to assign a drive letter to a volume on a disk in that state, while "
+"the media still boots, which made it hard to localize."
+msgstr ""
+
+#: src/changelog.md:202
+msgid ""
+"Directory entries `fatfs` writes that violate the FAT specification: long "
+"filename entries placed before `.` and `..`, and `..` pointing at the root's "
+"cluster instead of 0 (#56, confirmed upstream)."
+msgstr ""
+
+#: src/changelog.md:205
+msgid ""
+"`BPB_HiddSec` left at 0 on the GPT path, and a BPB CHS geometry (32×64) that "
+"contradicted the 255×63 the MBR partition entries are built from."
+msgstr ""
+
+#: src/changelog.md:207
+msgid ""
+"A fixed volume serial number, so every medium Argos wrote claimed the same "
+"identity; and a previous bootloader surviving in sector 0 across a GPT write."
+msgstr ""
+
+#: src/changelog.md:210
+msgid "Media writes now cost roughly **8× fewer I/O operations**."
+msgstr ""
+
+#: src/changelog.md:214
+msgid ""
+"`hadris-udf`, and with it the `check_windows_memory` preflight that existed "
+"only to refuse writes it would have OOMed on."
+msgstr ""
+
+#: src/changelog.md:216
+msgid ""
+"**The NTFS/UEFI:NTFS Windows write path** (`--layout ntfs`), retired at "
+"decision point M4.3 once `--layout fat32`/`fat32-bios` was validated on real "
+"hardware from both hosts and both firmwares (see below). Out of the tree, "
+"not just unused: the vendored `uefi-ntfs.img` boot image and its provenance "
+"doc, the `mkfs.ntfs`/`ntfs-3g` shell-outs, the two-partition "
+"`WindowsPartitionPlan`, and the three `PlatformOps` methods that existed "
+"only to support it (`reread_partition_table`, `mount_ntfs_partition`, "
+"`unmount_path`). `--layout` now defaults to `fat32`; `ntfs` is no longer a "
+"valid value."
+msgstr ""
+
+#: src/changelog.md:226 src/changelog.md:321
+msgid "Verified against real hardware"
+msgstr ""
+
+#: src/changelog.md:228
+msgid ""
+"The acceptance criterion throughout was **Windows Setup reaching disk "
+"selection** — not the language screen, which proves only that the firmware "
+"found a bootloader. Reaching disk selection is what proves Setup found and "
+"accepted its installation source, split `.swm` parts included."
+msgstr ""
+
+#: src/changelog.md:233
+msgid ""
+"Media written **from macOS**: a UEFI machine (with an unsplit `install.esd` "
+"and with a split `install.wim`) and a legacy-BIOS machine (Intel Atom N455 "
+"netbook, AMI BIOS dated 2011), through Argos's own MBR and VBR."
+msgstr ""
+
+#: src/changelog.md:236
+msgid ""
+"Media written **from Linux** (M5.1): a real Windows 10 22H2 ISO — 6.14 GB, "
+"`install.wim` 5.18 GB, so the splitter is genuinely exercised — to a "
+"physical 28.7 GB stick, booting a UEFI machine with `--layout fat32` and a "
+"legacy-BIOS machine with `--layout fat32-bios`."
+msgstr ""
+
+#: src/changelog.md:240
+msgid ""
+"Both hosts, both firmwares, with no Windows machine, no `mkfs.ntfs`, no "
+"`ntfs-3g`, no FUSE and no vendored binary blob anywhere in the path."
+msgstr ""
+
+#: src/changelog.md:242
+msgid ""
+"The stale-GPT scenario (#59) on real hardware: one stick written with the "
+"GPT layout and then the MBR layout still reached its installation source, "
+"which a surviving GPT would have prevented."
+msgstr ""
+
+#: src/changelog.md:246
+msgid ""
+"Still open: an installation carried through to completion rather than "
+"stopping at disk selection, and Secure Boot (M5.3)."
+msgstr ""
+
+#: src/changelog.md:249 src/changelog.md:336
+msgid "Known limitations"
+msgstr ""
+
+#: src/changelog.md:251
+msgid ""
+"No GUI yet. Planned for 2.0; the CLI is architected so one can sit on the "
+"same `argos-core`/`argos-platform` crates without a rewrite."
+msgstr ""
+
+#: src/changelog.md:253
+msgid ""
+"Windows as a _host_ OS is still out of scope. Argos writes Windows media "
+"**from** Linux and macOS."
+msgstr ""
+
+#: src/changelog.md:255
+msgid ""
+"Windows installer media has been carried to Setup's disk selection on real "
+"hardware, on both firmwares and from both hosts, but not through a completed "
+"installation."
+msgstr ""
+
+#: src/changelog.md:258
+msgid "Secure Boot is untested (M5.3)."
+msgstr ""
+
+#: src/changelog.md:259
+msgid ""
+"A solid `.esd` larger than FAT32's 4GiB file limit cannot be written: only a "
+"WIM can be split, and a solid ESD cannot. Use an ISO edition whose install "
+"image is a WIM."
+msgstr ""
+
+#: src/changelog.md:262 src/changelog.md:342
+msgid "Non-hybrid ISOs are refused rather than partially supported."
+msgstr ""
+
+#: src/changelog.md:263 src/changelog.md:343
+msgid ""
+"A Homebrew tap is not published yet (crates.io and GitHub Releases are both "
+"available today)."
+msgstr ""
+
+#: src/changelog.md:266
+msgid "\\[1.0.0\\] - 2026-08-30"
+msgstr ""
+
+#: src/changelog.md:268
+msgid ""
+"Initial release. Argos creates bootable Linux installer USB drives on Linux "
+"and macOS hosts, in the spirit of [Rufus](https://github.com/pbatard/rufus). "
+"See [`docs/architecture.md`](docs/architecture.md) for the full design."
+msgstr ""
+
+#: src/changelog.md:275
+msgid ""
+"**`argos list`** — lists every disk the platform backend can see, and "
+"whether each looks safe to write to."
+msgstr ""
+
+#: src/changelog.md:277
+msgid ""
+"**`argos write <iso> --device <id>`** — the core destructive flow: refreshes "
+"the target device, applies the non-negotiable safety gate (a system disk is "
+"refused unconditionally; a non-removable disk needs `--i-know-what-im-"
+"doing`), classifies the ISO (refusing anything that isn't a hybrid image), "
+"runs capacity and source/target-collision preflight checks, requires the "
+"user to retype the exact device path to confirm, unmounts the device, writes "
+"it byte-for-byte (\"DD mode\"), verifies the write by reading it back and "
+"comparing hashes (`--no-verify` to skip), ejects the device afterward (`--no-"
+"eject` to skip), and reports progress as a live bar — or periodic plain-text "
+"lines when stdout isn't a real terminal (a pipe, a log file, CI)."
+msgstr ""
+
+#: src/changelog.md:288
+msgid ""
+"**`argos verify <device> --iso <iso>`** — re-runs post-write verification "
+"against a device without writing again."
+msgstr ""
+
+#: src/changelog.md:290
+msgid ""
+"**Safety model**: a disk is only ever offered for writing when three "
+"independent signals agree — not a detected system disk, OS-reported "
+"removable, and on the USB bus. No single OS-reported flag is ever trusted "
+"alone, and the privileged helper re-checks identity immediately before "
+"opening the device regardless of what was confirmed earlier (the TOCTOU "
+"guard)."
+msgstr ""
+
+#: src/changelog.md:296
+msgid ""
+"**Linux backend**: disk enumeration via `/sys/block/*` and the udev "
+"database, cross-checked against UDisks2 over D-Bus when reachable. System-"
+"disk detection resolves LVM/RAID/dm-crypt device-mapper stacks to the "
+"physical disk underneath."
+msgstr ""
+
+#: src/changelog.md:300
+msgid ""
+"**macOS backend**: disk enumeration via `diskutil list`/`info -plist`, "
+"parsed defensively against schema drift across macOS versions. System-disk "
+"detection walks through APFS containers (the Apple Silicon case, where the "
+"boot volume's immediate parent is a virtual container, not the real internal "
+"disk) to the physical disk underneath."
+msgstr ""
+
+#: src/changelog.md:305
+msgid ""
+"**Privilege separation**: `argos-helper`, a small binary deliberately kept "
+"\"dumb\", is the only thing that ever opens a raw device, and runs as root "
+"only for that. It parses no ISO and talks to no D-Bus/plist/UDisks2 API "
+"itself."
+msgstr ""
+
+#: src/changelog.md:309
+msgid ""
+"**ISO classification**: distinguishes hybrid ISOs (byte-for-byte writable) "
+"from El-Torito-only or plain-data images (refused) by inspecting the "
+"embedded MBR/GPT/El Torito structures already baked into the ISO — Argos "
+"never creates or modifies a partition table itself, only verifies one is "
+"already there before trusting a raw copy."
+msgstr ""
+
+#: src/changelog.md:314
+msgid ""
+"Pre-built binaries on GitHub Releases for `x86_64-unknown-linux-gnu`, "
+"`aarch64-apple-darwin`, and `x86_64-apple-darwin`."
+msgstr ""
+
+#: src/changelog.md:316
+msgid ""
+"Published on crates.io — install with `cargo install argos-cli argos-"
+"privileged` (both crates are needed: `argos-cli` alone installs `argos` but "
+"not the separate `argos-helper` binary it looks for next to itself at "
+"runtime)."
+msgstr ""
+
+#: src/changelog.md:323
+msgid ""
+"Real, official Linux distro ISOs (Ubuntu 26.04.1, 22.04.5, and 18.04.5; "
+"Alpine Linux 3.24.1) written to real physical USB drives on both Linux and "
+"macOS hosts, checksum-verified against each distro's own published sums "
+"before writing and independently re-hashed outside Argos afterward."
+msgstr ""
+
+#: src/changelog.md:328
+msgid ""
+"Real boot confirmation on both **UEFI** and **BIOS/legacy (MBR)** hardware, "
+"including one genuinely old BIOS-only machine."
+msgstr ""
+
+#: src/changelog.md:330
+msgid ""
+"A write to a real system disk is refused before any privilege escalation, "
+"with and without `--i-know-what-im-doing`."
+msgstr ""
+
+#: src/changelog.md:332
+msgid ""
+"Real-hardware integration tests for the write/verify path without needing "
+"physical USB media for every run: Linux loop devices, macOS `hdiutil`\\-"
+"attached disk images."
+msgstr ""
+
+#: src/changelog.md:338
+msgid ""
+"Windows image support and Windows as a host OS are both out of scope for v1 "
+"— a future phase."
+msgstr ""
+
+#: src/changelog.md:340
+msgid ""
+"No GUI yet; the CLI is architected so one can sit on top of the same `argos-"
+"core`/`argos-platform` crates later without a rewrite."
+msgstr ""

@@ -25,6 +25,11 @@ concurrency:
 
 env:
   MDBOOK_VERSION: 0.5.4
+  MDBOOK_I18N_HELPERS_VERSION: 0.4.0
+  # Every po/<lang>.po file in docs-site/po/ (see docs-site/README.md) gets its own
+  # build, published side by side under book/<lang>/. Keep this in sync with the
+  # LANGUAGES map in docs-site/theme/lang-switcher.js.
+  LANGUAGES: "pt-BR"
 
 jobs:
   build:
@@ -39,8 +44,31 @@ jobs:
             | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Build book
-        run: mdbook build docs-site
+      # mdbook-gettext (the [preprocessor.gettext] in book.toml) has no prebuilt
+      # binaries, only source -- built from crates.io like any other cargo tool.
+      - name: Install mdbook-i18n-helpers
+        run: cargo install mdbook-i18n-helpers --version "${MDBOOK_I18N_HELPERS_VERSION}" --locked
+
+      - name: Build English book
+        working-directory: docs-site
+        run: mdbook build -d book/en
+
+      - name: Build translated books
+        working-directory: docs-site
+        run: |
+          for lang in $LANGUAGES; do
+            MDBOOK_BOOK__LANGUAGE="$lang" mdbook build -d "book/$lang"
+          done
+
+      - name: Redirect the site root to the English book
+        run: |
+          cat > docs-site/book/index.html <<'HTML'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=en/">
+          <link rel="canonical" href="en/">
+          <p>Redirecting to <a href="en/">the English docs</a>...</p>
+          HTML
 
       - uses: actions/configure-pages@v5
 
