@@ -1,5 +1,4 @@
 mod commands;
-mod platform_select;
 
 use argos_privileged::protocol::WindowsLayout;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};

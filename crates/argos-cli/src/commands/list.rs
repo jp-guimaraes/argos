@@ -1,8 +1,7 @@
-use super::helper::human_size;
-use crate::platform_select::current_platform;
 use argos_core::device::Device;
 use argos_core::error::Result;
 use argos_platform::PlatformOps;
+use argos_session::{current_platform, human_size};
 
 pub fn run() -> Result<()> {
     let devices = current_platform().list_removable_disks()?;

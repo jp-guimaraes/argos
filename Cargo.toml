@@ -7,6 +7,7 @@ members = [
     "crates/argos-platform-macos",
     "crates/argos-platform-windows",
     "crates/argos-privileged",
+    "crates/argos-session",
     "crates/argos-cli",
 ]
 
@@ -40,6 +41,7 @@ argos-platform-linux = { path = "crates/argos-platform-linux", version = "1.5.5"
 argos-platform-macos = { path = "crates/argos-platform-macos", version = "1.5.5" }
 argos-platform-windows = { path = "crates/argos-platform-windows" }
 argos-privileged = { path = "crates/argos-privileged", version = "1.5.5" }
+argos-session = { path = "crates/argos-session", version = "1.5.5" }
 
 thiserror = "2"
 sha2 = "0.10"

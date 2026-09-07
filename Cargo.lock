@@ -67,9 +67,8 @@ version = "1.5.5"
 dependencies = [
  "argos-core",
  "argos-platform",
- "argos-platform-linux",
- "argos-platform-macos",
  "argos-privileged",
+ "argos-session",
  "clap",
  "clap_complete",
  "clap_mangen",
@@ -143,6 +142,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "argos-session"
+version = "1.5.5"
+dependencies = [
+ "argos-core",
+ "argos-platform",
+ "argos-platform-linux",
+ "argos-platform-macos",
+ "argos-privileged",
+ "serde_json",
  "tempfile",
 ]
 

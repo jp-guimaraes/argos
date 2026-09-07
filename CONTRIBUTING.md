@@ -45,6 +45,13 @@ also documents the design decisions behind the current crate layout.
   as license to grow the ISO-parsing surface here further; it's accepted
   specifically because the copy step cannot happen anywhere else without one
   of those two costs.
+- `crates/argos-session` -- UI-agnostic orchestration: resolving and refusing
+  devices, classifying images, running the preflight checks, building the
+  `Plan`, elevating `argos-helper` and streaming its events. The seam between
+  *what Argos does* and *how a user is asked about it*. It must not print, read
+  stdin, or grow a terminal dependency (`ctrlc`, `indicatif`, `console` and
+  `clap` all belong to `argos-cli`) -- that is what lets a GUI reuse the exact
+  same safety checks rather than reimplementing them.
 - `crates/argos-cli` -- the `argos` command-line tool.
 
 ## Safety-critical code
@@ -57,6 +64,15 @@ enumeration logic, or the privileged helper's re-validation should:
 - come with tests (unit tests for pure logic, the negative "never write a
   system disk" suite for anything device-selection related), and
 - err on the side of refusing a device rather than guessing it's safe.
+
+`argos-platform`'s `test-fixtures` feature exposes a `FakePlatform`, the one
+place `PlatformOps` is faked in this project. Its scope is deliberately
+narrow: it exists to test *orchestration* -- whether `prepare_write` runs its
+checks in the right order, whether a front end copes with a device vanishing
+mid-selection. It is **not** evidence about device safety. A fake that
+declares a disk safe proves nothing about the code that decides that, so
+anything touching enumeration or the safety gate stays tested against real
+signals, real loop devices and real `hdiutil` images.
 
 ## Commit messages
 

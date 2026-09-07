@@ -49,6 +49,7 @@ ctrlc = { workspace = true }
 argos-core = { workspace = true }
 argos-platform = { workspace = true }
 argos-privileged = { workspace = true }
+argos-session = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
@@ -56,11 +57,6 @@ indicatif = { workspace = true }
 console = { workspace = true }
 serde_json = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-argos-platform-linux = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-argos-platform-macos = { workspace = true }
 
 [dev-dependencies]
 # Builds a synthetic Windows-installer ISO for the fat32 planning
