@@ -30,6 +30,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # eframe needs X11/xkb headers to *build* on Linux (argos-gui, phase 4
+      # G4). This is the known-good set from egui's own CI, minus what Argos
+      # does not use; glow and winit dlopen libGL and the Wayland libraries at
+      # runtime, so those need no -dev package here, and rfd's xdg-portal
+      # backend talks to the desktop's file chooser rather than linking GTK,
+      # so libgtk-3-dev is deliberately absent. Trim further only with a red
+      # build to prove each removal.
+      - if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev \
+                                  libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -47,6 +59,18 @@ jobs:
       # both OSes actually exercise it instead of one silently skipping.
       - if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y mandoc
+      # eframe needs X11/xkb headers to *build* on Linux (argos-gui, phase 4
+      # G4). This is the known-good set from egui's own CI, minus what Argos
+      # does not use; glow and winit dlopen libGL and the Wayland libraries at
+      # runtime, so those need no -dev package here, and rfd's xdg-portal
+      # backend talks to the desktop's file chooser rather than linking GTK,
+      # so libgtk-3-dev is deliberately absent. Trim further only with a red
+      # build to prove each removal.
+      - if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev \
+                                  libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo test --workspace
 
   loop-device-tests:
@@ -202,6 +226,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # build-deb.sh builds the whole workspace, which now includes
+      # argos-gui; see the same step in the clippy and test jobs above.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev \
+                                  libxcb-shape0-dev libxcb-xfixes0-dev
       - run: cargo install cargo-deb --locked
       - run: packaging/build-deb.sh
       - run: sudo apt-get install -y lintian

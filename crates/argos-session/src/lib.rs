@@ -33,6 +33,7 @@ pub use events::{EventSink, NoopSink, Outcome, SessionEvent};
 pub use format::human_size;
 pub use platform::{boxed_platform, current_platform};
 pub use prepare::{
-    canonicalize_iso_path, check_device_is_offerable, prepare_verify, prepare_write,
-    PreparedVerify, PreparedWrite, SplitNote, VerifyRequest, WritePreview, WriteRequest,
+    canonicalize_iso_path, check_device_is_offerable, classify_image, prepare_verify,
+    prepare_write, ImageKind, PreparedVerify, PreparedWrite, SplitNote, VerifyRequest,
+    WritePreview, WriteRequest,
 };
