@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Installed to /usr/share/polkit-1/actions/ by the .deb and the AUR package.
+
+  Without it pkexec still works, and still authenticates - it just falls back
+  to its generic action and says "Authentication is required to run
+  /usr/bin/argos-helper as the super user", which tells a user nothing about
+  what is going to happen to their disk. That fallback is also what a
+  development build gets: the annotation below pins an absolute path, so a
+  binary run out of target/release/ matches no action here. That is fine and
+  deliberate; it is not worth a second, dev-only policy file.
+-->
+<policyconfig>
+  <vendor>Argos</vendor>
+  <vendor_url>https://github.com/jp-guimaraes/argos</vendor_url>
+
+  <action id="org.argos.helper">
+    <description>Write a bootable installer USB drive</description>
+    <description xml:lang="pt_BR">Gravar um pendrive de instalação inicializável</description>
+    <message>Argos needs administrator access to write directly to the selected disk. Everything on it will be erased.</message>
+    <message xml:lang="pt_BR">O Argos precisa de acesso de administrador para gravar diretamente no disco selecionado. Todo o conteúdo dele será apagado.</message>
+    <icon_name>drive-removable-media</icon_name>
+    <defaults>
+      <!--
+        auth_admin, deliberately not auth_admin_keep. `_keep` caches the
+        authorization for about five minutes, so a *second* destructive write
+        inside that window would proceed with no prompt at all. For a tool
+        whose first priority is never writing to the wrong disk, silently
+        removing the prompt from the second write is a safety regression, and
+        it buys nothing: writing a USB stick is not a repeated operation.
+
+        allow_any/allow_inactive are auth_admin rather than `no` so an SSH
+        session behaves the way sudo does today, rather than becoming a hard
+        refusal.
+      -->
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/argos-helper</annotate>
+  </action>
+</policyconfig>

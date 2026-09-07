@@ -476,6 +476,46 @@ The safety argument for the crate is that there is now one implementation of
 weaken it by forgetting a step, and `argos-helper` re-validates everything
 regardless (`protocol::validate_refreshed_device`).
 
+`ElevationUi` picks how the user is asked to authorize. `Terminal` is what
+`argos` has always done -- `pkexec` where it exists on Linux, `sudo`
+otherwise, over the child's own pipes. `Graphical` exists because a windowed
+front end has no controlling terminal, and `sudo` then has nowhere to read a
+password from at all: it fails outright with "a terminal is required". On
+Linux that just means requiring `pkexec`, which renders the desktop's own
+polkit agent; `packaging/linux/org.argos.helper.policy` gives that dialog a
+message about erasing a disk instead of pkexec's generic one, in English and
+Brazilian Portuguese.
+
+macOS has no equivalent, so the graphical route runs `osascript`'s `do shell
+script ... with administrator privileges`, which puts up the system's own
+authorization dialog -- **Argos never sees the password**, and none of it
+needs code signing or a Developer ID. The cost is that `do shell script`
+returns stdout only once the command has finished, which would take both the
+progress bar and cancellation with it. A pair of FIFOs stands in for the
+pipes: `sh` runs as root with `< plan > events`, so the helper's stdin and
+stdout are those FIFOs and **`argos-privileged` needs no change at all** --
+the cancel byte, the EOF-means-cancel safety net and the JSONL stream all
+behave exactly as they do over a pipe. Confirmed by writing a real ISO
+through it: byte-identical output to the terminal route, and a media hash
+matching the source.
+
+Both FIFOs are opened `O_RDWR`, which never blocks, and that is load-bearing
+rather than tidy. Opening each end blocking looks like a clean handshake with
+`sh`'s two redirections, and is one -- until the user dismisses the
+authorization dialog. Then `osascript` exits, `sh` never runs, no counterpart
+end is ever opened, and both opens block forever; observed for real, with the
+parent still alive and stuck after the child was gone. `O_RDWR` also preserves
+the EOF-on-parent-death semantics `watch_for_cancel` relies on, since what
+makes the helper's `read()` return 0 is the last *write* end closing.
+
+A signed, launchd-managed privileged helper (`SMJobBless`/`SMAppService`) is
+Apple's own answer and was declined: it costs a paid Developer ID and
+notarization on every release, and it would make the privileged side a
+persistent root daemon -- the opposite of `argos-helper`'s one-shot design.
+`sudo -A` with an `osascript` askpass is kept as the documented fallback, and
+rejected as the default because the password would then transit the Argos
+process.
+
 ### `argos-cli`
 
 `argos list` lists every physical disk visible to the current platform backend

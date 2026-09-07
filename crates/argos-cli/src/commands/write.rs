@@ -9,7 +9,7 @@ use super::progress::Presenter;
 use argos_core::error::{ArgosError, Result};
 use argos_privileged::protocol::WindowsLayout;
 use argos_session::{
-    self as session, human_size, Outcome, PreparedWrite, WritePreview, WriteRequest,
+    self as session, human_size, ElevationUi, Outcome, PreparedWrite, WritePreview, WriteRequest,
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -21,6 +21,7 @@ pub struct Args {
     pub no_eject: bool,
     pub i_know_what_im_doing: bool,
     pub layout: WindowsLayout,
+    pub elevation: ElevationUi,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -40,7 +41,7 @@ pub fn run(args: Args) -> Result<()> {
 
     confirm_or_abort(&prepared)?;
 
-    let running = session::spawn(prepared.plan())?;
+    let running = session::spawn(prepared.plan(), args.elevation)?;
     // Cancellation (backlog #35): the helper's plan channel is not closed
     // right after the `Plan` line -- it stays open, held by the `Canceller`,
     // for the rest of the run. This handler writes the cancel byte into it
