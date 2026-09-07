@@ -50,6 +50,24 @@ pub enum ElevationUi {
 #[cfg(target_os = "macos")]
 const DRAIN_GRACE: Duration = Duration::from_millis(250);
 
+/// Which program was asked to elevate, so its exit status can be read the way
+/// *that* program documents it.
+///
+/// Only `pkexec` gives the distinction any meaning: `pkexec(1)` promises
+/// **126** when the user dismissed the authentication dialog and **127** when
+/// the authorization could not be obtained for any other reason -- a wrong
+/// password, or no authentication agent at all. Out of `sudo` or `osascript`
+/// those same two numbers carry the shell's ordinary "could not execute"
+/// meaning, so the mapping has to know which one ran rather than matching on
+/// the number alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Elevator {
+    Pkexec,
+    /// `sudo` on either host, and macOS's `osascript` route, which reports a
+    /// dismissed dialog in its stderr instead of in its exit status.
+    Other,
+}
+
 /// An elevated `argos-helper` that has already been handed its `Plan`.
 pub struct Running {
     events: EventStream,
@@ -58,6 +76,9 @@ pub struct Running {
     /// Set only for the graphical route, which cannot use the child's own
     /// pipes: its stderr is where AppleScript reports a dismissed dialog.
     stderr: Option<std::process::ChildStderr>,
+    /// Which program was asked to elevate. Read only when the run settles
+    /// nothing, to interpret the exit status it left behind.
+    elevator: Elevator,
     /// Dropped last, removing the FIFO directory the graphical route needs.
     /// `None` for the terminal route, which has nothing to clean up.
     _rundir: Option<RunDir>,
@@ -97,7 +118,13 @@ impl Running {
         if let Some(stderr) = self.stderr.as_mut() {
             let _ = stderr.read_to_string(&mut stderr_text);
         }
-        no_result_error_from(&stderr_text, status.success(), &status.to_string())
+        no_result_error_from(
+            self.elevator,
+            &stderr_text,
+            status.code(),
+            status.success(),
+            &status.to_string(),
+        )
     }
 }
 
@@ -208,10 +235,14 @@ pub fn spawn(plan: &Plan, ui: ElevationUi) -> Result<Running> {
 /// What `argos` has always done, unchanged: `pkexec` where it exists on
 /// Linux, `sudo` otherwise, over the child's own pipes.
 fn spawn_terminal(plan: &Plan, helper_path: &Path) -> Result<Running> {
-    let elevation_command = if cfg!(target_os = "linux") && command_exists("pkexec") {
-        "pkexec"
+    let elevator = if cfg!(target_os = "linux") && command_exists("pkexec") {
+        Elevator::Pkexec
     } else {
-        "sudo"
+        Elevator::Other
+    };
+    let elevation_command = match elevator {
+        Elevator::Pkexec => "pkexec",
+        Elevator::Other => "sudo",
     };
 
     let mut child = Command::new(elevation_command)
@@ -240,6 +271,7 @@ fn spawn_terminal(plan: &Plan, helper_path: &Path) -> Result<Running> {
         canceller: Canceller::new(Box::new(stdin)),
         child,
         stderr: None,
+        elevator,
         _rundir: None,
     })
 }
@@ -261,10 +293,20 @@ fn spawn_graphical(plan: &Plan, helper_path: &Path) -> Result<Running> {
         )));
     }
 
+    // Deliberately *not* `--disable-internal-agent`. With no desktop agent
+    // registered, pkexec falls back to a textual one: from a window that has
+    // no controlling terminal it cannot ask anything and exits 127, which
+    // `no_result_error_from` turns into a sentence naming the missing agent;
+    // and a build launched from a terminal during development still gets a
+    // usable prompt instead of a refusal. Disabling it would only replace the
+    // second case with the first.
     let mut child = Command::new("pkexec")
         .arg(helper_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        // Captured, not inherited, for the same reason the macOS route does
+        // it: this is where pkexec explains a 127, and a window has nowhere
+        // to show a message it let escape to a terminal that isn't there.
         .stderr(Stdio::piped())
         .spawn()?;
 
@@ -282,6 +324,7 @@ fn spawn_graphical(plan: &Plan, helper_path: &Path) -> Result<Running> {
         canceller: Canceller::new(Box::new(stdin)),
         child,
         stderr,
+        elevator: Elevator::Pkexec,
         _rundir: None,
     })
 }
@@ -363,12 +406,48 @@ fn stream_helper_events(
 /// than an `ExitStatus`, so every branch is reachable in a test -- the
 /// interesting one otherwise needs a human to dismiss an authorization
 /// dialog, which is exactly the kind of thing that goes unverified.
-fn no_result_error_from(stderr: &str, succeeded: bool, status_text: &str) -> ArgosError {
+fn no_result_error_from(
+    elevator: Elevator,
+    stderr: &str,
+    code: Option<i32>,
+    succeeded: bool,
+    status_text: &str,
+) -> ArgosError {
     // AppleScript's "User canceled". The dialog was dismissed, so nothing was
     // elevated and nothing was touched.
     if stderr.contains("-128") {
         return ArgosError::ElevationDeclined;
     }
+
+    // pkexec's equivalent, which it signals in the exit status and nowhere
+    // else: a dismissed polkit dialog prints *nothing at all* on stderr, so
+    // without this the user who clicked Cancel was told "argos-helper exited
+    // with exit status: 126 and reported no result".
+    if elevator == Elevator::Pkexec {
+        match code {
+            Some(126) => return ArgosError::ElevationDeclined,
+            // "not authorized, or an error occurred" -- the wrong password
+            // three times, and equally the failure mode this project has to
+            // name out loud: a window launched from a .desktop file on a
+            // desktop with no polkit agent running, where pkexec has no
+            // terminal to fall back to either.
+            Some(127) => {
+                let detail = stderr.trim();
+                let detail = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                };
+                return ArgosError::Io(std::io::Error::other(format!(
+                    "could not obtain authorization to run argos-helper{detail}; if no \
+                     authentication agent is running on this desktop, start one or run \
+                     `argos write` from a terminal"
+                )));
+            }
+            _ => {}
+        }
+    }
+
     if !stderr.trim().is_empty() {
         return ArgosError::Io(std::io::Error::other(format!(
             "could not elevate argos-helper: {}",
@@ -619,7 +698,9 @@ mod tests {
     #[test]
     fn a_dismissed_authorization_dialog_says_authorization_not_confirmation() {
         let err = no_result_error_from(
+            Elevator::Other,
             "22:256: execution error: User canceled. (-128)",
+            Some(1),
             false,
             "exit status: 1",
         );
@@ -633,9 +714,11 @@ mod tests {
     #[test]
     fn any_other_elevation_failure_says_what_it_was() {
         let err = no_result_error_from(
-            "pkexec: no authentication agent found",
+            Elevator::Other,
+            "sudo: a terminal is required to read the password",
+            Some(1),
             false,
-            "exit status: 127",
+            "exit status: 1",
         );
         let message = err.to_string();
         assert!(
@@ -643,9 +726,117 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("no authentication agent found"),
+            message.contains("a terminal is required to read the password"),
             "{message}"
         );
+    }
+
+    /// 126 is what `pkexec(1)` promises for "the user dismissed the
+    /// authentication dialog". Both spellings below came from a human
+    /// actually clicking Cancel on GNOME 46/X11 (Ubuntu 24.04, polkit 124):
+    /// exit 126, with pkexec also printing *Error executing command as
+    /// another user: Request dismissed*.
+    ///
+    /// That printed line is why the exit code is consulted **before** the
+    /// stderr branch further down rather than after it. The graphical route
+    /// captures stderr, so a dismissal reaching that branch would come back
+    /// as "could not elevate argos-helper: Error executing command as another
+    /// user: Request dismissed" -- an I/O failure exiting 19, where the user
+    /// simply declined and nothing was touched (27). The terminal route
+    /// inherits stderr rather than capturing it, so there the exit status is
+    /// the only evidence there is.
+    ///
+    /// Before either, someone who clicked Cancel was told "argos-helper
+    /// exited with exit status: 126 and reported no result", which names the
+    /// wrong program and reads like a crash.
+    #[test]
+    fn a_dismissed_polkit_dialog_is_a_declined_authorization() {
+        for stderr in [
+            // The graphical route, which pipes stderr.
+            "Error executing command as another user: Request dismissed\n",
+            // The terminal route, which does not.
+            "",
+        ] {
+            let err = no_result_error_from(
+                Elevator::Pkexec,
+                stderr,
+                Some(126),
+                false,
+                "exit status: 126",
+            );
+            assert!(
+                matches!(err, ArgosError::ElevationDeclined),
+                "stderr {stderr:?} was not read as a dismissed dialog"
+            );
+            assert_eq!(err.exit_code(), 27, "same meaning as NotConfirmed");
+        }
+    }
+
+    /// `pkexec(1)`'s other authorization failure: "not authorized, or an
+    /// error occurred". It covers three wrong passwords and, the reason a
+    /// window needs it named, a desktop running no authentication agent at
+    /// all -- where pkexec has no TTY to fall back to either.
+    ///
+    /// Unlike the 126 above, this one is **not** backed by a run on real
+    /// hardware: reproducing it needs a host with no polkit agent, and on a
+    /// systemd/GNOME box every attempt to arrange one still resolved to the
+    /// graphical session and put its dialog back on screen -- a transient
+    /// `systemd-run --user` service included, whose polkit subject logs as
+    /// `unix-process:<systemd --user>` *in* that session. The mapping follows
+    /// what pkexec documents; whether an agentless pkexec exits 127 or simply
+    /// blocks is worth confirming on such a host before a front end relies on
+    /// seeing this error rather than hanging.
+    #[test]
+    fn pkexec_127_names_the_authentication_agent() {
+        let err = no_result_error_from(Elevator::Pkexec, "", Some(127), false, "exit status: 127");
+        let message = err.to_string();
+        assert!(
+            message.contains("could not obtain authorization"),
+            "{message}"
+        );
+        assert!(message.contains("authentication agent"), "{message}");
+        assert!(message.contains("from a terminal"), "{message}");
+    }
+
+    /// When stderr *was* captured -- the graphical route pipes it -- pkexec's
+    /// own explanation is kept, rather than being replaced by the guess.
+    #[test]
+    fn pkexec_127_keeps_what_pkexec_itself_said() {
+        let err = no_result_error_from(
+            Elevator::Pkexec,
+            "Error executing command as another user: Not authorized\n",
+            Some(127),
+            false,
+            "exit status: 127",
+        );
+        let message = err.to_string();
+        assert!(message.contains("Not authorized"), "{message}");
+        assert!(message.contains("authentication agent"), "{message}");
+    }
+
+    /// 126 and 127 mean "could not execute" out of a shell, and `sudo` passes
+    /// a command's own status straight through. Reading either as "the user
+    /// declined" because the number matched would turn a real failure into a
+    /// silent, successful-looking abort.
+    #[test]
+    fn the_same_codes_out_of_sudo_are_not_a_declined_authorization() {
+        for code in [126, 127] {
+            let err = no_result_error_from(
+                Elevator::Other,
+                "",
+                Some(code),
+                false,
+                &format!("exit status: {code}"),
+            );
+            assert!(
+                !matches!(err, ArgosError::ElevationDeclined),
+                "sudo exit {code} was read as a dismissed dialog"
+            );
+            assert_eq!(
+                err.to_string(),
+                format!("argos-helper exited with exit status: {code} and reported no result")
+            );
+        }
     }
 
     /// The two messages the terminal route has always produced, unchanged --
@@ -653,11 +844,12 @@ mod tests {
     #[test]
     fn a_silent_exit_keeps_the_wording_the_cli_has_always_printed() {
         assert_eq!(
-            no_result_error_from("", true, "exit status: 0").to_string(),
+            no_result_error_from(Elevator::Pkexec, "", Some(0), true, "exit status: 0").to_string(),
             "argos-helper exited successfully but reported no result"
         );
         assert_eq!(
-            no_result_error_from("", false, "exit status: 1").to_string(),
+            no_result_error_from(Elevator::Pkexec, "", Some(1), false, "exit status: 1")
+                .to_string(),
             "argos-helper exited with exit status: 1 and reported no result"
         );
     }
