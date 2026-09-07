@@ -28,7 +28,7 @@ pub use argos_core::error::{ArgosError, Result};
 pub use argos_core::progress::Phase;
 pub use argos_privileged::protocol::PhaseWire;
 pub use cancel::Canceller;
-pub use elevate::{spawn, Running};
+pub use elevate::{spawn, ElevationUi, Running};
 pub use events::{EventSink, NoopSink, Outcome, SessionEvent};
 pub use format::human_size;
 pub use platform::{boxed_platform, current_platform};

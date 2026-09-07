@@ -112,3 +112,27 @@ makepkg --printsrcinfo > packaging/aur/.SRCINFO
 ```
 
 [cargo-deb]: https://github.com/kornelski/cargo-deb
+
+## The polkit policy (`linux/org.argos.helper.policy`)
+
+Installed to `/usr/share/polkit-1/actions/`. Without it `pkexec` still works
+and still authenticates -- it falls back to its generic action and says
+"Authentication is required to run /usr/bin/argos-helper as the super user",
+which tells a user nothing about what is about to happen to their disk. With
+it, the dialog says so, in English or Brazilian Portuguese depending on the
+session locale.
+
+Two things worth knowing rather than working around:
+
+- The policy pins an absolute path (`/usr/bin/argos-helper`), so a
+  development build run out of `target/release/` matches no action and gets
+  the generic message. That is fine; a second, dev-only policy file would not
+  be worth its own maintenance.
+- polkit picks the language from the **authentication agent's session
+  locale**, not from Argos's own setting. Someone running Argos in Portuguese
+  on an `en_US` desktop still sees the English polkit message.
+
+`auth_admin`, not `auth_admin_keep`: `_keep` caches the authorization for
+about five minutes, so a *second* destructive write in that window would
+proceed with no prompt at all. Writing a USB stick is not a repeated
+operation, so that caching buys nothing and quietly removes a confirmation.

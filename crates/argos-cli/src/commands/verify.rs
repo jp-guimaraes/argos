@@ -11,13 +11,14 @@
 use super::progress::Presenter;
 use argos_core::error::{ArgosError, Result};
 use argos_privileged::protocol::WindowsLayout;
-use argos_session::{self as session, Outcome, VerifyRequest};
+use argos_session::{self as session, ElevationUi, Outcome, VerifyRequest};
 use std::path::PathBuf;
 
 pub struct Args {
     pub device: String,
     pub iso: PathBuf,
     pub layout: WindowsLayout,
+    pub elevation: ElevationUi,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -32,7 +33,7 @@ pub fn run(args: Args) -> Result<()> {
         },
     )?;
 
-    let running = session::spawn(prepared.plan())?;
+    let running = session::spawn(prepared.plan(), args.elevation)?;
     let canceller = running.canceller();
     let _ = ctrlc::set_handler(move || canceller.cancel());
 

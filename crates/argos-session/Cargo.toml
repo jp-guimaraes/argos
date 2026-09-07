@@ -28,11 +28,15 @@ argos-platform = { workspace = true }
 argos-privileged = { workspace = true }
 serde_json = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-argos-platform-linux = { workspace = true }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 argos-platform-macos = { workspace = true }
+# mkfifo(3), for the graphical elevator's stand-in pipes. `do shell script`
+# gives no live stdin/stdout to the process it elevates, and a FIFO pair is
+# what lets argos-helper keep the exact stdin/stdout contract it already has.
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+argos-platform-linux = { workspace = true }
 
 [dev-dependencies]
 argos-core = { workspace = true, features = ["test-fixtures"] }
