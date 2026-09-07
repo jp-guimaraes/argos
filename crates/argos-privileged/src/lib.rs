@@ -74,7 +74,25 @@ pub fn execute(
     let mut image = File::open(&plan.image_path)?;
     let mut device = OpenOptions::new().write(true).open(&plan.device_path)?;
 
-    // No cancellation source is wired up yet -- see main.rs's module doc comment.
+    // Cancellation reaches this loop and nothing after it. `flush_write`
+    // below blocks inside fsync(2), and the verify after it is passed no
+    // token at all, so a cancel arriving in either phase is not merely
+    // delayed -- it is dropped, and the run goes on to report success.
+    //
+    // Measured writing a 5.9GiB Ubuntu ISO to a USB 3.2 stick (Ubuntu 24.04,
+    // 320s end to end): 7.8s in this loop, 270s flushing, 41s verifying. So
+    // the cancellable window is 2% of the wall clock -- the copy only has to
+    // reach the page cache -- and a Ctrl-C 0.3s into the flush was answered
+    // 310s later with "done." and a hash. Inside the window it does work: a
+    // cancel there ended the run 5.7s after the signal, the lag being one
+    // 4MiB `write_all` finishing under the kernel's dirty-page throttling.
+    //
+    // Left as it is rather than quietly changed, because "stop" past this
+    // point has no single obvious meaning: the bytes are already on their
+    // way to the device, so nothing is saved by abandoning the flush, and
+    // the media it leaves is complete rather than the inconsistent one
+    // `ArgosError::Cancelled` warns about. What a front end must not do is
+    // show a Cancel button that looks live for the other 98%.
     let written_hash = dd_mode::write_stream(
         &mut image,
         &mut device,
