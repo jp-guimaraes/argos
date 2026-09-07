@@ -365,11 +365,9 @@ fn stream_helper_events(
 /// dialog, which is exactly the kind of thing that goes unverified.
 fn no_result_error_from(stderr: &str, succeeded: bool, status_text: &str) -> ArgosError {
     // AppleScript's "User canceled". The dialog was dismissed, so nothing was
-    // elevated and nothing was touched -- which is precisely what
-    // `NotConfirmed` means, and its own doc comment already distinguishes it
-    // from a write interrupted partway.
+    // elevated and nothing was touched.
     if stderr.contains("-128") {
-        return ArgosError::NotConfirmed;
+        return ArgosError::ElevationDeclined;
     }
     if !stderr.trim().is_empty() {
         return ArgosError::Io(std::io::Error::other(format!(
@@ -611,19 +609,25 @@ mod tests {
     }
 
     /// Dismissing the authorization dialog is not a failure to report -- it
-    /// is the user declining, before anything was touched. Verified against
-    /// the real dialog during the G0 spike, where osascript exited 1 with
-    /// this exact text; pinned here so it stays true without needing a human
-    /// to click Cancel.
+    /// is the user declining, before anything was touched.
+    ///
+    /// It must not borrow `NotConfirmed`'s wording, which is about the typed
+    /// device path: someone who cancelled an authorization prompt and was
+    /// told their "confirmation did not match" would reasonably go looking
+    /// for a typo that was never there. Found by a human actually clicking
+    /// Cancel, after the mapping itself was already correct.
     #[test]
-    fn a_dismissed_authorization_dialog_reads_as_not_confirmed() {
+    fn a_dismissed_authorization_dialog_says_authorization_not_confirmation() {
         let err = no_result_error_from(
             "22:256: execution error: User canceled. (-128)",
             false,
             "exit status: 1",
         );
-        assert!(matches!(err, ArgosError::NotConfirmed));
-        assert_eq!(err.exit_code(), 27);
+        assert!(matches!(err, ArgosError::ElevationDeclined));
+        assert_eq!(err.exit_code(), 27, "same meaning as NotConfirmed");
+        let message = err.to_string();
+        assert!(message.contains("authorization"), "{message}");
+        assert!(!message.contains("confirmation did not match"), "{message}");
     }
 
     #[test]
