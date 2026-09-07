@@ -452,6 +452,30 @@ through `StdIoWrapper`), so `windows_fat32` would need reworking. When 0.4.0
 ships, `repair_directory_entries` and the FSINFO note should go with it, and
 the FAT conformance tests on both hosts are what will say whether they can.
 
+### `argos-session`
+
+Everything that happens between a user asking for a write and `argos-helper`
+doing one, with no opinion about how the asking looked. `prepare_write`
+resolves the image to an absolute path, refreshes the device, applies the
+non-negotiable safety gate (`check_device_is_offerable`), classifies the image
+DD-mode-first, runs the preflight checks, and returns a `PreparedWrite`
+carrying the `Plan` plus a `WritePreview` -- the facts a confirmation prompt
+needs, as data rather than as a formatted block. `spawn` then elevates and
+hands over the `Plan`, and `Running::stream` drains the helper's events into
+an `EventSink`.
+
+Two shape decisions worth naming. `spawn` and `stream` are separate calls, so
+the caller holds a `Canceller` *before* it blocks on the event stream; that is
+what lets a GUI button cancel a write, where `argos-cli` previously needed a
+`SIGINT` handler reaching into a mutex. And confirmation is deliberately *not*
+here: each front end owns its own, which is why the retyped-device-path prompt
+still lives in `argos-cli`.
+
+The safety argument for the crate is that there is now one implementation of
+"may I write to this disk?" rather than one per interface. A front end cannot
+weaken it by forgetting a step, and `argos-helper` re-validates everything
+regardless (`protocol::validate_refreshed_device`).
+
 ### `argos-cli`
 
 `argos list` lists every physical disk visible to the current platform backend

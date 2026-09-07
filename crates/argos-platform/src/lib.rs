@@ -7,6 +7,9 @@
 //! `argos-core`'s types -- it never talks to a concrete `argos-platform-*` crate
 //! directly except to pick *which* implementation to construct for the current OS.
 
+#[cfg(feature = "test-fixtures")]
+pub mod fake;
+
 use argos_core::device::Device;
 use argos_core::error::Result;
 use std::path::Path;
