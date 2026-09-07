@@ -147,6 +147,36 @@ pub fn check_device_is_offerable(device: &Device, allow_non_removable: bool) -> 
     Ok(())
 }
 
+/// What kind of image this is, judged on its own -- no device involved.
+///
+/// A front end needs this the moment a file is picked, to say what it found
+/// and to decide whether a layout choice even applies, which is well before
+/// a target has been chosen. [`prepare_write`] makes the same judgement
+/// again, in the same order, when it has both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageKind {
+    /// A hybrid ISO, written byte for byte. It carries its own partition
+    /// table, so `--layout` has nothing to decide.
+    LinuxDd,
+    WindowsInstaller,
+}
+
+/// Classifies `iso` the way [`prepare_write`] will: DD-mode first, then the
+/// Windows-installer shape. `Ok(None)` means neither matched -- a plain data
+/// ISO, or a corrupt one.
+///
+/// Cheap for the DD case (a few sectors); the Windows case reads the image's
+/// directory tree, so a front end should call it off its UI thread.
+pub fn classify_image(iso: &Path) -> Result<Option<ImageKind>> {
+    if image::classify(iso)?.is_writable_as_dd_image() {
+        return Ok(Some(ImageKind::LinuxDd));
+    }
+    if image::windows::classify(iso)?.is_windows_installer_iso() {
+        return Ok(Some(ImageKind::WindowsInstaller));
+    }
+    Ok(None)
+}
+
 /// Resolve, refuse, classify, preflight, and build the `Plan`. Nothing here
 /// is destructive and nothing elevates.
 pub fn prepare_write(platform: &dyn PlatformOps, req: &WriteRequest) -> Result<PreparedWrite> {
@@ -422,6 +452,29 @@ mod tests {
         );
         assert!(!actions.is_empty());
         assert!(layout.total_bytes_required() > 0);
+    }
+
+    #[test]
+    fn a_windows_installer_iso_is_classified_as_one() {
+        let iso = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            iso.path(),
+            argos_core::image::windows::fixtures::udf_windows_installer_iso(true, true),
+        )
+        .unwrap();
+        assert_eq!(
+            classify_image(iso.path()).unwrap(),
+            Some(ImageKind::WindowsInstaller)
+        );
+    }
+
+    /// Anything Argos does not recognize classifies as nothing, rather than
+    /// being guessed into one of the two write paths.
+    #[test]
+    fn an_unrecognized_image_classifies_as_neither() {
+        let iso = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(iso.path(), vec![0u8; 128 * 1024]).unwrap();
+        assert_eq!(classify_image(iso.path()).unwrap(), None);
     }
 
     #[test]

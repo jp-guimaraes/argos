@@ -8,6 +8,7 @@ members = [
     "crates/argos-platform-windows",
     "crates/argos-privileged",
     "crates/argos-session",
+    "crates/argos-gui",
     "crates/argos-cli",
 ]
 
