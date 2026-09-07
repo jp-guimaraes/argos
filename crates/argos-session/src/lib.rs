@@ -25,6 +25,8 @@ pub mod platform;
 pub mod prepare;
 
 pub use argos_core::error::{ArgosError, Result};
+pub use argos_core::progress::Phase;
+pub use argos_privileged::protocol::PhaseWire;
 pub use cancel::Canceller;
 pub use elevate::{spawn, Running};
 pub use events::{EventSink, NoopSink, Outcome, SessionEvent};
