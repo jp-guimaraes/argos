@@ -6,7 +6,7 @@
 //! them. What stayed here is the part that is genuinely about a terminal.
 
 use argos_session::human_size;
-use argos_session::{EventSink, Outcome, SessionEvent};
+use argos_session::{EventSink, Outcome, PhaseWire, SessionEvent};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};
 
@@ -74,7 +74,7 @@ impl Presenter {
 impl EventSink for Presenter {
     fn on_event(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::Phase(phase) => self.set_phase(phase),
+            SessionEvent::Phase(phase) => self.set_phase(phase_label(&phase)),
             SessionEvent::Progress {
                 bytes_done,
                 bytes_total,
@@ -103,6 +103,22 @@ impl EventSink for Presenter {
 
     fn on_failed(&mut self) {
         self.abandon();
+    }
+}
+
+/// The text a phase is shown as.
+///
+/// `Debug` deliberately, not a hand-written table: it is exactly what the
+/// helper used to send as a pre-formatted string, so every label a user has
+/// ever seen ("Writing", "FormattingFat32", ...) is unchanged by the phase
+/// becoming a real type on the wire. A GUI wanting "Gravando" matches on the
+/// `Phase` instead -- which is the whole reason it is typed now.
+fn phase_label(phase: &PhaseWire) -> String {
+    match phase {
+        PhaseWire::Known(phase) => format!("{phase:?}"),
+        // Only reachable against a helper old enough to still send its own
+        // formatted string; showing it verbatim is better than inventing one.
+        PhaseWire::Unknown(raw) => raw.clone(),
     }
 }
 
@@ -197,6 +213,35 @@ mod tests {
             last_reported_at: Instant::now(),
             phase_just_changed: false,
         }
+    }
+
+    /// Every label a user has ever seen must survive the phase becoming a
+    /// real type on the wire. Exhaustive on purpose: adding a `Phase`
+    /// variant should make this list obviously incomplete, and adding one
+    /// without a label is what would silently produce a blank progress bar.
+    #[test]
+    fn every_phase_renders_exactly_as_it_always_has() {
+        use argos_session::Phase;
+        for (phase, expected) in [
+            (Phase::Unmounting, "Unmounting"),
+            (Phase::Checksumming, "Checksumming"),
+            (Phase::Writing, "Writing"),
+            (Phase::Flushing, "Flushing"),
+            (Phase::Verifying, "Verifying"),
+            (Phase::Partitioning, "Partitioning"),
+            (Phase::FormattingFat32, "FormattingFat32"),
+            (Phase::CopyingFiles, "CopyingFiles"),
+        ] {
+            assert_eq!(phase_label(&PhaseWire::Known(phase)), expected);
+        }
+    }
+
+    #[test]
+    fn an_unrecognized_phase_is_shown_verbatim_rather_than_blank() {
+        assert_eq!(
+            phase_label(&PhaseWire::Unknown("SomethingNewer".into())),
+            "SomethingNewer"
+        );
     }
 
     #[test]

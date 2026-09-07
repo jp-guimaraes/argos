@@ -55,6 +55,18 @@ pub enum ArgosError {
     #[error("confirmation did not match; nothing was written and the device is untouched")]
     NotConfirmed,
 
+    /// A failure `argos-helper` reported across the privilege boundary,
+    /// carrying the exit code *it* chose.
+    ///
+    /// Before this existed the unprivileged side wrapped that message in
+    /// [`ArgosError::Io`] and dropped the code, so every helper-side failure
+    /// exited 19 -- a device that turned out to be a system disk, a checksum
+    /// mismatch and a cancelled write were indistinguishable to anything
+    /// scripting `argos`. The message is unchanged; only the code it exits
+    /// with is now the true one.
+    #[error("{message}")]
+    Helper { message: String, exit_code: i32 },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -76,6 +88,9 @@ impl ArgosError {
             ArgosError::UnsupportedIso(_) => 16,
             ArgosError::ChecksumMismatch { .. } => 17,
             ArgosError::Cancelled => 18,
+            // Whatever the helper itself decided; that is the entire point
+            // of carrying it across the boundary.
+            ArgosError::Helper { exit_code, .. } => *exit_code,
             ArgosError::Io(_) => 19,
             ArgosError::NotImplemented(_) => 20,
             ArgosError::NotWindowsInstallerIso(_) => 21,

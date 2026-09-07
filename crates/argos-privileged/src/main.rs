@@ -10,14 +10,9 @@
 //! D-Bus/plist/UDisks2 API, and never lingers waiting for a second command.
 //! The actual logic lives in `lib.rs::execute`/`execute_verify` -- this file
 //! is only stdin/stdout JSON framing and dispatch around them.
-//!
-//! **Known gap**: cancellation is not wired end-to-end yet -- nothing outside
-//! this process can currently trigger the `CancelToken` passed to the write
-//! loop. A future iteration should forward e.g. a caught SIGINT from the
-//! unprivileged parent into a cancel signal here.
 
 use argos_core::progress::{CancelToken, Phase, ProgressSink};
-use argos_privileged::protocol::{self, Event, Plan};
+use argos_privileged::protocol::{self, Event, PhaseWire, Plan};
 use std::io::{BufRead, Write};
 
 fn main() {
@@ -157,7 +152,7 @@ struct JsonlProgress;
 impl ProgressSink for JsonlProgress {
     fn on_phase(&self, phase: Phase) {
         emit(&Event::Phase {
-            phase: format!("{phase:?}"),
+            phase: PhaseWire::Known(phase),
         });
     }
 
