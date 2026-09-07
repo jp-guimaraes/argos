@@ -146,14 +146,9 @@ fn stream_helper_events<R: BufRead>(
             Event::Ejected { device_path, error } => {
                 sink.on_event(SessionEvent::Ejected { device_path, error })
             }
-            Event::Error { message, .. } => {
+            Event::Error { message, exit_code } => {
                 sink.on_failed();
-                // The helper's own `exit_code` is discarded here, so every
-                // helper-side failure surfaces as 19. That is a real defect,
-                // and it is deliberately left alone in this refactor: fixing
-                // it changes a user-visible exit code, so it belongs to its
-                // own change (#89) rather than hiding inside a move.
-                outcome = Some(Err(ArgosError::Io(std::io::Error::other(message))));
+                outcome = Some(Err(ArgosError::Helper { message, exit_code }));
             }
         }
     }
@@ -181,6 +176,8 @@ fn command_exists(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use argos_core::progress::Phase;
+    use argos_privileged::protocol::PhaseWire;
     use std::io::Cursor;
 
     #[derive(Default)]
@@ -211,7 +208,8 @@ mod tests {
     #[test]
     fn progress_reaches_the_sink_in_order_and_settles_on_done() {
         let (sink, outcome) = drain(concat!(
-            r#"{"event":"phase","phase":"Writing"}"#,
+            // The wire form a current helper emits: snake_case, typed.
+            r#"{"event":"phase","phase":"writing"}"#,
             "\n",
             r#"{"event":"progress","bytes_done":1,"bytes_total":4}"#,
             "\n",
@@ -221,7 +219,7 @@ mod tests {
         assert_eq!(
             sink.events,
             vec![
-                SessionEvent::Phase("Writing".into()),
+                SessionEvent::Phase(PhaseWire::Known(Phase::Writing)),
                 SessionEvent::Progress {
                     bytes_done: 1,
                     bytes_total: 4
@@ -259,16 +257,39 @@ mod tests {
         assert!(err.to_string().contains("device is gone"));
     }
 
-    /// Pins the defect deliberately left in place by this refactor, so #89
-    /// has something to change and nobody "fixes" it here by accident.
+    /// The defect this milestone exists to fix: the helper's own code used to
+    /// be dropped on the floor here, so a system disk (12), a checksum
+    /// mismatch (17) and a cancelled write (18) all exited 19.
     #[test]
-    fn the_helpers_exit_code_is_still_discarded_pending_issue_89() {
-        let (_, outcome) = drain(concat!(
-            r#"{"event":"error","message":"system disk","exit_code":12}"#,
+    fn the_helpers_own_exit_code_survives_the_boundary() {
+        for (message, code) in [("system disk", 12), ("checksum", 17), ("cancelled", 18)] {
+            let line =
+                format!(r#"{{"event":"error","message":"{message}","exit_code":{code}}}"#) + "\n";
+            let (_, outcome) = drain(&line);
+            let err = outcome.expect("settled").expect_err("must be an error");
+            assert_eq!(err.exit_code(), code, "for {message}");
+            // The text a user sees is unchanged; only the code is now true.
+            assert_eq!(err.to_string(), message);
+        }
+    }
+
+    /// An old helper's `Debug`-formatted phase still reaches the sink rather
+    /// than being dropped, just without a type to match on.
+    #[test]
+    fn a_phase_from_an_older_helper_degrades_instead_of_vanishing() {
+        let (sink, _) = drain(concat!(
+            r#"{"event":"phase","phase":"Writing"}"#,
+            "\n",
+            r#"{"event":"phase","phase":"writing"}"#,
             "\n",
         ));
-        let err = outcome.expect("settled").expect_err("must be an error");
-        assert_eq!(err.exit_code(), 19, "still Io(..) until #89 lands");
+        assert_eq!(
+            sink.events,
+            vec![
+                SessionEvent::Phase(PhaseWire::Unknown("Writing".into())),
+                SessionEvent::Phase(PhaseWire::Known(Phase::Writing)),
+            ]
+        );
     }
 
     #[test]

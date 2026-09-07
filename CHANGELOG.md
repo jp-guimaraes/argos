@@ -3,6 +3,31 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`argos` now exits with the code the privileged helper actually reported.**
+  Every failure that happened inside `argos-helper` -- a device that turned
+  out to be a system disk (12), a checksum mismatch after writing (17), a
+  cancelled write (18) -- exited **19** instead, because the unprivileged
+  side wrapped the helper's message in a generic I/O error and dropped the
+  `exit_code` the helper had gone to the trouble of sending. Anything
+  scripting `argos` could tell "it failed" from "it worked" and nothing more.
+  The messages themselves are unchanged; only the code is now the true one.
+  Found while extracting `argos-session`.
+
+### Changed
+
+- **The write phase now crosses the privilege boundary as a value rather than
+  as a `Debug`-formatted string.** No visible difference -- every phase label
+  a user has ever seen is byte-identical, and both binaries ship together in
+  every package Argos produces -- but a front end can now *match* on the
+  phase to label it in the user's own language, and renaming one is a compile
+  error instead of a silently unlabelled progress bar. An older helper's
+  string form still parses, so a mixed pair degrades to an odd-looking label
+  rather than a dropped event.
+
 ## [1.5.5] - 2026-09-04
 
 ### Changed

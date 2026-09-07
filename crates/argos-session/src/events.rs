@@ -6,15 +6,17 @@
 //! result strings inside the stream loop; splitting the two is what lets a
 //! GUI render the same run without reimplementing either half.
 
+use argos_privileged::protocol::PhaseWire;
+
 /// Progress, as a front end cares about it.
 ///
-/// `Phase` is still the helper's `Debug`-formatted string here, unchanged
-/// from what `argos-cli` has always received. Giving it a real type is a
-/// protocol change, and it belongs to its own milestone (#89) rather than to
-/// this refactor, whose whole claim is that nothing observable moved.
+/// The phase arrives as a [`PhaseWire`], so a front end can *match* on
+/// `Known(Phase)` to label it in the user's own language, and still has the
+/// raw string for the `Unknown` case a version-skewed helper could produce.
+/// How it is worded is presentation, and stays with the front end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
-    Phase(String),
+    Phase(PhaseWire),
     Progress {
         bytes_done: u64,
         bytes_total: u64,
@@ -101,11 +103,15 @@ mod tests {
 
     #[test]
     fn a_closure_can_serve_as_a_sink() {
+        use argos_core::progress::Phase;
         let mut seen = Vec::new();
         {
             let mut sink = |event: SessionEvent| seen.push(event);
-            sink.on_event(SessionEvent::Phase("Writing".into()));
+            sink.on_event(SessionEvent::Phase(PhaseWire::Known(Phase::Writing)));
         }
-        assert_eq!(seen, vec![SessionEvent::Phase("Writing".into())]);
+        assert_eq!(
+            seen,
+            vec![SessionEvent::Phase(PhaseWire::Known(Phase::Writing))]
+        );
     }
 }

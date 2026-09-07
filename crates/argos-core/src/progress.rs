@@ -3,10 +3,21 @@
 //! CLI can render an `indicatif` bar today and a future GUI can drive its own
 //! widgets tomorrow without touching `argos-core`.
 
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Serialize`/`Deserialize` because this crosses the privilege boundary as
+/// itself, rather than as a `Debug`-formatted string (backlog #89): a front
+/// end that wants to label a phase in the user's own language has to be able
+/// to *match* on it, and a rename must then be a compile error rather than a
+/// silently unlabelled progress bar.
+///
+/// `snake_case` on the wire, which is what makes an old helper's
+/// `"Writing"` and a new one's `"writing"` distinguishable -- see
+/// `argos_privileged::protocol::PhaseWire`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Phase {
     Unmounting,
     Checksumming,
