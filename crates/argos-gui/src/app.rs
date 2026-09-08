@@ -52,6 +52,17 @@ pub struct ArgosApp {
     /// Which theme is currently applied, so the palette is rebuilt only when
     /// the system actually switches rather than every frame.
     applied_dark: Option<bool>,
+
+    /// The desktop's own answer, read from the XDG portal on Linux -- see
+    /// `linux_theme`'s module doc for why `ctx.theme()` alone is not enough
+    /// there. Always `None` on other platforms, where it correctly is; this
+    /// field is not `cfg`-gated so `sync_theme` stays one function on every
+    /// OS rather than growing a platform branch of its own.
+    system_dark_preference: Option<bool>,
+    #[cfg(target_os = "linux")]
+    polling_theme: bool,
+    #[cfg(target_os = "linux")]
+    last_theme_poll: Option<Instant>,
 }
 
 impl ArgosApp {
@@ -75,6 +86,11 @@ impl ArgosApp {
             classifying: false,
             bios_layout: false,
             applied_dark: None,
+            system_dark_preference: None,
+            #[cfg(target_os = "linux")]
+            polling_theme: false,
+            #[cfg(target_os = "linux")]
+            last_theme_poll: None,
         }
     }
 
@@ -113,6 +129,35 @@ impl ArgosApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let _ = tx.send(WorkerMsg::Devices(platform.list_removable_disks()));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Only meaningful on Linux -- see `linux_theme`'s module doc for why
+    /// `ctx.theme()` alone is not the source of truth there. A D-Bus round
+    /// trip to a local socket is cheap, but a write's own progress events
+    /// already dominate the channel during `Running`, so this is polled on
+    /// the same cadence and single-flighted the same way device enumeration
+    /// is, rather than given its own busier loop.
+    #[cfg(target_os = "linux")]
+    fn maybe_poll_system_theme(&mut self, ctx: &egui::Context) {
+        if self.polling_theme {
+            return;
+        }
+        let due = self
+            .last_theme_poll
+            .is_none_or(|at| at.elapsed() >= POLL_INTERVAL);
+        if !due {
+            return;
+        }
+
+        self.polling_theme = true;
+        self.last_theme_poll = Some(Instant::now());
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let preference = crate::linux_theme::read_system_dark_preference();
+            let _ = tx.send(WorkerMsg::SystemDarkPreference(preference));
             ctx.request_repaint();
         });
     }
@@ -185,6 +230,13 @@ impl ArgosApp {
                         }
                     }
                 }
+                WorkerMsg::SystemDarkPreference(preference) => {
+                    #[cfg(target_os = "linux")]
+                    {
+                        self.polling_theme = false;
+                    }
+                    self.system_dark_preference = preference;
+                }
                 other => self.state = crate::state::reduce(std::mem::take(&mut self.state), other),
             }
         }
@@ -231,6 +283,8 @@ impl eframe::App for ArgosApp {
         // progress events and falling behind would show stale numbers.
         self.take_messages();
         self.maybe_enumerate(ctx, false);
+        #[cfg(target_os = "linux")]
+        self.maybe_poll_system_theme(ctx);
         self.accept_dropped_iso(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -264,7 +318,14 @@ impl ArgosApp {
     /// Follows the desktop's light/dark setting, rebuilding the palette only
     /// when it actually changes.
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        let dark = ctx.theme() == egui::Theme::Dark;
+        // The portal answer wins when there is one: on Linux, `ctx.theme()`
+        // is `winit`'s guess, which is correct under Wayland but on X11 is
+        // always `Dark` regardless of the desktop's setting -- see
+        // `linux_theme`'s module doc. `None` here (macOS, or a Linux desktop
+        // with no portal running) falls through to that guess unchanged.
+        let dark = self
+            .system_dark_preference
+            .unwrap_or_else(|| ctx.theme() == egui::Theme::Dark);
         if self.applied_dark != Some(dark) {
             theme::apply(ctx, dark);
             self.applied_dark = Some(dark);

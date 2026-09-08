@@ -70,6 +70,21 @@ pub struct RunState {
 /// What a worker thread sends back to the UI thread.
 pub enum WorkerMsg {
     Devices(Result<Vec<Device>, ArgosError>),
+    /// The desktop's light/dark preference, read from the XDG portal because
+    /// `winit` never reports one on X11 -- see `linux_theme`'s module doc.
+    /// `None` means the portal gave no opinion (or none is running), which
+    /// leaves `ctx.theme()`'s own guess in charge. Handled in `app.rs`
+    /// alongside `Devices`, not by `reduce()`: it describes an input, not a
+    /// step in the write flow.
+    ///
+    /// Only ever sent on Linux (`app.rs`'s poll is `cfg(target_os =
+    /// "linux")`); the variant itself stays unconditional so `reduce()`'s
+    /// match does not grow a platform branch of its own.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only constructed by the Linux theme poll")
+    )]
+    SystemDarkPreference(Option<bool>),
     /// What kind of image was picked, judged without a device. Handled by the
     /// app rather than the reducer: it describes the *inputs*, not what the
     /// app is doing.
@@ -128,7 +143,10 @@ pub fn reduce(state: AppState, msg: WorkerMsg) -> AppState {
         // These describe the inputs, not what the app is doing, and the app
         // keeps them itself. Passing them through here would mean every state
         // having to hand them back unchanged.
-        (state, WorkerMsg::Devices(_) | WorkerMsg::Classified(_)) => state,
+        (
+            state,
+            WorkerMsg::Devices(_) | WorkerMsg::Classified(_) | WorkerMsg::SystemDarkPreference(_),
+        ) => state,
 
         (AppState::Preparing, WorkerMsg::Prepared(Ok(prepared))) => {
             AppState::AwaitingConfirmation {

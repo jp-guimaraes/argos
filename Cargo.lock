@@ -274,6 +274,7 @@ dependencies = [
  "egui",
  "rfd",
  "tempfile",
+ "zbus",
 ]
 
 [[package]]
