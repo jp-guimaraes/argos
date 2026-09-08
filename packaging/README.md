@@ -68,12 +68,20 @@ Not this repository -- see [`jp-guimaraes/homebrew-argos`](https://github.com/jp
 
 ## Arch / pacman (AUR)
 
-`packaging/aur/PKGBUILD` builds `argos`, `argos-helper` and `argos-gui`
-from a tagged release tarball, same shape as the `.deb` and the Homebrew
-formula: all three binaries side by side, the man page and shell
-completions generated from the built binary rather than kept as separate
-files, and the GUI's `.desktop`, icon and polkit policy installed
-alongside them.
+`packaging/aur/PKGBUILD` builds `argos` and `argos-helper` from a tagged
+release tarball, same shape as the `.deb` and the Homebrew formula: both
+binaries side by side, and the man page and shell completions generated
+from the built binary rather than kept as separate files.
+
+**Not `argos-gui` yet.** `source=` pins a tagged release tarball on
+purpose -- that is what proves the real `sha256sums` and build steps work,
+not just this checkout -- and no tag published so far contains the
+`argos-gui` crate or `packaging/linux/argos.desktop`; phase 4 has not
+shipped a release. `build()`'s comment in the PKGBUILD spells out exactly
+what to add once one has: `-p argos-gui`, the three GUI assets, and the
+two extra runtime `depends`. The `.deb` (above) is not affected by this --
+`packaging/build-deb.sh` always builds *this checkout*, never a tagged
+tarball.
 
 Validated the same way as the `.deb`: built for real with `makepkg` inside
 a plain `archlinux:base-devel` container (CI does this on every push --
