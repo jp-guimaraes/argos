@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Argos
+GenericName=USB Installer Writer
+GenericName[pt_BR]=Gravador de Instaladores USB
+Comment=Write a bootable Windows or Linux installer USB drive
+Comment[pt_BR]=Grave um pendrive de instalação inicializável do Windows ou Linux
+Keywords=USB;ISO;installer;boot;bootable;live;Windows;Linux;write;flash;
+Keywords[pt_BR]=USB;ISO;instalador;boot;inicializável;live;Windows;Linux;gravar;pendrive;
+Exec=argos-gui
+Icon=argos
+Terminal=false
+Categories=System;
+# Must equal APP_ID in crates/argos-gui/src/app.rs (the with_app_id() value
+# passed to eframe), or the taskbar shows a generic icon instead of ours --
+# locked to that constant by a test in argos-gui rather than kept in sync by
+# hand (#94/G7.3).
+StartupWMClass=argos-gui

@@ -38,10 +38,33 @@ assets = [
     # ordinary crate-relative, which is why they carry ../../.
     ["target/release/argos", "usr/bin/", "755"],
     ["target/release/argos-helper", "usr/bin/", "755"],
+    ["target/release/argos-gui", "usr/bin/", "755"],
     ["../../target/deb-assets/argos.1", "usr/share/man/man1/", "644"],
     ["../../target/deb-assets/argos.bash", "usr/share/bash-completion/completions/argos", "644"],
     ["../../target/deb-assets/_argos", "usr/share/zsh/vendor-completions/_argos", "644"],
     ["../../target/deb-assets/argos.fish", "usr/share/fish/vendor_completions.d/argos.fish", "644"],
+    # The GUI's launcher entry, icon and elevation policy (#94/G7). The
+    # policy predates this milestone (#100/G3) but was never installed by
+    # anything until now -- a dev build run from target/release/ matches no
+    # polkit action either way (packaging/README.md explains why that is
+    # fine), so this is the first place the friendly authorization message
+    # is actually seen rather than pkexec's generic one.
+    ["../../packaging/linux/argos.desktop", "usr/share/applications/", "644"],
+    [
+        "../../packaging/linux/icons/hicolor/scalable/apps/argos.svg",
+        "usr/share/icons/hicolor/scalable/apps/",
+        "644",
+    ],
+    [
+        "../../packaging/linux/icons/hicolor/256x256/apps/argos.png",
+        "usr/share/icons/hicolor/256x256/apps/",
+        "644",
+    ],
+    [
+        "../../packaging/linux/org.argos.helper.policy",
+        "usr/share/polkit-1/actions/",
+        "644",
+    ],
 ]
 
 [dependencies]

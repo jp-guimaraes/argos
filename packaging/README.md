@@ -8,8 +8,10 @@ packaging/build-deb.sh
 
 Builds the whole workspace, generates shell completions and the man page
 from the built `argos` binary (`argos completions <shell>` / `argos man`,
-backlog #46) rather than keeping hand-maintained copies that can drift, and
-packages `argos` + `argos-helper` together with [`cargo-deb`][cargo-deb]
+backlog #46) rather than keeping hand-maintained copies that can drift,
+validates `argos.desktop` with `desktop-file-validate` (#94/G7.6), and
+packages `argos` + `argos-helper` + `argos-gui` -- plus the GUI's launcher
+entry, icon and polkit policy -- together with [`cargo-deb`][cargo-deb]
 into `target/debian/argos_<version>-1_<arch>.deb`.
 
 Install the result with:
@@ -71,6 +73,16 @@ release tarball, same shape as the `.deb` and the Homebrew formula: both
 binaries side by side, and the man page and shell completions generated
 from the built binary rather than kept as separate files.
 
+**Not `argos-gui` yet.** `source=` pins a tagged release tarball on
+purpose -- that is what proves the real `sha256sums` and build steps work,
+not just this checkout -- and no tag published so far contains the
+`argos-gui` crate or `packaging/linux/argos.desktop`; phase 4 has not
+shipped a release. `build()`'s comment in the PKGBUILD spells out exactly
+what to add once one has: `-p argos-gui`, the three GUI assets, and the
+two extra runtime `depends`. The `.deb` (above) is not affected by this --
+`packaging/build-deb.sh` always builds *this checkout*, never a tagged
+tarball.
+
 Validated the same way as the `.deb`: built for real with `makepkg` inside
 a plain `archlinux:base-devel` container (CI does this on every push --
 see `aur-package` in `.github/workflows/ci.yml`), then checked with
@@ -113,14 +125,35 @@ makepkg --printsrcinfo > packaging/aur/.SRCINFO
 
 [cargo-deb]: https://github.com/kornelski/cargo-deb
 
+## The GUI's desktop integration (`linux/argos.desktop`, `linux/icons/`)
+
+`argos.desktop` is what makes `argos-gui` show up in an application menu at
+all, rather than being reachable only from a terminal. `StartupWMClass`
+inside it must equal `APP_ID` in `crates/argos-gui/src/app.rs` (the value
+passed to eframe's `with_app_id()`) or the taskbar shows a generic icon for
+a running window instead of ours -- locked together by
+`the_desktop_file_names_the_same_app_id_eframe_uses` in `argos-gui`'s own
+tests, rather than trusted to stay in sync by hand.
+
+The icon is a plain geometric USB stick in the design's own accent colour
+(`theme.rs`'s `LIGHT.accent`, `#2B6E62`), not an illustrated mascot --
+`draw_header` already reserves a 168x42 sprite for one, but that needs an
+illustrator's frames this repository does not have, and a vendored binary
+asset is exactly what decision M6.1 already declined for a boot record.
+Both the scalable SVG and a rendered 256x256 PNG are installed under
+`hicolor`, the icon theme every Linux desktop falls back to.
+
 ## The polkit policy (`linux/org.argos.helper.policy`)
 
-Installed to `/usr/share/polkit-1/actions/`. Without it `pkexec` still works
-and still authenticates -- it falls back to its generic action and says
-"Authentication is required to run /usr/bin/argos-helper as the super user",
-which tells a user nothing about what is about to happen to their disk. With
-it, the dialog says so, in English or Brazilian Portuguese depending on the
-session locale.
+Installed to `/usr/share/polkit-1/actions/` by both the `.deb` and the AUR
+package -- the file itself has existed since #100 (G3), but nothing
+installed it anywhere until this milestone (#94/G7), so the friendly
+message below was never actually seen outside of a hand-copied test.
+Without it `pkexec` still works and still authenticates -- it falls back to
+its generic action and says "Authentication is required to run
+/usr/bin/argos-helper as the super user", which tells a user nothing about
+what is about to happen to their disk. With it, the dialog says so, in
+English or Brazilian Portuguese depending on the session locale.
 
 Two things worth knowing rather than working around:
 
