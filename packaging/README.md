@@ -62,9 +62,148 @@ those two files is correct) *and* setting `[profile.release] strip = true`
 in the workspace root `Cargo.toml`, which strips at build time regardless
 of which tool does the building or how it's invoked afterward.
 
-## Homebrew (macOS)
+## macOS `.app` / `.dmg`
+
+```sh
+packaging/build-macos-app.sh
+```
+
+Builds the workspace (unless given an existing binary directory as its one
+argument -- see below), then hand-assembles `target/macos/Argos.app` and
+`target/macos/Argos-<version>.dmg`. No `cargo-bundle`: the bundle needs three
+binaries from three different crates side by side (`argos` from `argos-cli`,
+`argos-gui` from `argos-gui`, `argos-helper` from `argos-privileged`), plus a
+`lipo` step for the universal release build and an `hdiutil` step, none of
+which a bundler does -- the same reasoning that put `build-deb.sh` here
+instead of `cargo deb -p argos-cli` alone.
+
+All three binaries land in `Contents/MacOS/`, not the more conventional
+`Contents/Resources/` or `Contents/Helpers/`. That placement is load-bearing,
+not a style choice: `locate_helper_binary()` (in `argos-session`, shared by
+the CLI and the GUI) looks for `argos-helper` as a sibling of
+`current_exe()`, and `current_exe()` resolves symlinks -- so a
+double-clicked `Argos.app` finds its helper with no code change at all, the
+same way a plain `target/release/` checkout does. Moving the helper
+elsewhere, which sounds tidier, breaks that lookup.
+
+The icon is generated from `packaging/macos/icon-1024.png` via `sips` (to
+produce every size an `.iconset` needs) and `iconutil -c icns` -- both ship
+with the Xcode Command Line Tools, so building the icon costs no extra
+dependency. The `.icns` itself is never committed, matching
+`build-deb.sh`/`PKGBUILD`'s general posture of generating packaging
+artifacts rather than hand-maintaining them; the PNG *is* committed, the
+same way the Linux `.desktop` icon is, rather than being generated from the
+`.svg` at build time -- that would need an SVG rasterizer as a build
+dependency this project does not otherwise have a reason to carry. Both
+icons are the same artwork (a USB stick, the one object this app actually
+writes to), rasterized once from `packaging/linux/icons/hicolor/scalable/apps/argos.svg`.
+
+`LSMinimumSystemVersion` in the generated `Info.plist` is `11.0`, read off a
+real built binary (`otool -l target/release/argos-gui`, the `LC_BUILD_VERSION`
+load command's `minos` field) rather than guessed -- it is whatever the
+Rust/Xcode toolchain already targets by default on this project's supported
+hosts.
+
+### Universal binaries
+
+`packaging/build-macos-app.sh <bin-dir>`, given an existing directory of
+binaries, skips its own `cargo build` and packages whatever is there
+instead. The release workflow's `macos-app` job uses this: it downloads both
+Darwin targets' already-built tarballs (from the `build` job), `lipo`s
+`argos`, `argos-gui` and `argos-helper` from each into one universal set,
+and hands that directory to the script -- asking a lab user whether their
+Mac is Intel or Apple Silicon is exactly the friction the GUI exists to
+remove. A local, single-architecture build (`packaging/build-macos-app.sh`,
+no argument) is for development and does not need this.
+
+### Unsigned, on purpose -- for this phase
+
+`spctl -a -vv target/macos/Argos.app` reports `rejected, source=no usable
+signature`; a quarantined `Argos.app` downloaded from a browser will be
+refused on first open by Gatekeeper, with `xattr -dr com.apple.quarantine`
+as the documented way past it (see the main `README.md`). Signing and
+notarizing were deliberately not done in this phase: a paid Developer ID
+(US$99/yr) plus notarization on every release, for a project whose macOS
+install story already has a better answer -- **Homebrew never sets the
+quarantine bit**, sidestepping Gatekeeper entirely, and the tap
+[`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos)
+already exists for the CLI. The `.dmg` is the convenience download for
+people who want the GUI without a Rust toolchain, not the primary
+distribution path.
+
+Confirmed live, on macOS 26.6.2: a hand-set quarantine attribute
+(`xattr -w com.apple.quarantine`) followed by `open`-ing the app did *not*
+trigger a block, but directly executing the quarantined binary (as a build
+script's own verification step did, by accident, while this was being
+written) did -- a real, on-screen dialog reading:
+
+> Apple could not verify "Argos" is free of malware that may harm your Mac
+> or compromise your privacy.
+
+which is the current (post-Ventura) wording, not the older "is from an
+unidentified developer" or "is damaged and can't be opened" phrasing some
+older guides still describe. The dialog itself carries no "Open Anyway"
+button in this version -- that lives in System Settings -> Privacy &
+Security, as the main `README.md` already documents. Whether a plain Finder
+double-click reaches the identical dialog (rather than the direct-execve
+path that triggered it here) was not separately confirmed, but the
+wording itself is not expected to depend on how the blocked launch was
+attempted.
+
+### Full Disk Access (TCC), not a signing problem
+
+A write from `Argos.app` fails right after unmounting with a plain
+`Operation not permitted (os error 1)` unless the app (or `argos-helper`
+inside it) has **Full Disk Access** (System Settings -> Privacy & Security).
+This is unrelated to code signing -- confirmed with `log stream --predicate
+'subsystem == "com.apple.TCC" OR process == "argos-helper"'` while
+reproducing it for real: the same permission macOS requires of Disk Utility
+and similar tools for raw removable-device access, denied
+(`authValue=0, authReason=5`) until granted and allowed
+(`authValue=2, authReason=4`) after, confirmed end to end with a real
+write-verify-eject against physical media. Full history and the log
+evidence: issue #102 (closed). Two things not yet confirmed, tracked as
+issue #107:
+
+- Whether the grant survives a rebuild -- the development binary carries an
+  **ad-hoc** signature (a hash of its own contents, changing on every
+  rebuild), and TCC remembers a grant by code identity. A universal `.app`
+  built with a *stable* signing identity (even a free, non-Developer-ID one)
+  may not have this problem; untested.
+- Whether a first-ever run of a never-granted `argos-helper` shows an actual
+  consent dialog, or fails silently the way it did in testing (which had
+  already had the permission removed and re-added by hand, not a truly
+  virgin binary).
+
+### Homebrew (macOS)
 
 Not this repository -- see [`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos).
+
+The tap's existing formula builds the CLI from source, which is also why it
+never hits Gatekeeper at all -- a local build has no quarantine bit to trip
+over. The GUI is a different shape of artifact (a `.app` bundle, not a bare
+binary in `PATH`) and needs a Homebrew **cask**, not a formula change; casks
+are how Homebrew installs a pre-built `.app` into `/Applications`. Not done
+here: like the AUR publish step below, it needs a commit to a separate
+repository the maintainer controls. A starting point, once ready:
+
+```ruby
+cask "argos" do
+  version "<version>"
+  sha256 "<sha256 of Argos-<version>.dmg>"
+
+  url "https://github.com/jp-guimaraes/argos/releases/download/v#{version}/Argos-#{version}.dmg"
+  name "Argos"
+  desc "Create bootable Windows and Linux installer USB drives"
+  homepage "https://github.com/jp-guimaraes/argos"
+
+  app "Argos.app"
+
+  zap trash: [
+    "~/Library/Application Support/argos",
+  ]
+end
+```
 
 ## Arch / pacman (AUR)
 

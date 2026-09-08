@@ -32,8 +32,11 @@ from both hosts and on both firmwares — see the
 - **Hosts**: Linux and macOS, both implemented — including for Windows media,
   which needs no `mkfs`, no FUSE and no Windows machine anywhere in the
   process. Windows-as-host is out of scope for now.
-- **Interface**: a CLI (`argos`), architected so a GUI can be added later
-  without reworking the core logic. No GUI exists today.
+- **Interface**: a CLI (`argos`) and a single-window GUI (`argos-gui`,
+  currently macOS and Linux), sharing one implementation of every safety
+  check -- there is no separate, weaker path through the window. Not yet in
+  a tagged release; see [Installation](#installation) below for where each
+  one is available.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and a
 per-area status table, [`CHANGELOG.md`](CHANGELOG.md) for what shipped in
@@ -88,6 +91,35 @@ directory; `argos` looks for `argos-helper` next to itself first). Neither
 binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on
 first launch until you approve it once in System Settings -> Privacy &
 Security.
+
+### GUI (macOS, `.dmg`)
+
+Each release also attaches a universal `Argos-<version>.dmg` (Apple Silicon
+and Intel in one file) -- open it, drag `Argos.app` into `Applications`.
+
+It is unsigned and unnotarized, the same decision as the CLI binaries above
+and for the same reason: this project's macOS install story is Homebrew,
+which never sets the quarantine bit that triggers Gatekeeper in the first
+place, so the `.dmg` is a convenience download rather than the primary path.
+A downloaded, quarantined `Argos.app` will be refused on first open. Clear
+the quarantine attribute once, from a terminal:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Argos.app
+```
+
+or, from Finder: System Settings -> Privacy & Security -> scroll to the
+bottom, where an "Open Anyway" button appears after the first blocked
+attempt.
+
+Once running, `Argos.app` needs **Full Disk Access** (System Settings ->
+Privacy & Security -> Full Disk Access) to write to a removable drive -- the
+same permission macOS requires of Disk Utility and similar tools. Without it,
+a write fails right after unmounting with a plain `Operation not permitted`;
+grant the permission (add `Argos.app`, or `argos-helper` inside it, to the
+list) and try again.
+
+Not yet available as a Homebrew cask -- see `packaging/README.md`.
 
 ### Via `cargo install`
 

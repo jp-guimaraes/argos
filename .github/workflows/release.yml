@@ -38,7 +38,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }} -p argos-cli -p argos-privileged
+
+      # eframe/argos-gui needs X11/xkb headers to *build* here, same as
+      # ci.yml's clippy/test/deb-package jobs (phase 4 G4/G7). glow and
+      # winit dlopen libGL and the Wayland libraries at runtime, so no
+      # -dev package is needed for those.
+      - if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev \
+                                  libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - run: cargo build --release --target ${{ matrix.target }} -p argos-cli -p argos-privileged -p argos-gui
 
       # Debian packaging (backlog #46): only makes sense for the glibc Linux
       # target, and packaging/build-deb.sh assumes an untargeted build
@@ -58,6 +69,12 @@ jobs:
           path: target/debian/argos_*.deb
           if-no-files-found: error
 
+      # argos-gui ships in the same tarball as argos and argos-helper, not a
+      # separate one: locate_helper_binary() (shared by both front ends)
+      # looks for the helper as a sibling of whichever binary is running, so
+      # splitting them invites a mismatched pair and "the GUI can't find its
+      # helper" as a confusing failure mode. One product, one version, one
+      # archive.
       - name: Package
         env:
           TARGET: ${{ matrix.target }}
@@ -66,6 +83,7 @@ jobs:
           stage="argos-${TAG}-${TARGET}"
           mkdir "$stage"
           cp "target/${TARGET}/release/argos" "$stage/"
+          cp "target/${TARGET}/release/argos-gui" "$stage/"
           cp "target/${TARGET}/release/argos-helper" "$stage/"
           cp README.md LICENSE-MIT LICENSE-APACHE "$stage/"
           tar czf "${stage}.tar.gz" "$stage"
@@ -76,9 +94,46 @@ jobs:
           path: argos-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
+  macos-app:
+    name: build the universal .app and .dmg
+    # Phase 4 G8 (#95): a lab user should never have to know whether their
+    # Mac is Intel or Apple Silicon, which is exactly the friction the GUI
+    # exists to remove. Needs `build` to have produced both Darwin tarballs
+    # first, so this job lipo's their contents together rather than
+    # rebuilding either target itself.
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: argos-*-apple-darwin
+          path: dist
+          merge-multiple: true
+      - name: Extract both per-arch tarballs and lipo them into one universal set
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p universal
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p "extract/$target"
+            tar xzf "dist/argos-${TAG}-${target}.tar.gz" -C "extract/$target" --strip-components=1
+          done
+          for bin in argos argos-gui argos-helper; do
+            lipo -create -output "universal/$bin" \
+              "extract/aarch64-apple-darwin/$bin" "extract/x86_64-apple-darwin/$bin"
+            lipo -info "universal/$bin"
+          done
+      - run: packaging/build-macos-app.sh universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: argos-dmg
+          path: target/macos/Argos-*.dmg
+          if-no-files-found: error
+
   release:
     name: publish release
-    needs: build
+    needs: [build, macos-app]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,11 +141,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create the GitHub Release and attach every target's tarball, plus the .deb
+      - name: Create the GitHub Release and attach every target's tarball, the .deb, and the universal .dmg
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" dist/*.tar.gz dist/*.deb \
+          gh release create "${{ github.ref_name }}" dist/*.tar.gz dist/*.deb dist/*.dmg \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes
