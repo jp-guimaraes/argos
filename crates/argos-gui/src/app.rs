@@ -6,13 +6,15 @@
 //! rather than one per interface.
 
 use crate::devices::{offerable, reconcile, Selection, SelectionOutcome};
-use crate::state::{confirmation_matches, AppState, WorkerMsg};
+use crate::state::{confirmation_matches, AppState, RunState, WorkerMsg};
 use crate::theme::{self, metric};
 use argos_core::device::Device;
-use argos_core::error::ArgosError;
 use argos_platform::PlatformOps;
-use argos_privileged::protocol::WindowsLayout;
-use argos_session::{self as session, human_size, ImageKind, WritePreview};
+use argos_privileged::protocol::{Plan, WindowsLayout};
+use argos_session::{
+    self as session, human_size, ElevationUi, EventSink, ImageKind, Outcome, SessionEvent,
+    WritePreview,
+};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -154,6 +156,68 @@ impl ArgosApp {
             let result = session::prepare_write(&*platform, &request).map(Box::new);
             let _ = tx.send(WorkerMsg::Prepared(result));
             ctx.request_repaint();
+        });
+    }
+
+    /// Elevates and streams a plan already built and confirmed (a write, once
+    /// the user retyped the device path) or one that never needed confirming
+    /// (a verify, which never writes). One worker thread, one code path for
+    /// both, since from here on they are identical: `session::spawn` and
+    /// `Running::stream` do not know or care which they were handed.
+    ///
+    /// Always `ElevationUi::Graphical`: a windowed app has no controlling
+    /// terminal for `sudo` to ask a password on, which is the whole reason
+    /// that route exists (#90/#100).
+    fn spawn_run(tx: Sender<WorkerMsg>, ctx: egui::Context, plan: Plan) {
+        std::thread::spawn(move || {
+            match session::spawn(&plan, ElevationUi::Graphical) {
+                Ok(running) => {
+                    let canceller = running.canceller();
+                    let _ = tx.send(WorkerMsg::Started(canceller));
+                    ctx.request_repaint();
+                    let mut sink = ThrottledSink::new(tx.clone(), ctx.clone());
+                    let outcome = running.stream(&mut sink);
+                    let _ = tx.send(WorkerMsg::Finished(outcome));
+                }
+                Err(err) => {
+                    let _ = tx.send(WorkerMsg::Finished(Err(err)));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Verify's counterpart to `begin_preparation`+the confirm click: no
+    /// confirmation step exists for it (it never writes), so preparing and
+    /// starting happen in one worker-thread lifetime rather than a
+    /// round-trip through the UI. The moment the thread starts, the screen
+    /// already shows the running view -- its "working out the total" spinner
+    /// (`fraction() == None`, since `bytes_total` starts at 0) *is* what
+    /// preparing a verify looks like; a separate spinner state would only
+    /// duplicate it.
+    fn begin_verification(&mut self, ctx: &egui::Context) {
+        let (Some(iso), Some(selection)) = (self.iso.clone(), self.selection.clone()) else {
+            return;
+        };
+        let device_id = selection.platform_id.clone();
+        self.state = AppState::Running(RunState::for_verify(device_id));
+        let platform = Arc::clone(&self.platform);
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        let layout = self.layout();
+        std::thread::spawn(move || {
+            let request = session::VerifyRequest {
+                device_id: selection.platform_id,
+                iso,
+                layout,
+            };
+            match session::prepare_verify(&*platform, &request) {
+                Ok(prepared) => Self::spawn_run(tx, ctx, prepared.plan().clone()),
+                Err(err) => {
+                    let _ = tx.send(WorkerMsg::Finished(Err(err)));
+                    ctx.request_repaint();
+                }
+            }
         });
     }
 
@@ -359,9 +423,7 @@ impl ArgosApp {
                         .add_enabled(ready, egui::Button::new("Verify…"))
                         .clicked()
                     {
-                        self.state = AppState::Failed {
-                            error: ArgosError::NotImplemented("verifying from the GUI"),
-                        };
+                        self.begin_verification(ctx);
                     }
                     if matches!(self.state, AppState::Preparing) {
                         ui.spinner();
@@ -595,6 +657,20 @@ impl ArgosApp {
 
         ui.add_space(metric::GAP_GROUPS);
 
+        // Verify shows no Cancel button at all -- execute_verify never
+        // consults a CancelToken, so a disabled button here would carry the
+        // same false promise a live one during a write's uncancellable phase
+        // would (#104). Nothing to click is more honest than something that
+        // looks permanently stuck.
+        if run.is_verify {
+            ui.label(
+                egui::RichText::new("Verification cannot be interrupted.")
+                    .small()
+                    .weak(),
+            );
+            return;
+        }
+
         let cancellable = run.is_cancellable();
         let requested = run.cancel_requested;
         ui.add_enabled_ui(cancellable, |ui| {
@@ -710,6 +786,10 @@ impl ArgosApp {
         let mut confirmed = false;
         let mut cancelled = false;
         let mut typed_now = typed.clone();
+        // Cloned now, while `prepared` is still in scope: the guard below
+        // ends its borrow of `self.state` at `typed`'s last use, and
+        // `self.state` is what gets overwritten once confirmed.
+        let plan = prepared.plan().clone();
 
         egui::Window::new("Confirm")
             .collapsible(false)
@@ -765,17 +845,62 @@ impl ArgosApp {
         if cancelled {
             self.state = AppState::Idle;
         } else if confirmed {
-            // Wiring this to `session::spawn` is G5 (#92). Reported through
-            // the real error type rather than a placeholder, so the result
-            // panel is exercised the way it will actually be used.
-            self.state = AppState::Failed {
-                error: ArgosError::NotImplemented("writing from the GUI"),
-            };
+            let tx = self.tx.clone();
+            let ctx = ctx.clone();
+            self.state = AppState::Running(RunState::new(device.platform_id, 0));
+            Self::spawn_run(tx, ctx, plan);
         }
     }
 }
 
 /// Just the file name, for a row that must not set the window's width.
+/// Forwards each helper event to the UI thread, throttling `request_repaint`
+/// rather than calling it per event.
+///
+/// A single write emits an `Event::Progress` roughly once per 1--4MiB block,
+/// so a multi-gigabyte write is thousands of them; a `.swm` split or a
+/// per-file Windows copy produces far more. Repainting on every one would
+/// make the window unusable. The message itself is still sent immediately --
+/// only the repaint request is throttled -- so the next frame, whenever it
+/// comes, always has the freshest numbers.
+struct ThrottledSink {
+    tx: Sender<WorkerMsg>,
+    ctx: egui::Context,
+    last_repaint: Instant,
+}
+
+const REPAINT_INTERVAL: Duration = Duration::from_millis(33);
+
+impl ThrottledSink {
+    fn new(tx: Sender<WorkerMsg>, ctx: egui::Context) -> Self {
+        ThrottledSink {
+            tx,
+            ctx,
+            last_repaint: Instant::now(),
+        }
+    }
+}
+
+impl EventSink for ThrottledSink {
+    fn on_event(&mut self, event: SessionEvent) {
+        let _ = self.tx.send(WorkerMsg::Event(event));
+        if self.last_repaint.elapsed() >= REPAINT_INTERVAL {
+            self.ctx.request_repaint();
+            self.last_repaint = Instant::now();
+        }
+    }
+
+    fn on_finished(&mut self, _outcome: &Outcome) {
+        // The terminal event always gets an unconditional repaint: the run
+        // just ended and the result screen must not wait out the throttle.
+        self.ctx.request_repaint();
+    }
+
+    fn on_failed(&mut self) {
+        self.ctx.request_repaint();
+    }
+}
+
 fn file_name_of(path: &std::path::Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
