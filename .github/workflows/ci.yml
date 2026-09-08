@@ -228,10 +228,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # build-deb.sh builds the whole workspace, which now includes
       # argos-gui; see the same step in the clippy and test jobs above.
+      # desktop-file-utils is desktop-file-validate, which build-deb.sh now
+      # runs against argos.desktop before packaging (#94/G7.6).
       - run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev \
-                                  libxcb-shape0-dev libxcb-xfixes0-dev
+                                  libxcb-shape0-dev libxcb-xfixes0-dev \
+                                  desktop-file-utils
       - run: cargo install cargo-deb --locked
       - run: packaging/build-deb.sh
       - run: sudo apt-get install -y lintian
@@ -242,8 +245,9 @@ jobs:
           status=$?
           set -e
           # lintian's exit code conflates errors and warnings; only E: lines
-          # are build-breaking here. no-manual-page on argos-helper (it is
-          # never meant to be run interactively) and
+          # are build-breaking here. no-manual-page on argos-helper and
+          # argos-gui (neither is meant to be run from a man page -- one is
+          # never interactive, the other is graphical) and
           # initial-upload-closes-no-bugs (only relevant to an actual
           # Debian-archive ITP submission) are known, accepted warnings.
           if lintian target/debian/argos_*.deb 2>&1 | grep -q '^E:'; then
@@ -253,6 +257,24 @@ jobs:
           exit 0
       - run: sudo apt-get install -y ./target/debian/argos_*.deb
       - run: argos --version
+      # The GUI's binary, launcher entry and elevation policy all land where
+      # the desktop expects them (#94/G7's stated acceptance) -- checked
+      # against the installed package's file list, not just this build's
+      # tree, since dpkg is what would actually miss a stale symlink or a
+      # permission bit `dpkg-deb -c` alone would not.
+      - name: the GUI's package paths are where the desktop expects them
+        run: |
+          for path in /usr/bin/argos-gui \
+                      /usr/share/applications/argos.desktop \
+                      /usr/share/icons/hicolor/scalable/apps/argos.svg \
+                      /usr/share/icons/hicolor/256x256/apps/argos.png \
+                      /usr/share/polkit-1/actions/org.argos.helper.policy; do
+            dpkg -L argos | grep -qx "$path" || {
+              echo "missing from the installed package: $path"
+              exit 1
+            }
+          done
+          desktop-file-validate /usr/share/applications/argos.desktop
       - uses: actions/upload-artifact@v4
         with:
           name: argos-deb

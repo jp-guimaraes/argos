@@ -1072,4 +1072,28 @@ mod tests {
             "Win10.iso"
         );
     }
+
+    /// `packaging/linux/argos.desktop`'s `StartupWMClass` has to equal
+    /// `APP_ID`, the value passed to `with_app_id()` in `main.rs` -- if they
+    /// drift, the desktop matches the running window to no launcher entry
+    /// and the taskbar falls back to a generic icon (#94/G7.3). Read from
+    /// the file at test time rather than duplicated as a string constant, in
+    /// the same spirit as generating shell completions from the built
+    /// binary instead of hand-maintaining them: one of the two values is
+    /// free to keep changing, and this is what notices if the other one
+    /// doesn't follow.
+    #[test]
+    fn the_desktop_file_names_the_same_app_id_eframe_uses() {
+        let desktop_file = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/linux/argos.desktop"
+        );
+        let contents =
+            std::fs::read_to_string(desktop_file).expect("packaging/linux/argos.desktop exists");
+        let start_up_wm_class = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("StartupWMClass="))
+            .expect("argos.desktop has a StartupWMClass line");
+        assert_eq!(start_up_wm_class, APP_ID);
+    }
 }
