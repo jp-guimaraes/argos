@@ -259,6 +259,41 @@ jobs:
           path: target/debian/argos_*.deb
           if-no-files-found: error
 
+  macos-app-package:
+    name: build and validate Argos.app (macOS packaging, phase 4 G8)
+    # Same reasoning as deb-package above: builds a real Argos.app with
+    # packaging/build-macos-app.sh on every push and PR (single-architecture,
+    # native to the runner -- the universal lipo'd build only makes sense
+    # combining both Darwin targets, which is release.yml's macos-app job,
+    # not something worth doing on every push), then validates the result
+    # with real tools rather than trusting the script by inspection.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: packaging/build-macos-app.sh
+      - name: Info.plist is well-formed
+        run: plutil -lint target/macos/Argos.app/Contents/Info.plist
+      - name: every binary landed where locate_helper_binary() needs it
+        run: |
+          for bin in argos argos-gui argos-helper; do
+            test -x "target/macos/Argos.app/Contents/MacOS/$bin" || {
+              echo "missing or not executable: Contents/MacOS/$bin" >&2
+              exit 1
+            }
+          done
+      - name: the icon built
+        run: test -s target/macos/Argos.app/Contents/Resources/argos.icns
+      # Headless smoke test of the CLI binary running from inside the
+      # bundle -- confirms the bundle's dylib/framework resolution and the
+      # sibling-helper lookup both work for a real, launched process, not
+      # just that the files are present. Deliberately not argos-gui here:
+      # opening a window needs a display server this runner may not have
+      # configured the same way a desktop session would, and nothing in
+      # this job is testing the window itself.
+      - run: target/macos/Argos.app/Contents/MacOS/argos --version
+      - run: test -f target/macos/Argos-*.dmg
+
   aur-package:
     name: build the AUR package (Arch packaging, backlog #46)
     # Runs makepkg for real inside archlinux:base-devel -- the same reasoning
