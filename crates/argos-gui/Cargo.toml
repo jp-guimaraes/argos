@@ -35,6 +35,13 @@ egui = "0.33"
 # so building needs no libgtk-3-dev. Also spelled by omission on purpose.
 rfd = "0.17"
 
+# Linux only, and adds no new crate to the tree: `zbus` is already pulled in
+# by `accesskit_unix`'s AT-SPI support, which is why no feature list is
+# spelled out here -- that dependent's own needs already select `blocking`.
+# See `linux_theme.rs` for what this is for.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false }
+
 [dev-dependencies]
 argos-platform = { workspace = true, features = ["test-fixtures"] }
 # Builds a synthetic Windows-installer ISO, so the Preparing -> confirmation

@@ -2,6 +2,8 @@
 
 mod app;
 mod devices;
+#[cfg(target_os = "linux")]
+mod linux_theme;
 mod state;
 mod theme;
 
