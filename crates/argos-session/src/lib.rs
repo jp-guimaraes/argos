@@ -18,9 +18,11 @@
 //! (see `argos_privileged::protocol::validate_refreshed_device`).
 
 pub mod cancel;
+pub mod config;
 pub mod elevate;
 pub mod events;
 pub mod format;
+pub mod lang;
 pub mod platform;
 pub mod prepare;
 
@@ -28,9 +30,14 @@ pub use argos_core::error::{ArgosError, Result};
 pub use argos_core::progress::Phase;
 pub use argos_privileged::protocol::PhaseWire;
 pub use cancel::Canceller;
+pub use config::{clear_lang_preference, load_lang_preference, save_lang_preference};
 pub use elevate::{spawn, ElevationUi, Running};
 pub use events::{EventSink, NoopSink, Outcome, SessionEvent};
-pub use format::human_size;
+pub use format::{human_size, human_size_localized};
+pub use lang::{
+    detect_lang, localize_error, resolve_lang, resolve_lang_without_config, sample_all_messages,
+    strings_for, Lang, Strings,
+};
 pub use platform::{boxed_platform, current_platform};
 pub use prepare::{
     canonicalize_iso_path, check_device_is_offerable, classify_image, prepare_verify,

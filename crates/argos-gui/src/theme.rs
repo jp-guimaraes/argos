@@ -312,6 +312,22 @@ mod tests {
         ctx.set_fonts(egui::FontDefinitions::default());
         let _ = ctx.run(Default::default(), |_| {});
 
+        // GLYPHS_USED covers the pictographic symbols -- ✔, ⚠, and friends --
+        // that appear nowhere in the translated catalogue itself (they're
+        // composed onto strings at the call site, e.g. `format!("⚠ {err}")`).
+        // Everything else the UI can actually draw comes from
+        // `argos_session::sample_all_messages`, in *both* languages: a
+        // hand-picked glyph list would silently miss an accented Portuguese
+        // letter the day a translation added one, which is exactly the kind
+        // of gap this test exists to catch instead of a Brazilian user.
+        let mut all_text: String = GLYPHS_USED.to_string();
+        for lang in [argos_session::Lang::En, argos_session::Lang::PtBr] {
+            for message in argos_session::sample_all_messages(lang) {
+                all_text.push_str(&message);
+            }
+        }
+        let glyphs: std::collections::BTreeSet<char> = all_text.chars().collect();
+
         let mut missing = Vec::new();
         for style in [
             TextStyle::Body,
@@ -320,7 +336,7 @@ mod tests {
             TextStyle::Monospace,
         ] {
             let font_id = style.resolve(&ctx.style());
-            for glyph in GLYPHS_USED.chars() {
+            for &glyph in &glyphs {
                 if !ctx.fonts_mut(|f| f.has_glyph(&font_id, glyph)) {
                     missing.push(format!("{glyph:?} in {style:?}"));
                 }

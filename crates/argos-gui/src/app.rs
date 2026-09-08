@@ -12,8 +12,8 @@ use argos_core::device::Device;
 use argos_platform::PlatformOps;
 use argos_privileged::protocol::{Plan, WindowsLayout};
 use argos_session::{
-    self as session, human_size, ElevationUi, EventSink, ImageKind, Outcome, SessionEvent,
-    WritePreview,
+    self as session, human_size_localized, strings_for, ElevationUi, EventSink, ImageKind, Lang,
+    Outcome, SessionEvent, Strings, WritePreview,
 };
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -65,11 +65,29 @@ pub struct ArgosApp {
     polling_theme: bool,
     #[cfg(target_os = "linux")]
     last_theme_poll: Option<Instant>,
+
+    /// The language menu's current selection: `None` means "Automatic",
+    /// `Some(lang)` an explicit choice -- distinct from `lang` below, which
+    /// Automatic still has to resolve to something to actually render with.
+    lang_selection: Option<Lang>,
+    /// The language actually in effect, recomputed only when
+    /// `lang_selection` changes rather than every frame: resolving it reads
+    /// a config file and a couple of env vars (`session::resolve_lang`),
+    /// and nothing external is expected to change the desktop's language
+    /// mid-session the way its light/dark theme already gets live-followed.
+    lang: Lang,
 }
 
 impl ArgosApp {
     pub fn new(platform: Arc<dyn PlatformOps + Send + Sync>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        // Loaded separately from `resolve_lang()` even though the config
+        // file is that function's own highest-precedence source: this read
+        // is only to know whether the *menu* should open on an explicit
+        // choice or on "Automatic" -- resolve_lang() answers "what language"
+        // but not "was that from a saved choice or a guess".
+        let lang_selection = session::load_lang_preference();
+        let lang = session::resolve_lang();
         ArgosApp {
             platform,
             tx,
@@ -93,6 +111,34 @@ impl ArgosApp {
             polling_theme: false,
             #[cfg(target_os = "linux")]
             last_theme_poll: None,
+            lang_selection,
+            lang,
+        }
+    }
+
+    fn strings(&self) -> &'static Strings {
+        strings_for(self.lang)
+    }
+
+    /// `None` puts the menu back to Automatic and clears any saved choice --
+    /// `session::resolve_lang()` reads the config file first, so a stale
+    /// explicit entry there would otherwise keep outranking the desktop's
+    /// own setting even after picking Automatic again. `Some(lang)` both
+    /// applies it immediately and saves it, so it survives a restart.
+    /// Errors saving are swallowed rather than surfaced: a read-only config
+    /// directory should not stop the language from changing for the rest of
+    /// this session, only from persisting past it.
+    fn set_lang(&mut self, choice: Option<Lang>) {
+        self.lang_selection = choice;
+        match choice {
+            Some(lang) => {
+                self.lang = lang;
+                let _ = session::save_lang_preference(lang);
+            }
+            None => {
+                self.lang = session::resolve_lang_without_config();
+                let _ = session::clear_lang_preference();
+            }
         }
     }
 
@@ -276,7 +322,9 @@ impl ArgosApp {
                             self.device_error = None;
                             self.apply_device_list(devices);
                         }
-                        Err(err) => self.device_error = Some(err.to_string()),
+                        Err(err) => {
+                            self.device_error = Some(session::localize_error(&err, self.lang))
+                        }
                     }
                 }
                 WorkerMsg::Classified(result) => {
@@ -286,11 +334,11 @@ impl ArgosApp {
                             self.iso_kind = kind;
                             self.iso_error = kind
                                 .is_none()
-                                .then(|| "Not an image Argos recognizes".to_string());
+                                .then(|| self.strings().not_recognized_image.to_string());
                         }
                         Err(err) => {
                             self.iso_kind = None;
-                            self.iso_error = Some(err.to_string());
+                            self.iso_error = Some(session::localize_error(&err, self.lang));
                         }
                     }
                 }
@@ -315,7 +363,7 @@ impl ArgosApp {
                 SelectionOutcome::Unchanged => self.selection_warning = None,
                 SelectionOutcome::Gone => {
                     self.selection_warning =
-                        Some(format!("{} is no longer present", selection.platform_id));
+                        Some((self.strings().selection_gone)(&selection.platform_id));
                 }
                 SelectionOutcome::Replaced => {
                     // A different drive answering to the same path is exactly
@@ -323,9 +371,7 @@ impl ArgosApp {
                     // rather than let it be confirmed.
                     let path = selection.platform_id.clone();
                     self.selection = None;
-                    self.selection_warning = Some(format!(
-                        "A different drive is now at {path}; selection cleared"
-                    ));
+                    self.selection_warning = Some((self.strings().selection_replaced)(&path));
                 }
             }
         }
@@ -405,16 +451,52 @@ impl ArgosApp {
     /// would force a continuous repaint where the window currently redraws
     /// every two seconds. Please do not reclaim the gap as unused layout.
     ///
-    /// The language selector belongs at the right of this band and arrives
-    /// with i18n in G6 (#93); a selector that switched nothing would be a
-    /// lie on screen.
+    /// The language selector sits at the right of this band (G6/#93) --
+    /// Automatic / English / Português (Brasil), switching without a
+    /// restart, as the milestone specifies.
     fn draw_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.set_height(metric::HEADER_HEIGHT);
             ui.heading("Argos");
             ui.add_space(metric::GAP_ROW);
             ui.allocate_space(egui::vec2(metric::SPRITE[0], metric::SPRITE[1]));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.draw_lang_menu(ui);
+            });
         });
+    }
+
+    /// Each language is shown in its own name -- "English", "Português
+    /// (Brasil)" -- not translated into whichever one is currently active,
+    /// the way any language picker does it: a menu item a non-reader of the
+    /// active language still has to be able to recognise.
+    fn draw_lang_menu(&mut self, ui: &mut egui::Ui) {
+        let s = self.strings();
+        let selected_text = match self.lang_selection {
+            None => s.lang_menu_auto,
+            Some(lang) => strings_for(lang).lang_name,
+        };
+        egui::ComboBox::from_id_salt("lang-menu")
+            .selected_text(selected_text)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.lang_selection.is_none(), s.lang_menu_auto)
+                    .clicked()
+                {
+                    self.set_lang(None);
+                }
+                for lang in [Lang::En, Lang::PtBr] {
+                    if ui
+                        .selectable_label(
+                            self.lang_selection == Some(lang),
+                            strings_for(lang).lang_name,
+                        )
+                        .clicked()
+                    {
+                        self.set_lang(Some(lang));
+                    }
+                }
+            });
     }
 
     /// eframe reports dropped files itself; accepting only the first means a
@@ -464,15 +546,14 @@ impl ArgosApp {
                     let ready = self.can_act();
                     let accent = theme::palette_for(ui.visuals().dark_mode).accent;
                     let on_accent = theme::palette_for(ui.visuals().dark_mode).on_accent;
+                    let s = self.strings();
                     if ui
                         .add_enabled(
                             ready,
-                            egui::Button::new(egui::RichText::new("Write…").color(on_accent))
+                            egui::Button::new(egui::RichText::new(s.write_button).color(on_accent))
                                 .fill(accent),
                         )
-                        .on_disabled_hover_text(
-                            "Choose an image Argos recognises and a target device",
-                        )
+                        .on_disabled_hover_text(s.write_disabled_hint)
                         .clicked()
                     {
                         self.begin_preparation(ctx);
@@ -481,7 +562,7 @@ impl ArgosApp {
                     // gets no confirmation and no emphasis -- present, and
                     // clearly subordinate.
                     if ui
-                        .add_enabled(ready, egui::Button::new("Verify…"))
+                        .add_enabled(ready, egui::Button::new(s.verify_button))
                         .clicked()
                     {
                         self.begin_verification(ctx);
@@ -502,12 +583,13 @@ impl ArgosApp {
     }
 
     fn draw_image_group(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.label("Image");
+        let s = self.strings();
+        ui.label(s.image_group_title);
         ui.horizontal(|ui| {
             // Called on the UI thread deliberately: on macOS NSOpenPanel must
             // be driven from the main thread. One frozen frame while a modal
             // file chooser is open is what every desktop app does.
-            let button = ui.button("Choose…");
+            let button = ui.button(s.choose_button);
             // The file name, not the path: a deep path would otherwise set
             // the width of the whole window. The full path is a hover away,
             // and appears in full in the confirmation dialog, which is where
@@ -523,14 +605,14 @@ impl ArgosApp {
                         .on_hover_text(path.display().to_string());
                     }
                     None => {
-                        ui.label(egui::RichText::new("Drop an ISO here").weak());
+                        ui.label(egui::RichText::new(s.drop_iso_hint).weak());
                     }
                 }
             });
             if button.clicked() {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("Choose a disk image")
-                    .add_filter("Disk images", &["iso", "img"])
+                    .set_title(s.file_picker_title)
+                    .add_filter(s.file_picker_filter_name, &["iso", "img"])
                     .pick_file()
                 {
                     self.classify(ctx, path);
@@ -541,7 +623,7 @@ impl ArgosApp {
         if self.classifying {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(egui::RichText::new("Reading the image…").small());
+                ui.label(egui::RichText::new(s.reading_image).small());
             });
         } else if let Some(err) = &self.iso_error {
             ui.label(
@@ -553,14 +635,14 @@ impl ArgosApp {
             let accent = theme::palette_for(ui.visuals().dark_mode).accent;
             ui.label(
                 egui::RichText::new(match kind {
-                    ImageKind::LinuxDd => "✔ Linux ISO (written byte for byte)",
-                    ImageKind::WindowsInstaller => "✔ Windows installer",
+                    ImageKind::LinuxDd => s.linux_iso_detected,
+                    ImageKind::WindowsInstaller => s.windows_iso_detected,
                 })
                 .small()
                 .color(accent),
             );
         } else {
-            ui.label(egui::RichText::new("No image selected.").small().weak());
+            ui.label(egui::RichText::new(s.no_image_selected).small().weak());
         }
     }
 
@@ -569,29 +651,30 @@ impl ArgosApp {
             .into_iter()
             .cloned()
             .collect();
+        let s = self.strings();
 
-        ui.label("Target");
+        ui.label(s.target_group_title);
         ui.horizontal(|ui| {
-            let refresh = ui.button("⟳").on_hover_text("Refresh the list");
+            let refresh = ui.button("⟳").on_hover_text(s.refresh_tooltip);
             let width = ui.available_width();
             let label = self
                 .selected_device()
-                .map(describe_device)
-                .unwrap_or_else(|| "No device selected".into());
+                .map(|d| describe_device(d, s, self.lang))
+                .unwrap_or_else(|| s.no_device_selected.into());
             egui::ComboBox::from_id_salt("target-device")
                 .selected_text(label)
                 .width(width)
                 .show_ui(ui, |ui| {
                     if offered.is_empty() {
-                        ui.label("No removable devices found");
+                        ui.label(s.no_removable_devices);
                     }
                     for device in &offered {
                         let selected = self
                             .selection
                             .as_ref()
-                            .is_some_and(|s| s.platform_id == device.platform_id);
+                            .is_some_and(|sel| sel.platform_id == device.platform_id);
                         if ui
-                            .selectable_label(selected, describe_device_long(device))
+                            .selectable_label(selected, describe_device_long(device, s, self.lang))
                             .clicked()
                         {
                             self.selection = Some(Selection::of(device));
@@ -608,10 +691,7 @@ impl ArgosApp {
         // modes: `offerable` never returns one.
         ui.checkbox(
             &mut self.show_all_devices,
-            egui::RichText::new(
-                "Show every disk, including those the system does not consider removable",
-            )
-            .small(),
+            egui::RichText::new(s.show_all_devices_checkbox).small(),
         );
     }
 
@@ -620,24 +700,22 @@ impl ArgosApp {
     /// this window, and old BIOS machines are the use case the project exists
     /// for.
     fn draw_layout_group(&mut self, ui: &mut egui::Ui) {
+        let s = self.strings();
         let applies = self.iso_kind == Some(ImageKind::WindowsInstaller);
         ui.add_enabled_ui(applies, |ui| {
-            ui.checkbox(&mut self.bios_layout, "Old machine — legacy BIOS (MBR)");
+            ui.checkbox(&mut self.bios_layout, s.bios_layout_checkbox);
         });
         // Said out loud, not merely greyed: a disabled control with no reason
         // reads as a defect.
         let explanation = if !applies {
             match self.iso_kind {
-                Some(ImageKind::LinuxDd) => {
-                    "A Linux ISO carries its own partition table, so there is nothing to choose."
-                }
-                _ => "Choose a Windows installer image to enable this.",
+                Some(ImageKind::LinuxDd) => s.layout_na_linux,
+                _ => s.layout_na_no_image,
             }
         } else if self.bios_layout {
-            "MBR with Argos's own boot records: boots on legacy BIOS, and also on UEFI \
-             firmware that accepts MBR-partitioned removable media. Windows 10 only."
+            s.layout_bios_explanation
         } else {
-            "GPT: boots only on UEFI firmware."
+            s.layout_gpt_explanation
         };
         let colour = if applies {
             ui.visuals().weak_text_color()
@@ -648,6 +726,7 @@ impl ArgosApp {
     }
 
     fn draw_notices(&mut self, ui: &mut egui::Ui) {
+        let s = self.strings();
         let notice = |ui: &mut egui::Ui, text: String, colour: egui::Color32| {
             ui.label(egui::RichText::new(text).small().color(colour));
             ui.add_space(metric::GAP_NOTICES);
@@ -658,17 +737,13 @@ impl ArgosApp {
         if self.device_error.is_some() {
             notice(
                 ui,
-                "⚠ Could not list devices.".into(),
+                format!("⚠ {}", s.could_not_list_devices),
                 ui.visuals().error_fg_color,
             );
         }
         if let AppState::AwaitingConfirmation { prepared, .. } = &self.state {
             for note in prepared.preview.split_notes() {
-                let text = format!(
-                    "· {} exceeds the FAT32 4 GiB limit and will be split into {} parts",
-                    note.source_path,
-                    note.part_paths.len()
-                );
+                let text = (s.split_note)(&note.source_path, note.part_paths.len());
                 ui.label(egui::RichText::new(text).small().weak());
                 ui.add_space(metric::GAP_NOTICES);
             }
@@ -676,11 +751,12 @@ impl ArgosApp {
     }
 
     fn draw_progress(&mut self, ui: &mut egui::Ui) {
+        let s = self.strings();
         let AppState::Running(run) = &self.state else {
             return;
         };
         Self::group(ui, |ui| {
-            ui.label(phase_label(run.phase, &run.phase_label));
+            ui.label(phase_label(run.phase, &run.phase_label, s));
             match run.fraction() {
                 Some(fraction) => {
                     ui.add(
@@ -691,8 +767,8 @@ impl ArgosApp {
                     ui.label(
                         egui::RichText::new(format!(
                             "{} / {}",
-                            human_size(run.bytes_done),
-                            human_size(run.bytes_total)
+                            human_size_localized(run.bytes_done, self.lang),
+                            human_size_localized(run.bytes_total, self.lang)
                         ))
                         .small()
                         .weak(),
@@ -705,15 +781,11 @@ impl ArgosApp {
                 None => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(egui::RichText::new("Working out the total…").small().weak());
+                        ui.label(egui::RichText::new(s.working_out_total).small().weak());
                     });
                 }
             }
-            ui.label(
-                egui::RichText::new("Do not unplug the device.")
-                    .small()
-                    .weak(),
-            );
+            ui.label(egui::RichText::new(s.do_not_unplug).small().weak());
         });
 
         ui.add_space(metric::GAP_GROUPS);
@@ -725,7 +797,7 @@ impl ArgosApp {
         // looks permanently stuck.
         if run.is_verify {
             ui.label(
-                egui::RichText::new("Verification cannot be interrupted.")
+                egui::RichText::new(s.verification_not_interruptible)
                     .small()
                     .weak(),
             );
@@ -735,7 +807,7 @@ impl ArgosApp {
         let cancellable = run.is_cancellable();
         let requested = run.cancel_requested;
         ui.add_enabled_ui(cancellable, |ui| {
-            if ui.button("Cancel").clicked() {
+            if ui.button(s.cancel_button).clicked() {
                 if let AppState::Running(run) = &mut self.state {
                     run.cancel_requested = true;
                     if let Some(canceller) = &run.canceller {
@@ -748,74 +820,64 @@ impl ArgosApp {
         // cancel is not delayed, it is discarded. Saying which side of that
         // line the run is on beats a button that looks live and does nothing.
         let (text, colour) = if requested {
-            (
-                "Interrupting. The device will be unusable and will need to be written again.",
-                ui.visuals().warn_fg_color,
-            )
+            (s.interrupting_in_progress, ui.visuals().warn_fg_color)
         } else if cancellable {
             (
-                "Interrupting is still possible.",
+                s.interrupting_still_possible,
                 ui.visuals().weak_text_color(),
             )
         } else {
-            (
-                "Past the point where interrupting is possible.",
-                ui.visuals().weak_text_color(),
-            )
+            (s.past_interrupt_point, ui.visuals().weak_text_color())
         };
         ui.label(egui::RichText::new(text).small().color(colour));
     }
 
     fn draw_result(&mut self, ui: &mut egui::Ui) {
         let dark = ui.visuals().dark_mode;
+        let s = self.strings();
         match &self.state {
             AppState::Done { outcome, device_id } => {
                 let device_id = device_id.clone();
-                let summary = describe_outcome(outcome);
+                let summary = describe_outcome(outcome, s, self.lang);
                 Self::group(ui, |ui| {
                     ui.label(
-                        egui::RichText::new(format!("✔ Done. {summary}"))
+                        egui::RichText::new((s.done_prefix)(&summary))
                             .color(theme::palette_for(dark).accent),
                     );
-                    ui.label(
-                        egui::RichText::new(format!("Ejected {device_id}. Safe to unplug."))
-                            .small()
-                            .weak(),
-                    );
+                    ui.label(egui::RichText::new((s.ejected)(&device_id)).small().weak());
                 });
             }
             AppState::Cancelled => {
                 Self::group(ui, |ui| {
                     ui.label(
-                        egui::RichText::new(
-                            "Cancelled. The device is unusable and needs to be written again.",
-                        )
-                        .color(ui.visuals().warn_fg_color),
+                        egui::RichText::new(s.cancelled_message).color(ui.visuals().warn_fg_color),
                     );
                 });
             }
             AppState::Failed { error } => {
-                let detail = error.to_string();
+                // Translated for the headline; the raw English `Display` is
+                // kept underneath in "Details" -- always reachable, exactly
+                // what a bug report needs, whether or not a translation
+                // exists for this particular error.
+                let localized = session::localize_error(error, self.lang);
+                let raw = error.to_string();
                 egui::Frame::group(ui.style())
                     .inner_margin(egui::Margin::same(metric::GROUP_MARGIN as i8))
                     .fill(theme::palette_for(dark).error_panel)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.label(
-                            egui::RichText::new(&detail).color(theme::palette_for(dark).error),
+                            egui::RichText::new(&localized).color(theme::palette_for(dark).error),
                         );
-                        // The raw text is what a bug report needs, so it is
-                        // always reachable even once these messages are
-                        // translated (G6).
-                        ui.collapsing("Details", |ui| {
-                            ui.label(egui::RichText::new(&detail).monospace().small());
+                        ui.collapsing(s.details_label, |ui| {
+                            ui.label(egui::RichText::new(&raw).monospace().small());
                         });
                     });
             }
             _ => {}
         }
         ui.add_space(metric::GAP_GROUPS);
-        if ui.button("Start over").clicked() {
+        if ui.button(s.start_over_button).clicked() {
             self.state = AppState::Idle;
         }
     }
@@ -824,22 +886,27 @@ impl ArgosApp {
     /// stays disabled until the device path is retyped exactly. Rufus only
     /// asks for OK; Argos stays stricter.
     fn draw_confirmation(&mut self, ctx: &egui::Context) {
+        // Fetched before the mutable borrow of `self.state` below starts --
+        // `s` does not borrow from `self` (it's `&'static`), but `self` as a
+        // whole cannot be borrowed twice, once immutably for the method call
+        // and once mutably for `&mut self.state`.
+        let s = self.strings();
+        let lang = self.lang;
         let AppState::AwaitingConfirmation { prepared, typed } = &mut self.state else {
             return;
         };
         let device = prepared.device.clone();
         let iso = prepared.iso.clone();
-        let preview_line = describe_preview(&prepared.preview);
+        let preview_line = describe_preview(&prepared.preview, s, lang);
         let notes: Vec<String> = prepared
             .preview
             .split_notes()
             .into_iter()
             .map(|n| {
-                format!(
-                    "{} will be split into {} parts ({})",
-                    n.source_path,
+                (s.split_note_confirmation)(
+                    &n.source_path,
                     n.part_paths.len(),
-                    n.part_paths.join(", ")
+                    &n.part_paths.join(", "),
                 )
             })
             .collect();
@@ -852,23 +919,25 @@ impl ArgosApp {
         // `self.state` is what gets overwritten once confirmed.
         let plan = prepared.plan().clone();
 
-        egui::Window::new("Confirm")
+        egui::Window::new(s.confirm_title)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("About to overwrite:");
+                ui.label(s.about_to_overwrite);
                 // Monospace here is load-bearing, not decoration: the guard
                 // below is an exact match, and /dev/disk4 has to be
                 // distinguishable from /dev/diskl.
                 ui.monospace(format!("{} ({})", device.platform_id, device.display_name));
-                ui.label(format!("Size: {}", human_size(device.size_bytes)));
-                ui.label(format!(
-                    "Serial number: {}",
-                    device.serial.as_deref().unwrap_or("unknown")
+                ui.label((s.size_label)(&human_size_localized(
+                    device.size_bytes,
+                    lang,
+                )));
+                ui.label((s.serial_label)(
+                    device.serial.as_deref().unwrap_or(s.serial_unknown),
                 ));
                 // The one place the whole path is shown, rather than elided.
-                ui.label("Image:");
+                ui.label(s.image_label);
                 ui.monospace(iso.display().to_string());
                 ui.label(preview_line);
                 for note in &notes {
@@ -876,25 +945,19 @@ impl ArgosApp {
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!(
-                        "THIS WILL PERMANENTLY ERASE all data on {}.",
-                        device.platform_id
-                    ))
-                    .color(ui.visuals().error_fg_color),
+                    egui::RichText::new((s.erase_warning)(&device.platform_id))
+                        .color(ui.visuals().error_fg_color),
                 );
-                ui.label(format!(
-                    "Type the device path ({}) to confirm:",
-                    device.platform_id
-                ));
+                ui.label((s.type_to_confirm)(&device.platform_id));
                 ui.add(egui::TextEdit::singleline(&mut typed_now).font(egui::TextStyle::Monospace));
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(s.cancel_button).clicked() {
                         cancelled = true;
                     }
                     let matches = confirmation_matches(&typed_now, &device.platform_id);
                     if ui
-                        .add_enabled(matches, egui::Button::new("Write"))
-                        .on_disabled_hover_text("Retype the device path exactly")
+                        .add_enabled(matches, egui::Button::new(s.write_confirm_button))
+                        .on_disabled_hover_text(s.retype_hint)
                         .clicked()
                     {
                         confirmed = true;
@@ -971,65 +1034,63 @@ fn file_name_of(path: &std::path::Path) -> String {
 /// The phase, worded for a person rather than as the `Debug` name the CLI
 /// prints. Being able to do this is what typing `Phase` on the wire bought
 /// (#89): the label is chosen here, not baked into the protocol.
-fn phase_label(phase: Option<argos_core::progress::Phase>, fallback: &str) -> String {
+fn phase_label(phase: Option<argos_core::progress::Phase>, fallback: &str, s: &Strings) -> String {
     use argos_core::progress::Phase;
     match phase {
-        Some(Phase::Unmounting) => "Unmounting".into(),
-        Some(Phase::Checksumming) => "Checksumming".into(),
-        Some(Phase::Partitioning) => "Partitioning".into(),
-        Some(Phase::FormattingFat32) => "Formatting".into(),
-        Some(Phase::CopyingFiles) => "Copying files".into(),
-        Some(Phase::Writing) => "Writing".into(),
-        Some(Phase::Flushing) => "Flushing".into(),
-        Some(Phase::Verifying) => "Verifying".into(),
+        Some(Phase::Unmounting) => s.phase_unmounting.into(),
+        Some(Phase::Checksumming) => s.phase_checksumming.into(),
+        Some(Phase::Partitioning) => s.phase_partitioning.into(),
+        Some(Phase::FormattingFat32) => s.phase_formatting.into(),
+        Some(Phase::CopyingFiles) => s.phase_copying_files.into(),
+        Some(Phase::Writing) => s.phase_writing.into(),
+        Some(Phase::Flushing) => s.phase_flushing.into(),
+        Some(Phase::Verifying) => s.phase_verifying.into(),
         // A helper new enough to send a phase this build does not know: show
         // what it sent rather than nothing.
-        None if fallback.is_empty() => "Starting…".into(),
+        None if fallback.is_empty() => s.phase_starting.into(),
         None => fallback.to_string(),
     }
 }
 
-fn describe_device(device: &Device) -> String {
-    format!("{} — {}", device.platform_id, human_size(device.size_bytes))
+fn describe_device(device: &Device, s: &Strings, lang: Lang) -> String {
+    (s.device_description)(
+        &device.platform_id,
+        &human_size_localized(device.size_bytes, lang),
+    )
 }
 
 /// The fuller form, for the open dropdown, where there is room and where the
 /// model name is what distinguishes two similar-looking paths.
-fn describe_device_long(device: &Device) -> String {
-    format!(
-        "{} — {} ({})",
-        device.platform_id,
-        device.display_name,
-        human_size(device.size_bytes)
+fn describe_device_long(device: &Device, s: &Strings, lang: Lang) -> String {
+    (s.device_description_long)(
+        &device.platform_id,
+        &device.display_name,
+        &human_size_localized(device.size_bytes, lang),
     )
 }
 
-fn describe_preview(preview: &WritePreview) -> String {
+fn describe_preview(preview: &WritePreview, s: &Strings, lang: Lang) -> String {
     match preview {
         WritePreview::Dd { image_size_bytes } => {
-            format!("Image size: {}", human_size(*image_size_bytes))
+            (s.image_size_label)(&human_size_localized(*image_size_bytes, lang))
         }
-        WritePreview::Windows { layout, .. } => format!(
-            "One {} FAT32 partition at offset {}",
-            human_size(layout.windows_partition.size_bytes),
-            human_size(layout.windows_partition.start_offset_bytes)
+        WritePreview::Windows { layout, .. } => (s.one_fat32_partition)(
+            &human_size_localized(layout.windows_partition.size_bytes, lang),
+            &human_size_localized(layout.windows_partition.start_offset_bytes, lang),
         ),
     }
 }
 
-fn describe_outcome(outcome: &argos_session::Outcome) -> String {
+fn describe_outcome(outcome: &argos_session::Outcome, s: &Strings, lang: Lang) -> String {
     use argos_session::Outcome;
     match outcome {
-        Outcome::DdWrite { hash } => format!("SHA-256: {hash}"),
-        Outcome::Verify { hash } => format!("Verified. SHA-256: {hash}"),
+        Outcome::DdWrite { hash } => (s.sha256_label)(hash),
+        Outcome::Verify { hash } => (s.verified_sha256)(hash),
         Outcome::WindowsWrite {
             files_copied,
             bytes_copied,
-        } => format!(
-            "{files_copied} files copied ({})",
-            human_size(*bytes_copied)
-        ),
-        Outcome::WindowsVerify { files_verified } => format!("{files_verified} files checked"),
+        } => (s.files_copied)(*files_copied, &human_size_localized(*bytes_copied, lang)),
+        Outcome::WindowsVerify { files_verified } => (s.files_checked)(*files_verified),
     }
 }
 
@@ -1053,7 +1114,10 @@ mod tests {
             Phase::FormattingFat32,
             Phase::CopyingFiles,
         ] {
-            assert!(!phase_label(Some(phase), "").is_empty(), "{phase:?}");
+            assert!(
+                !phase_label(Some(phase), "", strings_for(Lang::En)).is_empty(),
+                "{phase:?}"
+            );
         }
     }
 
@@ -1061,8 +1125,11 @@ mod tests {
     /// than swallowed.
     #[test]
     fn an_unknown_phase_falls_back_to_what_the_helper_sent() {
-        assert_eq!(phase_label(None, "Polishing"), "Polishing");
-        assert_eq!(phase_label(None, ""), "Starting…");
+        assert_eq!(
+            phase_label(None, "Polishing", strings_for(Lang::En)),
+            "Polishing"
+        );
+        assert_eq!(phase_label(None, "", strings_for(Lang::En)), "Starting…");
     }
 
     #[test]
