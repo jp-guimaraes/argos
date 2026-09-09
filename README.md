@@ -115,10 +115,20 @@ attempt.
 
 Once running, `Argos.app` needs **Full Disk Access** (System Settings ->
 Privacy & Security -> Full Disk Access) to write to a removable drive -- the
-same permission macOS requires of Disk Utility and similar tools. Without it,
-a write fails right after unmounting with a plain `Operation not permitted`;
-grant the permission (add `Argos.app`, or `argos-helper` inside it, to the
-list) and try again.
+same permission macOS requires of Disk Utility and similar tools. Without
+it, a write fails right after unmounting with a plain `Operation not
+permitted`. It is specifically `argos-helper` (inside the bundle, at
+`Argos.app/Contents/MacOS/argos-helper`) that needs the grant, not
+`Argos.app` itself -- System Settings' own "+" file picker cannot navigate
+into a `.app` bundle, so add it by dragging that file from a Finder window
+(right-click `Argos.app` -> "Show Package Contents" to reach it) onto the
+Full Disk Access list instead.
+
+**This grant does not survive an update.** Each release rebuilds
+`argos-helper` with a new ad-hoc code signature, which macOS treats as a
+different program -- upgrading to a new version of Argos means re-adding it
+to Full Disk Access again, not just on first install. See
+`packaging/README.md` for the full story and the log evidence.
 
 Not yet available as a Homebrew cask -- see `packaging/README.md`.
 
