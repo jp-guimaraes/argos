@@ -114,6 +114,97 @@ implementation, and are tracked as backlog issue #27 (sub-epics W1-W6):
   remains a dev-dependency only, generating UDF test fixtures as an
   independent implementation `image::udf` is verified against.
 
+## Guiding decisions (phase 4: a graphical interface, backlog #97)
+
+Planned in `docs/plan-phase4-gui.md`, decided ahead of implementation the
+same way phase 2's decisions were. Tracked as backlog issue #97
+(milestones G0-G9).
+
+- **M-GUI.1 -- elevation from a window: the system's own authorization
+  dialog over a FIFO pair, not `SMJobBless`.** A windowed front end has no
+  controlling terminal, so `sudo`'s "a terminal is required" makes the
+  CLI's elevation path unusable as-is. macOS: `osascript -e 'do shell
+  script "..." with administrator privileges'` puts up the system dialog,
+  so the password never transits the Argos process and no code signing or
+  Developer ID is needed; `do shell script` only returns once the command
+  finishes, so a pair of FIFOs stands in for the pipes `Command::spawn`
+  would have given a terminal-attached process, opened `O_RDWR` (never
+  blocking, and preserving the EOF-on-parent-death semantics
+  `watch_for_cancel` depends on) after an early spike found that opening
+  them blocking hangs both ends forever if the user dismisses the dialog.
+  `argos-privileged` needed zero lines of change for this. Linux: `pkexec`,
+  which already renders the desktop's own polkit agent, now paired with a
+  policy (`org.argos.helper.policy`) naming the actual disk-write
+  consequence instead of polkit's generic message, and `auth_admin` rather
+  than `auth_admin_keep` (`_keep` would let a *second* destructive write
+  inside ~5 minutes proceed with no prompt at all -- a safety regression
+  for zero benefit, since writing a USB stick is not a repeated
+  operation). Rejected: `SMJobBless`/`SMAppService`, Apple's "correct"
+  answer -- but it makes the privileged side a persistent, launchd-managed
+  root daemon, the opposite of `argos-helper`'s one-shot design, for a
+  paid Developer ID (US$99/yr) and notarization on every release.
+  `AuthorizationExecuteWithPrivileges` (what `do shell script ... with
+  administrator privileges` uses underneath) has been deprecated since
+  10.7 and still functions -- a known contingency, not a future surprise.
+  **Never elevate the GUI process itself**: `sudo argos-gui` is not a
+  fallback, because the privilege separation *is* the safety architecture.
+
+- **M-GUI.2 -- a hand-written string catalogue, not gettext/Fluent.**
+  `Strings` is a plain struct: a label missing from either language is a
+  compile error, and a parameterized message is a function pointer rather
+  than a format template, so its placeholder arity is type-checked too --
+  a stronger guarantee than any file-based scheme gives for two languages
+  and roughly eighty strings. Rejected despite `docs-site` already using
+  PO: there is no well-maintained pure-Rust `.mo` runtime, and
+  `gettext-rs` links C `libintl`, a system dependency that directly
+  violates the "easy to install on macOS" constraint. The escape hatch, if
+  translator ergonomics ever matter, is a `build.rs` generating `Strings`
+  from a `.po` file at compile time -- so the decision is not a dead end,
+  just the simplest thing that is honest about what two languages
+  currently need.
+
+- **M-GUI.3 -- the GUI is translated; the CLI stays English-only.** Its
+  help text, man page and five shell-completion scripts all come from the
+  same `clap` definitions, and `packaging/build-deb.sh` runs `argos man`
+  on the build machine -- a locale-dependent `argos man` would ship
+  whatever language the CI runner happened to have that day, not a choice
+  anyone made. `Strings` living in `argos-session` rather than `argos-gui`
+  keeps the door open cheaply: error localization sits next to
+  `ArgosError` itself, so a future front end (or a `--json`/localized flag
+  on the CLI, if ever wanted) gets it for free without restructuring
+  anything.
+
+- **M-GUI.4 -- eframe 0.33, pinned, not "the latest".** Its `rust-version`
+  is exactly this workspace's MSRV (1.88); 0.34 needs 1.92 and 0.36 needs
+  1.95. It still defaults to the glow/OpenGL renderer rather than wgpu,
+  which matters because the hosts this project serves are the same
+  vintage as the machines it writes media for, where plain OpenGL is the
+  safer bet than a Vulkan/Metal/DX12 stack with a GL fallback. Licence is
+  `MIT OR Apache-2.0`, honouring M6.1's refusal to relicense. The
+  dependency-budget concession is stated rather than hidden: eframe pulls
+  in on the order of 150-250 transitive crates, in real tension with
+  "keep it minimal" -- but the rule this project already applies to
+  `ctrlc` targets `argos-privileged` specifically. `argos-gui` is a leaf;
+  nothing depends on it, the `argos` CLI binary is unaffected, and
+  `argos-helper`'s own dependency tree -- the only one that ever runs as
+  root -- gains exactly zero crates from any of phase 4. Checked with
+  `cargo tree`, not assumed, at each milestone that touched packaging.
+
+- **M-GUI.5 -- no AppImage, no Flatpak, no code signing.** AppImage/
+  Flatpak's sandboxing makes raw `/dev/sdX` writes and `pkexec` a fight
+  not worth having, for a tool whose entire purpose is writing to raw
+  block devices. macOS: signing and notarizing were deliberately skipped
+  in this phase -- a paid Developer ID (US$99/yr) plus notarization on
+  every release, for a project whose install story already has a better
+  answer. Homebrew never sets the quarantine bit, so `brew install`
+  sidesteps Gatekeeper entirely; the unsigned universal `.dmg` is the
+  convenience download for someone who wants the GUI without a Rust
+  toolchain, with `xattr -dr com.apple.quarantine` documented for anyone
+  who downloads it through a browser instead and hits Gatekeeper's
+  "Apple could not verify ... is free of malware" dialog (the current,
+  post-Ventura wording, confirmed live rather than assumed from older
+  guides).
+
 ## Crate layout
 
 ```
@@ -124,8 +215,20 @@ crates/
   argos-platform-macos/   # real implementation: diskutil -plist + df
   argos-platform-windows/ # deliberate stub, proves the trait has no Unix bias, out of v1 scope
   argos-privileged/       # argos-helper: the one binary meant to run as root
+  argos-session/          # UI-agnostic orchestration + elevation + i18n, shared by both front ends
   argos-cli/              # the `argos` binary
+  argos-gui/              # the `argos-gui` binary (phase 4, backlog #97)
 ```
+
+`argos-session` (phase 4 G1, backlog #88) is the seam that makes the GUI
+possible without weakening anything the CLI already guarantees: it took over
+device/image preflight, `Plan` construction, elevation, and the helper's
+event stream from what used to be private inside `argos-cli`, deliberately
+never printing or reading from a terminal itself -- confirmation stays with
+each front end, which formats the same `WritePreview` data its own way.
+`Strings`/`Lang` (i18n, G6) live here too, next to `ArgosError`, rather than
+in `argos-gui`, so error localization can match on the typed error and a
+future front end gets translated messages for free.
 
 `argos-core` never imports anything OS-specific for disk access; it receives
 plain data (`Device`, byte streams, sizes) from whichever `argos-platform-*`
@@ -571,7 +674,8 @@ a specific `WindowsImageRequiresLinux` error rather than only discovering
 | `argos list` / `argos write` | Implemented and manually verified against real physical USB hardware on **both platforms**. Linux: first with a synthetic isohybrid-signed image, then with a real, official Ubuntu 26.04.1 Desktop ISO (checksum-verified against Canonical's `SHA256SUMS`) written byte-for-byte: device detection, confirmation flow, `pkexec` elevation, write, and post-write verification all passed, and the written bytes were independently re-hashed outside Argos and matched the official ISO checksum exactly; the resulting drive was confirmed to boot for real on **UEFI**. macOS: a real, official Alpine Linux 3.24.1 (`virt`) ISO (checksum-verified against Alpine's published `sha256`) written the same way, with the same independent `sudo dd \| shasum` re-hash matching exactly (that drive booted but hung mid-kernel-init on the UEFI test machine, a Surface -- consistent with `virt`'s minimal driver set, not a bad write); a second write of a real, official Ubuntu 22.04.5 LTS Desktop ISO (checksum-verified, `argos-helper`'s own post-write verification passing) to the same drive **booted successfully on that same Surface**, full live session. `argos write` now ejects the device automatically after a successful write (`--no-eject` to skip), and `argos-helper` now unmounts it immediately before opening it for write (the `Unmounting` phase) -- closing #20, the safe-open precondition the guiding decisions above call for, which nothing called until now. A no-op, not an error, when nothing was mounted. A third macOS write, a real official **Ubuntu 18.04.5 LTS** Desktop ISO (checksum-verified against Canonical's published `SHA256SUMS`) written to the same physical USB drive, was carried to a real, old BIOS/legacy machine (no UEFI at all) and **booted successfully in legacy MBR mode** -- confirming the last untested boot path for v1.0 (BIOS/legacy on Linux is still separately unconfirmed, but macOS-written media now covers both UEFI and BIOS). Progress feedback (`indicatif`) is currently invisible when stdout isn't a real terminal -- tracked separately. |
 | `argos verify` (standalone) | Implemented. `execute_verify`'s core logic is confirmed for real against both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), via the E9 hdiutil-image tests on macOS (Linux loop-device equivalents written the same way, exercised by CI). The full CLI path -- device resolution, `sudo` elevation, progress bar, final printout -- was manually run end-to-end on this Mac against a real physical USB drive: `argos write` then a separate `argos verify` invocation both reported the same SHA-256 (`e73a6241...`), matching Alpine's published checksum. |
 | Windows ISO support (backlog #27) | W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback detection + read-only file-tree wrapper -- corrected mid-implementation after real-media testing showed official Windows ISOs are UDF bridges, not plain ISO9660), W2 (`partition::windows::WindowsPartitionPlan`: two-partition layout arithmetic + `preflight::check_windows_capacity`), W3 (`argos-privileged::windows`: real GPT via `gptman`, vendored UEFI:NTFS boot image, `mkfs.ntfs`/`ntfs-3g` shell-outs, per-file copy+hash), W4 (`execute_verify_windows_image`: GPT layout + boot partition + per-file hash verification), and W5 (`argos write`/`argos verify` both classify DD-mode-first then try the Windows-installer shape, showing the two-partition layout before confirming, refusing early and honestly on non-Linux hosts). W1 confirmed end-to-end (classify, list 906 files, extract and byte-verify individual files including a 5.18GB `install.wim` listed correctly) against a real, official Microsoft Windows 10 22H2 ISO; W5's classification/layout/preflight logic re-confirmed against that same real ISO (correctly routed as non-DD/Windows-installer, correct two-partition layout and capacity pass/fail at plausible USB stick sizes). W2-W4 unit-tested; W3/W4's real-loop-device integration tests (root/`losetup`/`mkfs.ntfs`/`ntfs-3g`-gated) confirmed passing for real in CI. First real-hardware W6 attempt (real Windows 10 ISO to a physical USB drive) surfaced a real memory-exhaustion bug (#38, `install.wim`'s whole-file-in-memory UDF read plus a memory-constrained machine OOM-killed an unrelated process); first mitigated with a `check_windows_memory` preflight refusal, then fixed for real by `image::udf`, Argos's own streaming UDF reader (phase 3 M1, #40 -- constant-memory copy confirmed at 3.5MB peak RSS streaming a 512MB fixture file; the preflight guard and `hadris-udf` runtime dependency were retired with it). `image::udf` since re-validated against **both** real official ISOs (M1.5): Windows 10 22H2 (5.18GB `install.wim`) and Windows 11 25H2 (7.58GB `install.wim`, checksum-verified against Microsoft's published SHA-256), each streamed at **3MiB peak RSS** with a digest byte-identical to macOS's own native UDF driver reading the same file. Phase 3 M3 (#43) added the pure-Rust FAT32 single-partition layout behind `--layout fat32|ntfs` (`WindowsFat32Plan`, `PartitionWindow`, `argos-privileged::windows_fat32`): write+verify round-trip covered by unit tests over plain files and a root-gated loop-device integration test needing only `losetup` -- no `mkfs.ntfs`/`ntfs-3g`/`--partscan`. Phase 3 M2 (#42) added `image::wim`, Argos's own WIM reader/splitter: it redistributes whole stored resources into `.swm` parts without ever decompressing or re-encoding (so the lookup table's SHA-1s stay valid by construction, and no XPRESS/LZX codec is needed), and is wired into the FAT32 copy as a stream (UDF -> splitter -> `fatfs`, hashing in one pass). Validated against wimlib as an external oracle -- including `wimlib-imagex apply` reproducing a source tree byte for byte from our parts -- and against **both real ISOs**: Windows 10 22H2 (71824 lookup entries, 2 parts of 3.98GB + 1.16GB, 1.3s) and Windows 11 25H2 (95219 entries, 7.06GB of resources into 3 parts of 3.46GB + 3.98GB + 0.08GB, 2.3s) -- every part under FAT32's 4GiB-1 limit, `plan_part_sizes` predicting each size exactly before a byte was read, and `wimlib-imagex verify` passing over all 11 images and every byte of file data in both cases. M4 (#34) then enabled the whole FAT32 path on **macOS**, superseding that issue's original macFUSE/`ntfs-3g` route entirely -- with no `mkfs`, no mount and no partition device nodes, nothing in the path is platform-specific. Two real macOS device-node quirks were found by running it against a real `hdiutil`-attached disk and are handled in `argos-privileged::partition_io`: `/dev/diskN` reports 0 for `SEEK_END` (which `gptman` needs to lay out a new GPT -- `SizedDevice` answers it from the already-validated device size), and it rejects `fcntl(F_FULLFSYNC)`, which `File::sync_all` maps to on macOS, with `ENOTTY` (`sync_device` falls back to plain `fsync(2)`, only on that exact errno). Full FAT32 write+verify passes on macOS via `hdiutil` with no macFUSE, no ntfs-3g and no root. **M5 real-hardware result (partial)**: media written from macOS to a physical USB stick booted a real UEFI machine to the Windows Setup start screen. That validates two decisions that until then were only arguments: the M3.2 choice of a Microsoft Basic Data type GUID over an ESP (firmware found and ran `efi/boot/bootx64.efi` on a basic-data partition, as Rufus's media does), and that the FAT32 `fatfs` writes is readable by real firmware rather than only by our own reader. Getting there also surfaced three bugs no automated test had caught: the CLI kept its own pre-splitter 4GiB check and so refused real Windows media the helper could write; `argos verify` opened the disk read-write while macOS had auto-mounted the fresh partition (`EBUSY`); and a write died mid-copy with `EBUSY`, apparently from that same auto-mount, now guarded by an exclusive (`O_EXCL`) open -- a fix that is **inferred rather than reproduced**, since `hdiutil` images are exempt from disk arbitration and never auto-mount. Still pending: taking Setup past disk selection (the acceptance criterion that proves the split `.swm` is accepted -- the machine tested could not be installed to), M5.1 (Linux host), M5.3 (Secure Boot), and the M4.3 decision on retiring the NTFS layout. **M6 (BIOS/MBR) is next and is not optional**: producing media for old lab machines is the use case that motivated the project. Its M6.1 decision is settled -- Argos writes its own MBR and FAT32 boot records from source under MIT/Apache, declining a GPL relicense that would have allowed porting `ms-sys`'s field-tested (but binary-blob) records. **M6 is now implemented and validated on real BIOS hardware.** M6.2-M6.5 (#45) added `WindowsMbrPlan`, Argos's own MBR boot code (279 of the 440 bytes available) and FAT32 VBR (418 of 420), both written from scratch in 16-bit assembly, plus a QEMU/SeaBIOS boot-chain test that boots media the product's own write path produced. `--layout fat32-bios` media written **from a Mac** then booted a real legacy-BIOS machine (Intel Atom N455 netbook, AMI BIOS dated 2011) through Argos's MBR, Argos's VBR, `bootmgr` and WinPE to Windows Setup's **disk selection** -- the acceptance criterion that had been pending, and the one that proves the split `.swm` is accepted by Setup itself. The same criterion was also met on a real UEFI machine, with both an unsplit `install.esd` and a split `install.wim`. That closes M2, M3, M4 and M6 against real hardware, from a host with no Windows machine, no `mkfs.ntfs`, no `ntfs-3g` and no vendored binary blob anywhere in the path. Getting there cost several rounds of lab testing against a symptom -- WinPE showing the volume as FAT32 with **no drive letter**, and Setup reporting a missing media driver -- that six separately-confirmed real defects failed to explain (zeroed CHS in the MBR entry, a desynchronized backup boot sector, a previous bootloader surviving a GPT write, `.`/`..` entries violating the FAT spec (#56), a fixed volume serial, and `BPB_HiddSec` left at 0 on the GPT path). The actual cause was found by dumping a written stick sector by sector and comparing it against Rufus-written media (`tools/mediadiff.py`): `mbrman` writes sector 0 and nothing else, so a stick previously written with `--layout fat32` kept its **entire GPT** -- primary header at LBA 1, entry array behind it, backup header in the device's last sector, every CRC still validating -- underneath an MBR whose first entry is a bootable FAT32 partition rather than the protective `0xEE` a GPT requires. Windows will not hand a volume on a disk in that state a drive letter, and the media still *boots*, which is what made it so hard to localize. `write_mbr_partition_table` now erases both GPT copies and `verify_mbr_layout` refuses media that still carries one (#59). It is also why emulation never reproduced the failure: the QEMU harness builds its media in a freshly truncated file, which has no stale GPT to leave behind -- only a recycled device reproduces it, and every lab stick had been written with the GPT layout first. **M5.1 (Linux host) is now closed too**: a real Windows 10 22H2 ISO written from a Linux host (Arch, kernel 7.1) to a physical SanDisk 28.7GB stick booted to Windows Setup's **disk selection** on a real UEFI machine with `--layout fat32` and on a real legacy-BIOS machine with `--layout fat32-bios` (2026-09-03). The FAT32 path is therefore validated against real hardware from **both** supported hosts and on **both** firmwares, which is the whole of what phase 3 set out to prove. That run also exercised the #59 recycled-stick scenario on real hardware -- the same stick took the GPT layout first and the MBR layout second, and Setup still reached its installation source, which a surviving GPT would have prevented. **M4.3 is decided: the NTFS layout is retired, not merely demoted.** With M5.1 closing the boot criterion on both hosts and both firmwares, there was no longer a reason to carry `mkfs.ntfs`/`ntfs-3g` shell-outs, the vendored `uefi-ntfs.img` blob, the two-partition `WindowsPartitionPlan`, or the three NTFS-only `PlatformOps` methods -- keeping "NTFS has no 4GiB file limit" as a reason to keep the path stopped being persuasive once M2's splitter made that limit a non-issue for FAT32 too. `windows.rs`, `assets/`, `write_windows_image.rs`, and every NTFS-only code path across `argos-core`/`argos-platform*`/`argos-privileged`/`argos-cli` are gone from the tree; `--layout`'s default is now `fat32`, and `ntfs` is no longer a valid value (a plan JSON with no `layout` key -- from before the field existed -- now parses as `fat32`, the only meaning left for that default). Still pending: an installation carried to completion rather than stopping at disk selection, and M5.3 (Secure Boot) |
-| Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push -- the cross-compile step (`x86_64-apple-darwin` from an Apple Silicon runner) and the packaging script were both confirmed by actually running them on this machine, though no tag has been pushed yet so the workflow itself hasn't run for real. crates.io publish and a Homebrew tap not started -- both need decisions/credentials only the project owner has (a crates.io account/token; a tap repo name and org). |
+| Packaging/distribution | GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/release.yml`, triggered by a `vX.Y.Z` tag push, now building and shipping `argos-gui` alongside `argos`/`argos-helper` in every tarball, the `.deb`, and a `lipo`'d universal `.dmg`. The Homebrew tap ([`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-argos)) exists and is bumped automatically by the release workflow (`update-homebrew-tap`) -- reported from real use: the tap sat pinned to an old version for several releases because bumping it was a manual step nobody remembered. The AUR `PKGBUILD` still builds `argos-cli`/`argos-privileged` only: its `source=` deliberately points at a *tagged release tarball*, to prove the real `sha256sums` and build steps work against what the AUR would actually fetch rather than this checkout, and no tag published so far contains `argos-gui` -- `build()`'s own comment in the PKGBUILD spells out exactly what to add (`-p argos-gui`, the three desktop-integration assets, two new runtime `depends`) once one does. crates.io publish not started -- needs a decision/credentials only the project owner has. |
+| Phase 4: graphical interface (`argos-gui`, backlog #97) | G0-G8 implemented; G9 (real-hardware validation) in progress. One window sharing every safety check with the CLI through `argos-session` (extracted in G1): device refusal, TOCTOU re-validation, retype-the-device-path confirmation. Elevation (G3) validated end-to-end on both hosts against real removable media -- macOS needed `argos-helper` granted Full Disk Access (TCC; the same requirement Disk Utility, CleanMyMac and balenaEtcher carry), confirmed by `log stream` showing the exact authorization flip; Linux's `pkexec` route confirmed with a human actually dismissing the polkit dialog (exit 126, `ElevationDeclined`) and with a real write completing end to end. i18n (G6) covers the whole GUI surface in English and Brazilian Portuguese, including translated error categories for the ~20 stable `argos-helper` exit codes; every glyph the UI can draw in either language is checked against the actually-bundled fonts by `every_glyph_the_ui_draws_is_renderable_with_the_bundled_fonts`, not assumed. **Real-hardware validation on Linux (2026-09-09, Ubuntu 24.04, GNOME 46, X11, package-installed build)**: a full write+verify+eject cycle from a real Ubuntu 24.04.2 ISO to a physical USB stick, launched from the applications menu with no terminal attached; a genuine mid-flush USB unplug producing a translated I/O-error panel with the window remaining fully responsive (not the terminal-only crash path); a cancel press landing inside the ~2%-of-wall-clock cancellable window (#104) and settling as `Cancelled`; a `SIGKILL` of `argos-gui` alone while `argos-helper` was mid-`fsync`, with the helper running to completion on its own via the EOF safety net rather than hanging or corrupting the target -- the same mechanism the G0 spike proved on macOS, now confirmed on the Linux `pkexec` route too; and automatic language detection from a real `pt_BR.UTF-8` locale, with no `ARGOS_LANG` override and no saved config, rendering the entire window in Portuguese including every accented character. One real defect found this way and fixed (not merely noted): a `Helper`-sourced error with a known exit-code category was showing its translated category glued to the *entire* raw English message on the same, un-collapsible line (`operação cancelada: operation cancelled by user; the device is left in an inconsistent state...`) -- every other `ArgosError` variant already kept the raw text confined to the "Details" pane; the `Helper` branch was the one exception, now fixed to match. Still open for G9: the same disconnect/cancel/force-quit matrix on macOS, Gatekeeper's exact on-screen wording for this specific unsigned build, and whether Full Disk Access survives a rebuild of `argos-helper` (#107) -- relevant because every release recompiles it. |
 
 ## Prior art consulted
 
