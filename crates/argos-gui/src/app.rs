@@ -28,6 +28,11 @@ pub const APP_ID: &str = "argos-gui";
 /// How often the device list is refreshed while the user is choosing.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// From the same `Cargo.toml` field `argos --version` reports, so the two
+/// can never drift apart (#113): a bug report naming a GUI version is
+/// naming the exact build the CLI would too.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub struct ArgosApp {
     platform: Arc<dyn PlatformOps + Send + Sync>,
     tx: Sender<WorkerMsg>,
@@ -396,6 +401,25 @@ impl eframe::App for ArgosApp {
         #[cfg(target_os = "linux")]
         self.maybe_poll_system_theme(ctx);
         self.accept_dropped_iso(ctx);
+
+        // A `TopBottomPanel`, not folded into `draw_chooser`'s own
+        // bottom-anchored action row: that row only exists on the Idle/
+        // Preparing/AwaitingConfirmation screens, and the version should be
+        // visible on every one of them, including Running and the result
+        // screens -- added before `CentralPanel` below, which is what makes
+        // egui reserve this strip first and give the panel the rest.
+        egui::TopBottomPanel::bottom("version_footer")
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                ui.add_space(metric::GAP_NOTICES);
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Argos {VERSION}"))
+                            .small()
+                            .weak(),
+                    );
+                });
+            });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.draw_header(ui);
