@@ -42,12 +42,18 @@ jobs:
       # eframe/argos-gui needs X11/xkb headers to *build* here, same as
       # ci.yml's clippy/test/deb-package jobs (phase 4 G4/G7). glow and
       # winit dlopen libGL and the Wayland libraries at runtime, so no
-      # -dev package is needed for those.
+      # -dev package is needed for those. desktop-file-utils is
+      # desktop-file-validate, which build-deb.sh below now runs against
+      # argos.desktop before packaging (#94/G7.6) -- present in ci.yml's own
+      # deb-package job since #109, missed here because it is a separate
+      # workflow file. Found by a real release run (v1.6.0) failing here
+      # with "desktop-file-validate: command not found", not by inspection.
       - if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev \
-                                  libxcb-shape0-dev libxcb-xfixes0-dev
+                                  libxcb-shape0-dev libxcb-xfixes0-dev \
+                                  desktop-file-utils
 
       - run: cargo build --release --target ${{ matrix.target }} -p argos-cli -p argos-privileged -p argos-gui
 
