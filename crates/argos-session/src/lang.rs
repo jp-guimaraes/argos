@@ -513,8 +513,25 @@ pub fn localize_error(err: &ArgosError, lang: Lang) -> String {
         ArgosError::Cancelled => s.error_cancelled.to_string(),
         ArgosError::NotConfirmed => s.error_not_confirmed.to_string(),
         ArgosError::ElevationDeclined => s.error_elevation_declined.to_string(),
+        // A known exit code gets *only* its category: `helper_category`'s
+        // labels are already complete, translated sentences (matching the
+        // CLI-side variants above, none of which append their own raw
+        // English either), and the whole point of translating this screen
+        // is that its main line reads in one language. `message` is not
+        // silently dropped -- it is what `draw_result`'s "Details" already
+        // shows underneath, from `error.to_string()`, same as every other
+        // variant here.
+        //
+        // Found on real hardware, not by inspection: yanking a USB stick
+        // mid-write produced "operação cancelada: operation cancelled by
+        // user; the device is left in an inconsistent state..." on the main
+        // line -- a Portuguese phrase glued to an entire English sentence,
+        // both visible at once. An unrecognised exit code still needs the
+        // raw message concatenated (there is no category to stand alone
+        // with), which is the one place this string legitimately mixes
+        // languages.
         ArgosError::Helper { message, exit_code } => match helper_category(*exit_code, s) {
-            Some(category) => format!("{category}: {message}"),
+            Some(category) => category.to_string(),
             None => format!("{}: {message}", s.error_generic_prefix),
         },
         // DeviceTooSmall, WindowsFileMismatch, WindowsFileTooLargeForFat32,
@@ -878,11 +895,18 @@ mod tests {
             message: "device '/dev/sdz' looks like a system disk".into(),
             exit_code: 12,
         };
-        let text = localize_error(&err, Lang::En);
-        assert!(text.starts_with("the device looks like a system disk:"));
-        assert!(
-            text.contains("/dev/sdz"),
-            "raw message must survive: {text}"
+        // Only the translated category -- not the raw English message
+        // concatenated onto it. Found on real hardware: yanking a USB stick
+        // mid-write produced a Portuguese category glued to an entire
+        // English sentence on the same, un-expandable line. The raw text is
+        // not lost; it is what "Details" shows, from `error.to_string()`.
+        assert_eq!(
+            localize_error(&err, Lang::En),
+            "the device looks like a system disk"
+        );
+        assert_eq!(
+            localize_error(&err, Lang::PtBr),
+            "o dispositivo parece ser um disco de sistema"
         );
     }
 
