@@ -162,18 +162,33 @@ and similar tools for raw removable-device access, denied
 (`authValue=0, authReason=5`) until granted and allowed
 (`authValue=2, authReason=4`) after, confirmed end to end with a real
 write-verify-eject against physical media. Full history and the log
-evidence: issue #102 (closed). Two things not yet confirmed, tracked as
-issue #107:
+evidence: issue #102 (closed).
 
-- Whether the grant survives a rebuild -- the development binary carries an
-  **ad-hoc** signature (a hash of its own contents, changing on every
-  rebuild), and TCC remembers a grant by code identity. A universal `.app`
-  built with a *stable* signing identity (even a free, non-Developer-ID one)
-  may not have this problem; untested.
-- Whether a first-ever run of a never-granted `argos-helper` shows an actual
-  consent dialog, or fails silently the way it did in testing (which had
-  already had the permission removed and re-added by hand, not a truly
-  virgin binary).
+**The grant does not survive a rebuild -- confirmed, twice, in #107
+(closed).** The development binary carries an **ad-hoc** signature (a hash
+of its own contents, changing on every rebuild), and TCC remembers a grant
+by code identity, not by path. Rebuilding `packaging/build-macos-app.sh`
+after an already-working grant reproduced `Operation not permitted` again,
+with Full Disk Access now showing a *second*, unauthorized `argos-helper`
+entry next to the old one; granting the new entry (dragging the binary from
+Finder onto the list -- System Settings' own file picker cannot navigate
+into a `.app`'s `Contents/MacOS` without "Show Package Contents", which is
+not offered inside that specific dialog) restored the write. Repeated a
+second time with the same result.
+
+This is not only a development-iteration annoyance: **every tagged release
+recompiles `argos-helper` with a new ad-hoc signature**, so a user
+upgrading `Argos.app` (a new `.dmg` download, or a future Homebrew cask
+bump) loses their Full Disk Access grant and has to re-add it after every
+update, not only on first install. Worth surfacing prominently to users,
+not buried as a troubleshooting footnote -- a stable signing identity (even
+a free, non-Developer-ID one) is the real fix, tracked as a possible future
+item rather than blocking this release.
+
+One thing still not separately confirmed: whether a first-ever run of a
+never-granted `argos-helper` shows an actual consent dialog, or fails
+silently the way it did in testing (which had already had the permission
+removed and re-added by hand, not a truly virgin binary).
 
 ### Homebrew (macOS)
 
