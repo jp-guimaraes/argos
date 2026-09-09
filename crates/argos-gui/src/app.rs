@@ -500,6 +500,19 @@ impl ArgosApp {
             None => s.lang_menu_auto,
             Some(lang) => strings_for(lang).lang_name,
         };
+        // A combo box showing only its current value ("Automatic",
+        // "English"...) with nothing beside it reads as some unlabelled
+        // write/recording setting, not a language picker -- caught by a
+        // human tester, not by inspection. The label is drawn every time,
+        // in whichever language is currently active, same as every other
+        // field label in the window.
+        //
+        // The ComboBox is added *before* the label here on purpose: this
+        // whole header is laid out right-to-left (see draw_header), where
+        // the first widget added lands at the right edge and each next one
+        // is placed to its left -- so this order is what puts the label to
+        // the combo box's *left*, reading "Language [ ▾ v ]" rather than
+        // the box followed by its own caption.
         egui::ComboBox::from_id_salt("lang-menu")
             .selected_text(selected_text)
             .show_ui(ui, |ui| {
@@ -521,6 +534,7 @@ impl ArgosApp {
                     }
                 }
             });
+        ui.label(s.lang_menu_label);
     }
 
     /// eframe reports dropped files itself; accepting only the first means a

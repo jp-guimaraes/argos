@@ -86,6 +86,11 @@ pub struct Strings {
     /// language picker menu does it.
     pub lang_name: &'static str,
     pub lang_menu_auto: &'static str,
+    /// Label drawn immediately before the language combo box. Without it,
+    /// the box showed only its current value ("Automatic", "English"...)
+    /// with no indication of what it was choosing -- a human tester read it
+    /// as some kind of write/recording setting, not a language picker.
+    pub lang_menu_label: &'static str,
 
     // ---- Image group ----------------------------------------------------
     pub image_group_title: &'static str,
@@ -219,6 +224,7 @@ pub struct Strings {
 pub static EN: Strings = Strings {
     lang_name: "English",
     lang_menu_auto: "Automatic",
+    lang_menu_label: "Language",
 
     image_group_title: "Image",
     choose_button: "Choose…",
@@ -350,6 +356,7 @@ pub static EN: Strings = Strings {
 pub static PT_BR: Strings = Strings {
     lang_name: "Português (Brasil)",
     lang_menu_auto: "Automático",
+    lang_menu_label: "Idioma",
 
     image_group_title: "Imagem",
     choose_button: "Escolher…",
@@ -556,6 +563,7 @@ pub fn sample_all_messages(lang: Lang) -> Vec<String> {
     vec![
         s.lang_name.to_string(),
         s.lang_menu_auto.to_string(),
+        s.lang_menu_label.to_string(),
         s.image_group_title.to_string(),
         s.choose_button.to_string(),
         s.drop_iso_hint.to_string(),
