@@ -5,6 +5,67 @@ All notable changes to Argos are documented here. Loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **A graphical interface: `argos-gui`.** One window, in the spirit of Rufus --
+  pick an image, pick a device, write. It shares every safety check with the
+  CLI through a common `argos-session` crate (the same device refusals, the
+  same TOCTOU re-validation in the privileged helper, the same retype-the-
+  device-path confirmation), so there is no separate, weaker path through
+  the window. Ships in the same package as `argos` on every platform --
+  Homebrew, the `.deb`, the `.dmg`, and every release tarball install all
+  three binaries (`argos`, `argos-gui`, `argos-helper`) together, never
+  split -- because a mismatched pair invites "the GUI can't find its helper"
+  as a confusing failure mode.
+
+  Elevating from a window with no controlling terminal needed its own route
+  on each host: macOS uses the system's own authorization dialog
+  (`osascript ... with administrator privileges`) over a pair of FIFOs
+  standing in for the pipes a terminal would have given it, so the password
+  never transits the Argos process; Linux uses `pkexec`, now with its own
+  polkit policy (`packaging/linux/org.argos.helper.policy`) so the prompt
+  names what is about to happen to the disk instead of showing polkit's
+  generic message. Both routes leave `argos-helper` itself untouched.
+
+  Cancelling is honest about what it can actually do: measured on real
+  hardware, the `CancelToken` reaches the copy loop and nothing after it --
+  not the final flush, not the read-back verification -- so on a multi-
+  gigabyte write the cancellable window is roughly the first 2% of the wall
+  clock. Past that point the Cancel button goes inert and says why, rather
+  than staying live through a press that would silently do nothing.
+
+- **The GUI speaks English and Brazilian Portuguese, in one binary,
+  switchable without a restart.** Detected from the desktop
+  (`LC_ALL`/`LC_MESSAGES`/`LANG` on Linux, `AppleLanguages` on macOS,
+  because `LANG` is frequently empty for an app opened from Finder),
+  overridable from a menu, and saved to a small config file
+  (`$XDG_CONFIG_HOME/argos/config.toml` on Linux, `~/Library/Application
+  Support/argos/config.toml` on macOS). Every label and every error message
+  the window can show comes from a catalogue checked at compile time -- a
+  string missing from either language is a build failure, not a blank
+  label found later. The CLI stays English-only: its help text, man page
+  and shell completions all come from the same `clap` definitions the
+  packaging scripts run at build time, and a locale-dependent `argos man`
+  would ship whatever language the CI runner happened to have.
+
+- **Linux packaging now installs the GUI's desktop integration.** The
+  `.deb` and the AUR package (once a tagged release contains `argos-gui`;
+  see the AUR `PKGBUILD`'s own comment) add a launcher entry, an icon under
+  the `hicolor` theme, and the polkit policy above -- so the graphical
+  authorization prompt and the window itself are both reachable without a
+  terminal.
+
+- **macOS packaging now produces a universal `Argos.app` and `.dmg`,
+  unsigned.** `lipo`'d from both Apple Silicon and Intel builds, so nobody
+  installing it has to know which one their Mac is. Deliberately not signed
+  or notarized in this phase (a paid Developer ID plus notarization on
+  every release, for a project whose macOS install story already has a
+  better answer): Homebrew never sets the quarantine bit, so `brew install`
+  sidesteps Gatekeeper entirely. The `.dmg` is the convenience download for
+  someone who wants the GUI without a Rust toolchain, with
+  `xattr -dr com.apple.quarantine` documented for anyone who downloads it
+  through a browser instead.
+
 ### Fixed
 
 - **`argos` now exits with the code the privileged helper actually reported.**
@@ -16,6 +77,16 @@ All notable changes to Argos are documented here. Loosely follows
   scripting `argos` could tell "it failed" from "it worked" and nothing more.
   The messages themselves are unchanged; only the code is now the true one.
   Found while extracting `argos-session`.
+
+- **Dismissing the graphical authorization dialog now reports itself
+  correctly.** On Linux, cancelling the `pkexec` prompt used to come back as
+  a generic I/O failure (exit 19); it now reads `pkexec(1)`'s own documented
+  exit codes (126 for a dismissed dialog, 127 for any other authorization
+  failure) and reports "authorization was declined" at exit 27, matching
+  what a declined macOS prompt already said. Confirmed by hand, not
+  guessed: exit 126 with an empty stderr and `Error executing command as
+  another user: Request dismissed` is what a real dismissal on GNOME
+  actually produces.
 
 ### Changed
 

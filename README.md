@@ -17,7 +17,8 @@ wide range of Linux distributions and, ideally, on macOS as well.
 ## Status
 
 Argos delivers phase 3 (Windows installer media) validated on real hardware
-from both hosts and on both firmwares — see the
+from both hosts and on both firmwares, and phase 4 (a graphical interface)
+sharing the CLI's exact safety guarantees -- see the
 [latest release](https://github.com/jp-guimaraes/argos/releases/latest) and
 [`CHANGELOG.md`](CHANGELOG.md) for what shipped.
 
