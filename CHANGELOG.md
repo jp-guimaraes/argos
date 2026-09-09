@@ -3,7 +3,7 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.6.0] - 2026-09-09
 
 ### Added
 
@@ -88,6 +88,21 @@ All notable changes to Argos are documented here. Loosely follows
   another user: Request dismissed` is what a real dismissal on GNOME
   actually produces.
 
+- **A translated helper error no longer glues the raw English message onto
+  its own category, on the same un-collapsible line.** Found on real
+  hardware during G9's validation: yanking a USB stick mid-write showed
+  `operação cancelada: operation cancelled by user; the device is left in
+  an inconsistent state...` -- a Portuguese phrase stitched to an entire
+  English sentence. The raw text was never lost, only shown twice; it now
+  stays in the "Details" pane, same as every other error category already
+  did.
+
+- **The language selector reads as one now.** The combo box in the header
+  showed only its current value ("Automatic", "English"...) with nothing
+  beside it -- a human tester read it as some kind of write/recording
+  setting, not a language picker. It now carries a "Language"/"Idioma"
+  label.
+
 ### Changed
 
 - **The write phase now crosses the privilege boundary as a value rather than
@@ -98,6 +113,20 @@ All notable changes to Argos are documented here. Loosely follows
   error instead of a silently unlabelled progress bar. An older helper's
   string form still parses, so a mixed pair degrades to an odd-looking label
   rather than a dropped event.
+
+### Known limitations
+
+- **On macOS, Full Disk Access does not survive an update.** `argos-helper`
+  is unsigned and carries an ad-hoc code signature -- a hash of its own
+  contents -- so every new build, including every tagged release, gets a
+  new one. macOS's TCC remembers a Full Disk Access grant by that identity,
+  not by path, so upgrading `Argos.app` loses the grant along with the old
+  binary: a write fails with a plain `Operation not permitted` again until
+  the new `argos-helper` is granted access by hand (System Settings ->
+  Privacy & Security -> Full Disk Access), the same as on first install.
+  Confirmed by reproducing it twice, independently, across real rebuilds.
+  A stable signing identity would fix this; not done in this phase (see
+  `packaging/README.md`).
 
 ## [1.5.5] - 2026-09-04
 
