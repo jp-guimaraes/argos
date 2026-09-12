@@ -1,7 +1,7 @@
 mod commands;
-mod platform_select;
 
 use argos_privileged::protocol::WindowsLayout;
+use argos_session::ElevationUi;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -23,6 +23,26 @@ enum LayoutArg {
     /// M6, backlog #45). Windows 10 only -- Windows 11 requires UEFI.
     #[value(name = "fat32-bios")]
     Fat32Bios,
+}
+
+/// A CLI-only mirror of `argos_session::ElevationUi`, for the same reason
+/// `LayoutArg` mirrors `WindowsLayout`: `argos-session` never links clap.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum ElevationArg {
+    /// Ask on this terminal, the way `argos` always has.
+    Terminal,
+    /// Ask through the desktop's own authorization dialog, as a windowed
+    /// front end must.
+    Graphical,
+}
+
+impl From<ElevationArg> for ElevationUi {
+    fn from(arg: ElevationArg) -> Self {
+        match arg {
+            ElevationArg::Terminal => ElevationUi::Terminal,
+            ElevationArg::Graphical => ElevationUi::Graphical,
+        }
+    }
 }
 
 impl From<LayoutArg> for WindowsLayout {
@@ -120,6 +140,12 @@ enum Command {
         /// ISOs, which are always written in DD mode).
         #[arg(long, value_enum, default_value_t = LayoutArg::Fat32)]
         layout: LayoutArg,
+        /// Which authorization prompt to use. Hidden because it exists to
+        /// exercise the graphical route (phase 4 G3) from a terminal,
+        /// before there is a GUI to exercise it from -- an ordinary CLI
+        /// user never wants anything but the default.
+        #[arg(long, value_enum, default_value_t = ElevationArg::Terminal, hide = true)]
+        elevation: ElevationArg,
     },
     /// Re-run post-write verification against a device without writing again.
     ///
@@ -137,6 +163,12 @@ enum Command {
         /// ISO (ignored for Linux ISOs).
         #[arg(long, value_enum, default_value_t = LayoutArg::Fat32)]
         layout: LayoutArg,
+        /// Which authorization prompt to use. Hidden because it exists to
+        /// exercise the graphical route (phase 4 G3) from a terminal,
+        /// before there is a GUI to exercise it from -- an ordinary CLI
+        /// user never wants anything but the default.
+        #[arg(long, value_enum, default_value_t = ElevationArg::Terminal, hide = true)]
+        elevation: ElevationArg,
     },
     /// Print a shell completion script to stdout.
     ///
@@ -170,6 +202,7 @@ fn main() {
             no_eject,
             i_know_what_im_doing,
             layout,
+            elevation,
         } => commands::write::run(commands::write::Args {
             // The ArgGroup on Command::Write guarantees exactly one of
             // these is Some.
@@ -179,15 +212,18 @@ fn main() {
             no_eject,
             i_know_what_im_doing,
             layout: layout.into(),
+            elevation: elevation.into(),
         }),
         Command::Verify {
             device,
             iso,
             layout,
+            elevation,
         } => commands::verify::run(commands::verify::Args {
             device,
             iso,
             layout: layout.into(),
+            elevation: elevation.into(),
         }),
         Command::Completions { shell } => {
             let mut command = Cli::command();

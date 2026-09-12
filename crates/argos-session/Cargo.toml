@@ -1,0 +1,44 @@
+[package]
+name = "argos-session"
+description = "UI-agnostic orchestration of Argos's write and verify flows: preflight, plan construction, elevation, and the privileged helper's event stream. No terminal, no widgets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# Exposes the in-memory `PlatformOps` fake to this crate's own tests and to
+# any front end that wants to drive the flow without hardware. Mirrors
+# argos-core's `test-fixtures` feature, and for the same reason: a
+# [dev-dependencies] feature does not apply transitively, so a downstream
+# crate that needs the fixture has to be able to turn it on as a normal one.
+#
+# Scope limit, deliberately: this is for testing *orchestration* -- does
+# prepare_write run its checks in the right order, does a front end handle a
+# device vanishing. It is NOT for testing device safety. A fake that says a
+# disk is safe proves nothing about the code that decides that; those tests
+# stay against real enumeration signals.
+test-fixtures = ["argos-platform/test-fixtures"]
+
+[dependencies]
+argos-core = { workspace = true }
+argos-platform = { workspace = true }
+argos-privileged = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+argos-platform-macos = { workspace = true }
+# mkfifo(3), for the graphical elevator's stand-in pipes. `do shell script`
+# gives no live stdin/stdout to the process it elevates, and a FIFO pair is
+# what lets argos-helper keep the exact stdin/stdout contract it already has.
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+argos-platform-linux = { workspace = true }
+
+[dev-dependencies]
+argos-core = { workspace = true, features = ["test-fixtures"] }
+argos-platform = { workspace = true, features = ["test-fixtures"] }
+tempfile = "3"

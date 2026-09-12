@@ -30,6 +30,26 @@ build() {
     # terminal. `argos` locates its helper as a sibling of its own path
     # (locate_helper_binary in crates/argos-cli/src/commands/helper.rs), so
     # both are built together here and installed side by side below.
+    #
+    # NOT `-p argos-gui` yet, on purpose: `source=` above pins a tagged
+    # release tarball (that is the whole point of testing this in CI --
+    # proving the real sha256sums and build steps, not just this checkout),
+    # and no tag published so far (through v1.5.5) contains the argos-gui
+    # crate or packaging/linux/argos.desktop -- phase 4 has not shipped a
+    # release yet. Adding `-p argos-gui` here before one exists makes
+    # `aur-package` fail with "package ID specification `argos-gui` did not
+    # match any packages" against every tag that predates it -- caught by
+    # CI while preparing #94/G7, not guessed at.
+    #
+    # Once the next release ships the GUI: bump pkgver/sha256sums per
+    # "Keeping it in sync with releases" in packaging/README.md, add
+    # `-p argos-gui` here, install the built binary plus
+    # packaging/linux/{argos.desktop,icons/,org.argos.helper.policy} below
+    # (the `.deb`'s assets list in crates/argos-cli/Cargo.toml is the
+    # reference for exactly which files and where), and add `polkit` and
+    # `hicolor-icon-theme` to `depends` above -- `namcap`, which the
+    # `aur-package` CI job already runs, is the source of truth for whether
+    # that list is complete.
     cargo build --frozen --release -p argos-cli -p argos-privileged
 }
 

@@ -55,6 +55,30 @@ pub enum ArgosError {
     #[error("confirmation did not match; nothing was written and the device is untouched")]
     NotConfirmed,
 
+    /// The user dismissed the system's authorization dialog, so nothing was
+    /// ever elevated.
+    ///
+    /// Shares an exit code with [`Self::NotConfirmed`] because it means the
+    /// same thing -- the user declined before anything was touched -- and
+    /// exists only for the wording. Reusing `NotConfirmed` told someone who
+    /// had just cancelled an authorization prompt that their *confirmation
+    /// did not match*, which describes a different step entirely and reads
+    /// as though they had mistyped the device path.
+    #[error("authorization was declined; nothing was written and the device is untouched")]
+    ElevationDeclined,
+
+    /// A failure `argos-helper` reported across the privilege boundary,
+    /// carrying the exit code *it* chose.
+    ///
+    /// Before this existed the unprivileged side wrapped that message in
+    /// [`ArgosError::Io`] and dropped the code, so every helper-side failure
+    /// exited 19 -- a device that turned out to be a system disk, a checksum
+    /// mismatch and a cancelled write were indistinguishable to anything
+    /// scripting `argos`. The message is unchanged; only the code it exits
+    /// with is now the true one.
+    #[error("{message}")]
+    Helper { message: String, exit_code: i32 },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -76,6 +100,9 @@ impl ArgosError {
             ArgosError::UnsupportedIso(_) => 16,
             ArgosError::ChecksumMismatch { .. } => 17,
             ArgosError::Cancelled => 18,
+            // Whatever the helper itself decided; that is the entire point
+            // of carrying it across the boundary.
+            ArgosError::Helper { exit_code, .. } => *exit_code,
             ArgosError::Io(_) => 19,
             ArgosError::NotImplemented(_) => 20,
             ArgosError::NotWindowsInstallerIso(_) => 21,
@@ -97,7 +124,10 @@ impl ArgosError {
             // inconsistent state" right after "Nothing was written" read as
             // a contradiction, and could scare someone who simply typed the
             // device path wrong.
-            ArgosError::NotConfirmed => 27,
+            // Same code as NotConfirmed on purpose: both mean the user
+            // declined before anything was touched, and nothing scripting
+            // argos has a reason to tell them apart.
+            ArgosError::NotConfirmed | ArgosError::ElevationDeclined => 27,
         }
     }
 }

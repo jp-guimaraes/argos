@@ -140,6 +140,7 @@ fn write_media(device: &str, iso: &Path, layout: WindowsLayout) {
         expected_size_bytes: DEVICE_SIZE,
         iso_path: iso.to_path_buf(),
         layout,
+        eject: false,
     };
     let result = argos_privileged::windows_fat32::execute_write_windows_fat32(
         &plan,

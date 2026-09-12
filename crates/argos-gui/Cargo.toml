@@ -1,0 +1,52 @@
+[package]
+name = "argos-gui"
+description = "Graphical front end for Argos: a single-window writer for bootable installer USB drives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "argos-gui"
+path = "src/main.rs"
+
+[dependencies]
+argos-core = { workspace = true }
+argos-platform = { workspace = true }
+argos-privileged = { workspace = true }
+argos-session = { workspace = true }
+
+# 0.33 deliberately, not the latest. Its `rust-version` is exactly this
+# workspace's 1.88 (0.34 needs 1.92, 0.36 needs 1.95), and it still defaults
+# to the glow/OpenGL renderer rather than wgpu -- which matters, because the
+# hosts this project serves are the same vintage as the machines it writes
+# media for. Licence is `MIT OR Apache-2.0`, so the M6.1 constraint holds.
+#
+# Default features are what we want and are left alone: glow, x11, wayland,
+# accesskit and default_fonts, and notably *not* wgpu. Spelling them out
+# would only be a copy that can drift.
+eframe = "0.33"
+egui = "0.33"
+
+# Default features are `xdg-portal` + `wayland`, and notably *not* `gtk3`:
+# the portal backend is pure Rust talking to the desktop's own file chooser,
+# so building needs no libgtk-3-dev. Also spelled by omission on purpose.
+rfd = "0.17"
+
+# Linux only, and adds no new crate to the tree: `zbus` is already pulled in
+# by `accesskit_unix`'s AT-SPI support, which is why no feature list is
+# spelled out here -- that dependent's own needs already select `blocking`.
+# See `linux_theme.rs` for what this is for.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false }
+
+[dev-dependencies]
+argos-platform = { workspace = true, features = ["test-fixtures"] }
+# Builds a synthetic Windows-installer ISO, so the Preparing -> confirmation
+# transition can be driven through the real `prepare_write` rather than a
+# hand-made stand-in -- `PreparedWrite` keeps its `Plan` private precisely so
+# nothing can fabricate one.
+argos-core = { workspace = true, features = ["test-fixtures"] }
+tempfile = "3"

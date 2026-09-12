@@ -17,7 +17,8 @@ wide range of Linux distributions and, ideally, on macOS as well.
 ## Status
 
 Argos delivers phase 3 (Windows installer media) validated on real hardware
-from both hosts and on both firmwares — see the
+from both hosts and on both firmwares, and phase 4 (a graphical interface)
+sharing the CLI's exact safety guarantees -- see the
 [latest release](https://github.com/jp-guimaraes/argos/releases/latest) and
 [`CHANGELOG.md`](CHANGELOG.md) for what shipped.
 
@@ -32,8 +33,11 @@ from both hosts and on both firmwares — see the
 - **Hosts**: Linux and macOS, both implemented — including for Windows media,
   which needs no `mkfs`, no FUSE and no Windows machine anywhere in the
   process. Windows-as-host is out of scope for now.
-- **Interface**: a CLI (`argos`), architected so a GUI can be added later
-  without reworking the core logic. No GUI exists today.
+- **Interface**: a CLI (`argos`) and a single-window GUI (`argos-gui`,
+  currently macOS and Linux), sharing one implementation of every safety
+  check -- there is no separate, weaker path through the window. Not yet in
+  a tagged release; see [Installation](#installation) below for where each
+  one is available.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and a
 per-area status table, [`CHANGELOG.md`](CHANGELOG.md) for what shipped in
@@ -88,6 +92,45 @@ directory; `argos` looks for `argos-helper` next to itself first). Neither
 binary is code-signed yet, so macOS Gatekeeper will refuse to run `argos` on
 first launch until you approve it once in System Settings -> Privacy &
 Security.
+
+### GUI (macOS, `.dmg`)
+
+Each release also attaches a universal `Argos-<version>.dmg` (Apple Silicon
+and Intel in one file) -- open it, drag `Argos.app` into `Applications`.
+
+It is unsigned and unnotarized, the same decision as the CLI binaries above
+and for the same reason: this project's macOS install story is Homebrew,
+which never sets the quarantine bit that triggers Gatekeeper in the first
+place, so the `.dmg` is a convenience download rather than the primary path.
+A downloaded, quarantined `Argos.app` will be refused on first open. Clear
+the quarantine attribute once, from a terminal:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Argos.app
+```
+
+or, from Finder: System Settings -> Privacy & Security -> scroll to the
+bottom, where an "Open Anyway" button appears after the first blocked
+attempt.
+
+Once running, `Argos.app` needs **Full Disk Access** (System Settings ->
+Privacy & Security -> Full Disk Access) to write to a removable drive -- the
+same permission macOS requires of Disk Utility and similar tools. Without
+it, a write fails right after unmounting with a plain `Operation not
+permitted`. It is specifically `argos-helper` (inside the bundle, at
+`Argos.app/Contents/MacOS/argos-helper`) that needs the grant, not
+`Argos.app` itself -- System Settings' own "+" file picker cannot navigate
+into a `.app` bundle, so add it by dragging that file from a Finder window
+(right-click `Argos.app` -> "Show Package Contents" to reach it) onto the
+Full Disk Access list instead.
+
+**This grant does not survive an update.** Each release rebuilds
+`argos-helper` with a new ad-hoc code signature, which macOS treats as a
+different program -- upgrading to a new version of Argos means re-adding it
+to Full Disk Access again, not just on first install. See
+`packaging/README.md` for the full story and the log evidence.
+
+Not yet available as a Homebrew cask -- see `packaging/README.md`.
 
 ### Via `cargo install`
 

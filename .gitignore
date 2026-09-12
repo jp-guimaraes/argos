@@ -15,3 +15,4 @@
 # Session-local working notes (may contain credentials pasted during a session)
 .claude/
 HANDOFF.md
+.DS_Store

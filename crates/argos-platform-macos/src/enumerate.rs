@@ -95,11 +95,25 @@ impl argos_platform::PlatformOps for MacOsPlatform {
     }
 
     fn eject(&self, device: &Device) -> Result<()> {
-        // Best-effort, matching the Linux backend: Argos doesn't depend on
-        // eject succeeding to consider a write complete.
-        let _ = Command::new("diskutil")
+        // Best-effort, matching the Linux backend, in the sense that Argos
+        // doesn't depend on this succeeding to consider a write complete --
+        // but that posture lives in the CLI (`eject_best_effort` prints a
+        // warning on `Err` rather than failing the command), not here.
+        // Swallowing every failure into `Ok(())`, as this used to do, made
+        // that warning path dead code: a real `diskutil eject` failure went
+        // completely unreported, and the CLI printed "Ejected. Safe to
+        // unplug." regardless. See the Linux backend's `eject` for the same
+        // fix and the real-hardware report it's based on.
+        let status = Command::new("diskutil")
             .args(["eject", &device.platform_id])
-            .status();
+            .status()
+            .map_err(ArgosError::Io)?;
+        if !status.success() {
+            return Err(ArgosError::Io(std::io::Error::other(format!(
+                "diskutil eject {} exited with {status}",
+                device.platform_id
+            ))));
+        }
         Ok(())
     }
 

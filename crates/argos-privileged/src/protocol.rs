@@ -16,7 +16,7 @@
 
 use argos_core::device::Device;
 use argos_core::error::ArgosError;
-use argos_core::progress::CancelToken;
+use argos_core::progress::{CancelToken, Phase};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::PathBuf;
@@ -79,6 +79,20 @@ pub struct WritePlan {
     pub image_path: PathBuf,
     pub image_size_bytes: u64,
     pub verify: bool,
+    /// Whether to eject once the write (and its verify) has finished.
+    ///
+    /// Carried in the plan, rather than left to `argos-cli` after the helper
+    /// exits, because ejecting needs the same privilege writing does: on a
+    /// stock Ubuntu `/dev/sdX` is `root:disk` and the user running `argos`
+    /// typically isn't in `disk`, so the CLI's own attempt failed with
+    /// "cannot open /dev/sdg: Permission denied" on the very device it had
+    /// just written successfully. Reported from real hardware.
+    ///
+    /// `#[serde(default)]` for the same reason [`WriteWindowsPlan::layout`]
+    /// has it: a plan from an older `argos` carries no `eject` key, and the
+    /// conservative reading of that is "don't touch the device further".
+    #[serde(default)]
+    pub eject: bool,
 }
 
 /// The Windows installer write path's counterpart to [`WritePlan`] (phase 3
@@ -102,6 +116,11 @@ pub struct WriteWindowsPlan {
     /// [`WindowsLayout::Fat32`].
     #[serde(default)]
     pub layout: WindowsLayout,
+    /// Whether to eject once the write has finished -- see
+    /// [`WritePlan::eject`], which this mirrors exactly; the Windows path
+    /// had the same unprivileged-eject failure.
+    #[serde(default)]
+    pub eject: bool,
 }
 
 /// The on-disk layouts the helper can produce for a Windows installer write
@@ -154,11 +173,29 @@ pub struct VerifyWindowsPlan {
     pub layout: WindowsLayout,
 }
 
+/// A [`Phase`] as it travels the wire, tolerant of a peer built against the
+/// other side of the change that typed it (backlog #89).
+///
+/// `untagged`, so deserialization tries [`Phase`] first and keeps the raw
+/// string when that fails. That covers a new `argos` reading an old helper's
+/// `Debug`-formatted `"Writing"`; the reverse -- an old `argos` reading a new
+/// helper's `"writing"` -- already worked, since the field was a bare
+/// `String` there and any JSON string parses into one. Both binaries ship
+/// together in every package Argos produces, so a mixed pair is unusual to
+/// begin with; this only means it degrades to an odd-looking label instead of
+/// a dropped event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PhaseWire {
+    Known(Phase),
+    Unknown(String),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     Phase {
-        phase: String,
+        phase: PhaseWire,
     },
     Progress {
         bytes_done: u64,
@@ -176,6 +213,16 @@ pub enum Event {
     },
     WindowsVerifyOk {
         files_verified: u64,
+    },
+    /// The outcome of the post-write eject, emitted after the terminal
+    /// event (so the CLI's progress bar is already finished and printing is
+    /// safe) and only when the plan asked for one. `error` carries the
+    /// failure text rather than failing the operation: the write has already
+    /// succeeded and been verified by this point, so a device that won't
+    /// eject is a warning about unplugging, not a bad write.
+    Ejected {
+        device_path: String,
+        error: Option<String>,
     },
     Error {
         message: String,
@@ -288,6 +335,7 @@ mod tests {
             image_path: "/tmp/ubuntu.iso".into(),
             image_size_bytes: 4_000_000_000,
             verify: true,
+            eject: true,
         }
     }
 
@@ -392,5 +440,90 @@ mod tests {
         let json = r#"{"kind":"write_windows_image","device_path":"/dev/sdz","expected_serial":null,"expected_size_bytes":8000000000,"iso_path":"/tmp/Win11.iso"}"#;
         let parsed: Plan = serde_json::from_str(json).unwrap();
         assert!(matches!(parsed, Plan::WriteWindowsImage(p) if p.layout == WindowsLayout::Fat32));
+    }
+
+    /// A plan JSON written before the `eject` field existed must still parse,
+    /// and must *not* eject: the sender never asked for it, and touching a
+    /// device further than a plan asked is the wrong way to be wrong.
+    #[test]
+    fn write_plans_without_an_eject_key_do_not_eject() {
+        let json = r#"{"kind":"write","device_path":"/dev/sdz","expected_serial":null,"expected_size_bytes":8000000000,"image_path":"/tmp/ubuntu.iso","image_size_bytes":4000000000,"verify":true}"#;
+        let parsed: Plan = serde_json::from_str(json).unwrap();
+        assert!(matches!(parsed, Plan::Write(p) if !p.eject));
+    }
+
+    /// The wire form every current helper emits. Pins the snake_case
+    /// spelling, because that is the only thing distinguishing it from the
+    /// `Debug`-formatted string an older helper sent.
+    #[test]
+    fn a_typed_phase_round_trips_as_snake_case() {
+        let event = Event::Phase {
+            phase: PhaseWire::Known(Phase::FormattingFat32),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""phase":"formatting_fat32""#), "got {json}");
+        let parsed: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            Event::Phase {
+                phase: PhaseWire::Known(Phase::FormattingFat32)
+            }
+        ));
+    }
+
+    /// Version skew, the direction that needed the `untagged` fallback: a
+    /// current `argos` reading the `Debug`-formatted phase an older helper
+    /// sent. It must still be an event, just without a type to match on --
+    /// the alternative is a parse failure, which `stream_helper_events`
+    /// silently skips, and a progress bar that never changes its label.
+    #[test]
+    fn an_older_helpers_debug_formatted_phase_still_parses() {
+        let parsed: Event = serde_json::from_str(r#"{"event":"phase","phase":"Writing"}"#).unwrap();
+        match parsed {
+            Event::Phase {
+                phase: PhaseWire::Unknown(raw),
+            } => assert_eq!(raw, "Writing"),
+            other => panic!("expected an Unknown phase, got {other:?}"),
+        }
+    }
+
+    /// Every variant has to survive the trip, not just the one spot-checked
+    /// above -- a `#[serde(rename)]` typo on a rarely-hit phase would
+    /// otherwise only surface mid-write on real hardware.
+    #[test]
+    fn every_phase_variant_round_trips() {
+        for phase in [
+            Phase::Unmounting,
+            Phase::Checksumming,
+            Phase::Writing,
+            Phase::Flushing,
+            Phase::Verifying,
+            Phase::Partitioning,
+            Phase::FormattingFat32,
+            Phase::CopyingFiles,
+        ] {
+            let json = serde_json::to_string(&Event::Phase {
+                phase: PhaseWire::Known(phase),
+            })
+            .unwrap();
+            let parsed: Event = serde_json::from_str(&json).unwrap();
+            assert!(
+                matches!(parsed, Event::Phase { phase: PhaseWire::Known(p) } if p == phase),
+                "{phase:?} did not survive {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_eject_outcome_round_trips_both_ways() {
+        for error in [None, Some("eject exited with exit status: 1".to_string())] {
+            let event = Event::Ejected {
+                device_path: "/dev/sdz".into(),
+                error: error.clone(),
+            };
+            let json = serde_json::to_string(&event).unwrap();
+            let parsed: Event = serde_json::from_str(&json).unwrap();
+            assert!(matches!(parsed, Event::Ejected { error: e, .. } if e == error));
+        }
     }
 }

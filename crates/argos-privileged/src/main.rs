@@ -10,14 +10,9 @@
 //! D-Bus/plist/UDisks2 API, and never lingers waiting for a second command.
 //! The actual logic lives in `lib.rs::execute`/`execute_verify` -- this file
 //! is only stdin/stdout JSON framing and dispatch around them.
-//!
-//! **Known gap**: cancellation is not wired end-to-end yet -- nothing outside
-//! this process can currently trigger the `CancelToken` passed to the write
-//! loop. A future iteration should forward e.g. a caught SIGINT from the
-//! unprivileged parent into a cancel signal here.
 
 use argos_core::progress::{CancelToken, Phase, ProgressSink};
-use argos_privileged::protocol::{self, Event, Plan};
+use argos_privileged::protocol::{self, Event, PhaseWire, Plan};
 use std::io::{BufRead, Write};
 
 fn main() {
@@ -49,9 +44,19 @@ fn run() -> i32 {
     let cancel_for_watcher = cancel.clone();
     std::thread::spawn(move || protocol::watch_for_cancel(stdin, cancel_for_watcher));
 
+    // Which device to eject once the operation has succeeded, if the plan
+    // asked for one. Recorded here because each arm below consumes its plan,
+    // and acted on only after the terminal event -- see `Event::Ejected`.
+    let mut eject_after: Option<String> = None;
+
     let result = match plan {
-        Plan::Write(write_plan) => argos_privileged::execute(&write_plan, &JsonlProgress, &cancel)
-            .map(|written_hash| Event::Done { written_hash }),
+        Plan::Write(write_plan) => {
+            if write_plan.eject {
+                eject_after = Some(write_plan.device_path.clone());
+            }
+            argos_privileged::execute(&write_plan, &JsonlProgress, &cancel)
+                .map(|written_hash| Event::Done { written_hash })
+        }
         Plan::Verify(verify_plan) => argos_privileged::execute_verify(&verify_plan, &JsonlProgress)
             .map(|hash| Event::VerifyOk { hash }),
         // The plan's layout (WindowsLayout::Fat32 or Fat32Bios -- GPT/UEFI
@@ -59,6 +64,9 @@ fn run() -> i32 {
         // executor; there is only one Windows write path since NTFS's
         // retirement (decision point M4.3, see docs/architecture.md).
         Plan::WriteWindowsImage(windows_plan) => {
+            if windows_plan.eject {
+                eject_after = Some(windows_plan.device_path.clone());
+            }
             argos_privileged::windows_fat32::execute_write_windows_fat32(
                 &windows_plan,
                 &JsonlProgress,
@@ -83,6 +91,16 @@ fn run() -> i32 {
     match result {
         Ok(event) => {
             emit(&event);
+            // After the terminal event, deliberately: the write is already
+            // done and verified, so a failure here is a warning about
+            // unplugging rather than a failed operation, and the CLI's
+            // progress bar has finished by the time it prints.
+            if let Some(device_path) = eject_after {
+                let error = argos_privileged::eject_device(&device_path)
+                    .err()
+                    .map(|err| err.to_string());
+                emit(&Event::Ejected { device_path, error });
+            }
             0
         }
         Err(err) => {
@@ -134,7 +152,7 @@ struct JsonlProgress;
 impl ProgressSink for JsonlProgress {
     fn on_phase(&self, phase: Phase) {
         emit(&Event::Phase {
-            phase: format!("{phase:?}"),
+            phase: PhaseWire::Known(phase),
         });
     }
 
@@ -174,6 +192,7 @@ mod tests {
             expected_size_bytes: 0,
             iso_path: "/tmp/x.iso".into(),
             layout: WindowsLayout::Fat32,
+            eject: false,
         });
         let json = serde_json::to_string(&plan).unwrap();
 

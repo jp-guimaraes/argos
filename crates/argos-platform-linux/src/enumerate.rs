@@ -8,6 +8,7 @@ use crate::sysfs;
 use crate::udisks2::Udisks2Snapshot;
 use argos_core::device::{Bus, Device};
 use argos_core::error::{ArgosError, Result};
+use argos_platform::WrittenBytes;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -85,12 +86,27 @@ impl argos_platform::PlatformOps for LinuxPlatform {
     }
 
     fn eject(&self, device: &Device) -> Result<()> {
-        // Best-effort: not every system has `eject` installed, and Argos doesn't
-        // depend on it succeeding to consider a write complete.
-        let _ = std::process::Command::new("eject")
+        // Best-effort in the sense that Argos doesn't depend on this
+        // succeeding to consider a write complete -- but that posture lives
+        // in the CLI (`eject_best_effort` prints a warning on `Err` rather
+        // than failing the command), not here. Swallowing every failure
+        // into `Ok(())`, as this used to do, made that warning path dead
+        // code: a real failure (seen on real hardware: `eject` exiting with
+        // "Permission denied") went completely unreported, and the CLI
+        // printed "Ejected. Safe to unplug." regardless.
+        match std::process::Command::new("eject")
             .arg(&device.platform_id)
-            .status();
-        Ok(())
+            .status()
+        {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(ArgosError::Io(std::io::Error::other(format!(
+                "eject exited with {status}"
+            )))),
+            // Not every system has `eject` installed -- nothing to report,
+            // there's no eject-manage step to have failed.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(ArgosError::Io(err)),
+        }
     }
 
     fn backing_device_of(&self, path: &Path) -> Result<Option<String>> {
@@ -102,6 +118,36 @@ impl argos_platform::PlatformOps for LinuxPlatform {
             &dm::resolve_mount_source,
         ))
     }
+
+    fn written_bytes(&self, device: &Device) -> Option<WrittenBytes> {
+        let name = device.platform_id.strip_prefix("/dev/")?;
+        let stat_path = PathBuf::from("/sys/block").join(name).join("stat");
+        // Probed once here rather than only inside the closure so an
+        // unreadable counter degrades to "no counter" (and the old
+        // bytes-handed-to-the-OS progress) up front, instead of silently
+        // reporting nothing for the whole write.
+        read_sectors_written(&stat_path)?;
+        Some(WrittenBytes::new(move || {
+            read_sectors_written(&stat_path).map(|sectors| sectors * SECTOR_BYTES)
+        }))
+    }
+}
+
+/// `/sys/block/<dev>/stat` reports in 512-byte sectors regardless of the
+/// device's own logical or physical block size -- see
+/// [`sysfs::parse_sectors_written`], which is where the column itself is
+/// documented and tested.
+const SECTOR_BYTES: u64 = 512;
+
+/// Reads the counter [`sysfs::parse_sectors_written`] parses.
+///
+/// It counts *every* writer to the device, not just this process -- fine
+/// here, since Argos unmounts the device before writing and nothing else is
+/// expected to touch it, and per-process accounting isn't exposed per-device
+/// at all. Callers clamp against their own byte count anyway, so a stray
+/// writer can only make progress look slower than it is, never further along.
+fn read_sectors_written(stat_path: &Path) -> Option<u64> {
+    sysfs::parse_sectors_written(&fs::read_to_string(stat_path).ok()?)
 }
 
 /// Unmounts one filesystem with `umount2(2)`, replacing a shell-out to

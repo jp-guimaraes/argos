@@ -102,6 +102,7 @@ fn writes_and_verifies_against_a_real_loop_device() {
         image_path: image.path().to_path_buf(),
         image_size_bytes: image_contents.len() as u64,
         verify: true,
+        eject: false,
     };
 
     let hash = argos_privileged::execute(&plan, &NoopProgress, &CancelToken::new())
@@ -142,6 +143,7 @@ fn refuses_when_the_plan_size_does_not_match_the_device_anymore() {
         image_path: image.path().to_path_buf(),
         image_size_bytes: 1024,
         verify: false,
+        eject: false,
     };
 
     let err = argos_privileged::execute(&plan, &NoopProgress, &CancelToken::new()).unwrap_err();
@@ -182,6 +184,7 @@ fn verify_matches_a_prior_write_against_a_real_loop_device() {
         image_path: source.path().to_path_buf(),
         image_size_bytes: image_contents.len() as u64,
         verify: false,
+        eject: false,
     };
     argos_privileged::execute(&write_plan, &NoopProgress, &CancelToken::new())
         .expect("the write itself should succeed");
@@ -223,6 +226,7 @@ fn verify_rejects_a_device_that_does_not_match_the_iso() {
         image_path: written.path().to_path_buf(),
         image_size_bytes: 1024,
         verify: false,
+        eject: false,
     };
     argos_privileged::execute(&write_plan, &NoopProgress, &CancelToken::new())
         .expect("the write itself should succeed");

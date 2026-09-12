@@ -3,6 +3,192 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-09-09
+
+### Added
+
+- **A graphical interface: `argos-gui`.** One window, in the spirit of Rufus --
+  pick an image, pick a device, write. It shares every safety check with the
+  CLI through a common `argos-session` crate (the same device refusals, the
+  same TOCTOU re-validation in the privileged helper, the same retype-the-
+  device-path confirmation), so there is no separate, weaker path through
+  the window. Ships in the same package as `argos` on every platform --
+  Homebrew, the `.deb`, the `.dmg`, and every release tarball install all
+  three binaries (`argos`, `argos-gui`, `argos-helper`) together, never
+  split -- because a mismatched pair invites "the GUI can't find its helper"
+  as a confusing failure mode.
+
+  Elevating from a window with no controlling terminal needed its own route
+  on each host: macOS uses the system's own authorization dialog
+  (`osascript ... with administrator privileges`) over a pair of FIFOs
+  standing in for the pipes a terminal would have given it, so the password
+  never transits the Argos process; Linux uses `pkexec`, now with its own
+  polkit policy (`packaging/linux/org.argos.helper.policy`) so the prompt
+  names what is about to happen to the disk instead of showing polkit's
+  generic message. Both routes leave `argos-helper` itself untouched.
+
+  Cancelling is honest about what it can actually do: measured on real
+  hardware, the `CancelToken` reaches the copy loop and nothing after it --
+  not the final flush, not the read-back verification -- so on a multi-
+  gigabyte write the cancellable window is roughly the first 2% of the wall
+  clock. Past that point the Cancel button goes inert and says why, rather
+  than staying live through a press that would silently do nothing.
+
+- **The GUI speaks English and Brazilian Portuguese, in one binary,
+  switchable without a restart.** Detected from the desktop
+  (`LC_ALL`/`LC_MESSAGES`/`LANG` on Linux, `AppleLanguages` on macOS,
+  because `LANG` is frequently empty for an app opened from Finder),
+  overridable from a menu, and saved to a small config file
+  (`$XDG_CONFIG_HOME/argos/config.toml` on Linux, `~/Library/Application
+  Support/argos/config.toml` on macOS). Every label and every error message
+  the window can show comes from a catalogue checked at compile time -- a
+  string missing from either language is a build failure, not a blank
+  label found later. The CLI stays English-only: its help text, man page
+  and shell completions all come from the same `clap` definitions the
+  packaging scripts run at build time, and a locale-dependent `argos man`
+  would ship whatever language the CI runner happened to have.
+
+- **Linux packaging now installs the GUI's desktop integration.** The
+  `.deb` and the AUR package (once a tagged release contains `argos-gui`;
+  see the AUR `PKGBUILD`'s own comment) add a launcher entry, an icon under
+  the `hicolor` theme, and the polkit policy above -- so the graphical
+  authorization prompt and the window itself are both reachable without a
+  terminal.
+
+- **macOS packaging now produces a universal `Argos.app` and `.dmg`,
+  unsigned.** `lipo`'d from both Apple Silicon and Intel builds, so nobody
+  installing it has to know which one their Mac is. Deliberately not signed
+  or notarized in this phase (a paid Developer ID plus notarization on
+  every release, for a project whose macOS install story already has a
+  better answer): Homebrew never sets the quarantine bit, so `brew install`
+  sidesteps Gatekeeper entirely. The `.dmg` is the convenience download for
+  someone who wants the GUI without a Rust toolchain, with
+  `xattr -dr com.apple.quarantine` documented for anyone who downloads it
+  through a browser instead.
+
+### Fixed
+
+- **`argos` now exits with the code the privileged helper actually reported.**
+  Every failure that happened inside `argos-helper` -- a device that turned
+  out to be a system disk (12), a checksum mismatch after writing (17), a
+  cancelled write (18) -- exited **19** instead, because the unprivileged
+  side wrapped the helper's message in a generic I/O error and dropped the
+  `exit_code` the helper had gone to the trouble of sending. Anything
+  scripting `argos` could tell "it failed" from "it worked" and nothing more.
+  The messages themselves are unchanged; only the code is now the true one.
+  Found while extracting `argos-session`.
+
+- **Dismissing the graphical authorization dialog now reports itself
+  correctly.** On Linux, cancelling the `pkexec` prompt used to come back as
+  a generic I/O failure (exit 19); it now reads `pkexec(1)`'s own documented
+  exit codes (126 for a dismissed dialog, 127 for any other authorization
+  failure) and reports "authorization was declined" at exit 27, matching
+  what a declined macOS prompt already said. Confirmed by hand, not
+  guessed: exit 126 with an empty stderr and `Error executing command as
+  another user: Request dismissed` is what a real dismissal on GNOME
+  actually produces.
+
+- **A translated helper error no longer glues the raw English message onto
+  its own category, on the same un-collapsible line.** Found on real
+  hardware during G9's validation: yanking a USB stick mid-write showed
+  `operação cancelada: operation cancelled by user; the device is left in
+  an inconsistent state...` -- a Portuguese phrase stitched to an entire
+  English sentence. The raw text was never lost, only shown twice; it now
+  stays in the "Details" pane, same as every other error category already
+  did.
+
+- **The language selector reads as one now.** The combo box in the header
+  showed only its current value ("Automatic", "English"...) with nothing
+  beside it -- a human tester read it as some kind of write/recording
+  setting, not a language picker. It now carries a "Language"/"Idioma"
+  label.
+
+### Changed
+
+- **The write phase now crosses the privilege boundary as a value rather than
+  as a `Debug`-formatted string.** No visible difference -- every phase label
+  a user has ever seen is byte-identical, and both binaries ship together in
+  every package Argos produces -- but a front end can now *match* on the
+  phase to label it in the user's own language, and renaming one is a compile
+  error instead of a silently unlabelled progress bar. An older helper's
+  string form still parses, so a mixed pair degrades to an odd-looking label
+  rather than a dropped event.
+
+### Known limitations
+
+- **On macOS, Full Disk Access does not survive an update.** `argos-helper`
+  is unsigned and carries an ad-hoc code signature -- a hash of its own
+  contents -- so every new build, including every tagged release, gets a
+  new one. macOS's TCC remembers a Full Disk Access grant by that identity,
+  not by path, so upgrading `Argos.app` loses the grant along with the old
+  binary: a write fails with a plain `Operation not permitted` again until
+  the new `argos-helper` is granted access by hand (System Settings ->
+  Privacy & Security -> Full Disk Access), the same as on first install.
+  Confirmed by reproducing it twice, independently, across real rebuilds.
+  A stable signing identity would fix this; not done in this phase (see
+  `packaging/README.md`).
+
+## [1.5.5] - 2026-09-04
+
+### Changed
+
+- **The write progress bar now tracks bytes the device has actually taken,
+  not bytes merely handed to the OS -- without slowing the write down.**
+  Reported from real hardware: the bar climbed to 100% in an instant (a
+  `write()` only queues bytes in the page cache), then the write sat there
+  looking finished while the kernel was still flushing gigabytes to a slow
+  USB stick in the background. 1.5.4's `Flushing` phase named that wait but
+  had nothing to show during it.
+
+  Progress now comes from the kernel's own per-device counter (field 7 of
+  `/sys/block/<dev>/stat`, completed sectors written), sampled during the
+  copy and again on a background thread while the final `fsync` blocks --
+  so the flush phase advances with real numbers instead of standing still.
+  Nothing about the write path itself changed: it stays plain buffered
+  writes, which is what lets the kernel merge them into large sequential
+  device requests.
+
+  The first attempt at this instead *forced* the answer to be true, with an
+  `fsync` every 64MiB. Measured on the same stick, that dropped a write the
+  kernel otherwise kept 100% busy to roughly 1 MiB/s, because each barrier
+  drains the queue and flushes the device's internal cache. Watching a
+  counter costs nothing; forcing a barrier costs almost everything.
+
+  Platforms with no such counter (macOS, for now) fall back to the previous
+  behavior rather than losing progress reporting.
+
+### Fixed
+
+- **`eject` failing silently claimed "Safe to unplug" anyway.** Reported from
+  real hardware: `eject: cannot open /dev/sdX: Permission denied` printed to
+  the terminal, immediately followed by `Ejected /dev/sdX. Safe to unplug.`
+  Both the Linux and macOS `PlatformOps::eject` backends discarded the
+  underlying `eject`/`diskutil eject` exit status and always returned `Ok(())`
+  -- `eject_best_effort` in the CLI already had the right behavior for a
+  real failure (a warning telling the user to eject manually, without
+  failing the write), but that path was dead code since the backends never
+  actually produced an `Err`. Both now report a real failure (while still
+  treating a missing `eject` binary on Linux as nothing to report, since
+  there's no eject-manage step to have failed); the write itself is
+  unaffected either way -- the physical flush already happened earlier, in
+  `argos-helper`, before eject is ever attempted.
+
+- **The post-write eject then failed for a much simpler reason: it had no
+  privilege.** With the message above finally telling the truth, what it
+  told was `could not eject /dev/sdg: eject exited with exit status: 1`,
+  from `eject: cannot open /dev/sdg: Permission denied` -- on a stock
+  Ubuntu, `/dev/sdX` is `root:disk` mode 0660 and the user running `argos`
+  is typically not in `disk`. Writing works because it happens in the
+  elevated `argos-helper`; ejecting was the one step left behind in the
+  unprivileged CLI, so it could not even open the device it had just
+  written. The eject now travels in the plan (`WritePlan::eject`,
+  `WriteWindowsPlan::eject`) and runs in the helper, which reports the
+  outcome back as a new `Ejected` event -- so the CLI prints the same two
+  messages as before, but from a process that could actually do the work.
+  `--no-eject` is unchanged. Note this is an `EACCES` on `open`, not the
+  `EBUSY` an in-flight write would give: the data was already flushed and
+  verified by the time eject ran.
+
 ## [1.5.4] - 2026-09-04
 
 ### Added
