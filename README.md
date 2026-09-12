@@ -35,9 +35,10 @@ sharing the CLI's exact safety guarantees -- see the
   process. Windows-as-host is out of scope for now.
 - **Interface**: a CLI (`argos`) and a single-window GUI (`argos-gui`,
   currently macOS and Linux), sharing one implementation of every safety
-  check -- there is no separate, weaker path through the window. Not yet in
-  a tagged release; see [Installation](#installation) below for where each
-  one is available.
+  check -- there is no separate, weaker path through the window. Shipped
+  since 1.6.0; see [Installation](#installation) below for where each one
+  is available, and [Graphical interface](#graphical-interface) for a
+  walkthrough.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and a
 per-area status table, [`CHANGELOG.md`](CHANGELOG.md) for what shipped in
@@ -169,6 +170,8 @@ cargo build --release -p argos-cli -p argos-privileged
 
 ## Usage
 
+### Command line
+
 ```sh
 argos list
 ```
@@ -219,6 +222,55 @@ Run `argos <command> --help` for every flag (`--no-verify`, `--no-eject`,
 but you're sure about), or see the man page (`argos man`, or installed
 automatically by the `.deb`/Homebrew/AUR packages above) and
 `argos completions <shell>` for tab completion.
+
+### Graphical interface
+
+`argos-gui` is a single window over the exact same safety checks as the CLI
+above -- there is no separate, weaker path through it. See
+[Installation](#installation) for where to get it (macOS `.dmg`/Homebrew,
+Linux `.deb`/AUR); it ships alongside `argos` and `argos-helper` in every
+package.
+
+<img src="https://raw.githubusercontent.com/jp-guimaraes/argos/main/docs/images/gui/first-launch-pt-br.png" alt="Argos GUI on first launch, automatically in Brazilian Portuguese" width="360">
+
+On first launch it detects the system language automatically (`LANG`/
+`LC_ALL` on Linux, `AppleLanguages` on macOS) -- no setup needed for a
+`pt_BR` lab machine, as pictured above. Automatic detection, English and
+Português (Brasil) are also selectable by hand from the menu at the top
+right, and take effect immediately, no restart:
+
+<img src="https://raw.githubusercontent.com/jp-guimaraes/argos/main/docs/images/gui/language-switch.png" alt="The GUI's language menu: Automatic, English, Português (Brasil)" width="360">
+
+**Image**: click "Choose..." or drag an ISO onto the window. Argos identifies
+it as a Linux image or a Windows installer the same way `argos write` does,
+and shows which:
+
+<img src="https://raw.githubusercontent.com/jp-guimaraes/argos/main/docs/images/gui/mbr-option-en.png" alt="A Windows ISO selected, with the legacy-BIOS/MBR checkbox enabled and explained" width="360">
+
+For a Windows installer, an "Old machine -- legacy BIOS (MBR)" checkbox
+appears (disabled, with an explanatory line, until a Windows image is
+chosen) -- this is `--layout fat32-bios` from the CLI, for pre-UEFI
+machines; left unchecked, media is written for UEFI (`--layout fat32`).
+Linux images have no such choice: they are always written byte-for-byte.
+
+**Target**: the dropdown lists only disks Argos considers safe to write to
+(removable, on a USB bus, not the system disk) -- a device it refuses is a
+device you cannot click by accident. "Show every disk, including those the
+system does not consider removable" reveals the rest for inspection, but
+existing refusals (system disk, no removable bus) still apply; it doesn't
+unlock anything, only widens what's listed. With nothing plugged in, the
+dropdown says so plainly rather than showing an empty list:
+
+<img src="https://raw.githubusercontent.com/jp-guimaraes/argos/main/docs/images/gui/no-device.png" alt="The target dropdown reporting no removable device found" width="360">
+
+**Write / Verify**: both stay disabled until an image and a target are
+picked. "Write..." opens the same confirmation as the CLI's "type the
+device path back" prompt -- retyping it is not a checkbox to click through,
+on the window either. Elevation happens from there (a password dialog on
+macOS, a polkit prompt on Linux); once running, progress, cancel, and any
+error are reported in the window itself, translated into whichever language
+is active. "Verify..." re-checks a device against an image without writing
+anything, same as `argos verify`.
 
 ## Inspiration
 

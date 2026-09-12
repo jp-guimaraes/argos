@@ -1,0 +1,87 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs-site/**
+      - docs/architecture.md
+      - README.md
+      - CONTRIBUTING.md
+      - CHANGELOG.md
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time; let an in-flight run finish instead of
+# cancelling it, so the site never gets stuck mid-deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: 0.5.4
+  MDBOOK_I18N_HELPERS_VERSION: 0.4.0
+  # Every po/<lang>.po file in docs-site/po/ (see docs-site/README.md) gets its own
+  # build, published side by side under book/<lang>/. Keep this in sync with the
+  # LANGUAGES map in docs-site/theme/lang-switcher.js.
+  LANGUAGES: "pt-BR"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mdBook
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # mdbook-gettext (the [preprocessor.gettext] in book.toml) has no prebuilt
+      # binaries, only source -- built from crates.io like any other cargo tool.
+      - name: Install mdbook-i18n-helpers
+        run: cargo install mdbook-i18n-helpers --version "${MDBOOK_I18N_HELPERS_VERSION}" --locked
+
+      - name: Build English book
+        working-directory: docs-site
+        run: mdbook build -d book/en
+
+      - name: Build translated books
+        working-directory: docs-site
+        run: |
+          for lang in $LANGUAGES; do
+            MDBOOK_BOOK__LANGUAGE="$lang" mdbook build -d "book/$lang"
+          done
+
+      - name: Redirect the site root to the English book
+        run: |
+          cat > docs-site/book/index.html <<'HTML'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=en/">
+          <link rel="canonical" href="en/">
+          <p>Redirecting to <a href="en/">the English docs</a>...</p>
+          HTML
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/book
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
