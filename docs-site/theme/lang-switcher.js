@@ -48,8 +48,12 @@
     link.setAttribute("aria-label", "Switch to " + LANGUAGES[target]);
     // A plain text label ("EN" / "PT-BR"), not an icon -- the other menu-bar buttons
     // are icon-only, but there is no universally-understood glyph for "language" the
-    // way there is for print or search, and the text doubles as its own tooltip.
-    link.textContent = LANGUAGES[target];
+    // way there is for print or search, and the text doubles as its own tooltip. The
+    // Brazil flag is added only when the button leads *to* pt-BR (never on the pt-BR
+    // page itself, where the button leads back to English) -- it marks "this goes to
+    // Portuguese", not a language-neutral globe.
+    link.textContent =
+      target === "pt-BR" ? "🇧🇷 " + LANGUAGES[target] : LANGUAGES[target];
     link.classList.add("lang-switch-button");
 
     rightButtons.insertBefore(link, rightButtons.firstChild);
