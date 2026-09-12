@@ -6,13 +6,21 @@ pipeline.
 
 ## Structure
 
-- `src/*.md` — book chapters. Each one is a single `{{#include}}` of a doc that already
-  lives elsewhere in the repo (README.md, docs/architecture.md, CONTRIBUTING.md,
-  CHANGELOG.md), so the site can never drift from the docs that already exist there —
-  edit those files, not the includes.
+- `src/*.md` — book chapters. Every one but `download.md` is a single `{{#include}}` of
+  a doc that already lives elsewhere in the repo (README.md, docs/architecture.md,
+  CONTRIBUTING.md, CHANGELOG.md), so the site can never drift from the docs that
+  already exist there — edit those files, not the includes. `download.md` is native
+  content: GitHub's Releases API is the actual source of truth for what it shows, not
+  a file in this repo, so there's nothing to include from.
 - `theme/lang-switcher.{js,css}` — the language-switcher button injected into the menu
   bar (mdBook has no built-in one). Its `LANGUAGES` map must stay in sync with the
   `LANGUAGES` env var in `.github/workflows/docs.yml` and with `po/*.po` below.
+- `theme/download-links.{js,css}` — fetches the latest release from the GitHub API
+  client-side and renders real download links on `download.md`, keyed off this repo's
+  actual asset-naming pattern from `.github/workflows/release.yml`. Its own small
+  amount of UI text ("Loading…", category labels) is hardcoded bilingually in the
+  script rather than run through `po/*.po`, the same way `lang-switcher.js`'s button
+  text is — gettext only ever sees markdown, not script-generated DOM content.
 - `po/*.po` — translations, one file per non-English language (see below).
 
 ## Previewing locally

@@ -9,8 +9,8 @@ src = "src"
 git-repository-url = "https://github.com/jp-guimaraes/argos"
 edit-url-template = "https://github.com/jp-guimaraes/argos/edit/main/docs-site/{path}"
 site-url = "/argos/"
-additional-js = ["theme/lang-switcher.js"]
-additional-css = ["theme/lang-switcher.css"]
+additional-js = ["theme/lang-switcher.js", "theme/download-links.js"]
+additional-css = ["theme/lang-switcher.css", "theme/download-links.css"]
 
 # mdbook-i18n-helpers (https://github.com/google/mdbook-i18n-helpers): turns
 # the msgid/msgstr pairs in po/<lang>.po into a translated build when invoked
