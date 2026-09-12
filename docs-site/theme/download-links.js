@@ -21,6 +21,10 @@
         "Could not reach the GitHub API just now. Get the files directly from the ",
       errorLinkText: "latest release page",
       version: "Version",
+      totalDownloads: "Total downloads, all releases combined",
+      downloadsSuffix: function (n) {
+        return n === 1 ? "download" : "downloads";
+      },
       categories: {
         dmg: "macOS -- universal .dmg (Apple Silicon + Intel)",
         deb: "Linux -- .deb (Debian, Ubuntu)",
@@ -35,6 +39,10 @@
       error: "Não foi possível acessar a API do GitHub agora. Baixe direto da ",
       errorLinkText: "página do último release",
       version: "Versão",
+      totalDownloads: "Total de downloads, somando todos os releases",
+      downloadsSuffix: function (n) {
+        return n === 1 ? "download" : "downloads";
+      },
       categories: {
         dmg: "macOS -- .dmg universal (Apple Silicon + Intel)",
         deb: "Linux -- .deb (Debian, Ubuntu)",
@@ -66,18 +74,45 @@
     return mib.toFixed(1) + " MiB";
   }
 
-  function render(container, strings, release) {
+  // GitHub tracks this per asset natively (release.assets[].download_count) --
+  // no separate counter service needed. Formatted per-locale (1,234 vs
+  // 1.234) with the current page's language as the locale tag.
+  function humanCount(n, lang, strings) {
+    return n.toLocaleString(lang) + " " + strings.downloadsSuffix(n);
+  }
+
+  // `releases` is every release, newest first (GitHub's own order) -- assets
+  // and their per-file download_count come from releases[0], the total sums
+  // every release's assets so an old tag's downloads are never lost from the
+  // count just because a newer version shipped.
+  function render(container, strings, lang, releases) {
     container.textContent = "";
+    var latest = releases[0];
 
     var version = document.createElement("p");
     var versionLabel = document.createElement("strong");
     versionLabel.textContent = strings.version + ": ";
     version.appendChild(versionLabel);
-    version.appendChild(document.createTextNode(release.tag_name));
+    version.appendChild(document.createTextNode(latest.tag_name));
     container.appendChild(version);
 
+    var totalDownloads = releases.reduce(function (sum, release) {
+      return (
+        sum +
+        release.assets.reduce(function (s, asset) {
+          return s + asset.download_count;
+        }, 0)
+      );
+    }, 0);
+    var total = document.createElement("p");
+    var totalLabel = document.createElement("strong");
+    totalLabel.textContent = strings.totalDownloads + ": ";
+    total.appendChild(totalLabel);
+    total.appendChild(document.createTextNode(totalDownloads.toLocaleString(lang)));
+    container.appendChild(total);
+
     var byCategory = {};
-    release.assets.forEach(function (asset) {
+    latest.assets.forEach(function (asset) {
       var cat = categoryFor(asset.name);
       (byCategory[cat] = byCategory[cat] || []).push(asset);
     });
@@ -93,7 +128,17 @@
         link.href = asset.browser_download_url;
         link.textContent = strings.categories[cat];
         item.appendChild(link);
-        item.appendChild(document.createTextNode(" -- " + asset.name + " (" + humanSize(asset.size) + ")"));
+        item.appendChild(
+          document.createTextNode(
+            " -- " +
+              asset.name +
+              " (" +
+              humanSize(asset.size) +
+              ", " +
+              humanCount(asset.download_count, lang, strings) +
+              ")"
+          )
+        );
         list.appendChild(item);
       });
     });
@@ -116,16 +161,23 @@
     var container = document.getElementById("latest-release-downloads");
     if (!container) return; // not on the download page
 
-    var strings = STRINGS[currentLanguage()];
+    var lang = currentLanguage();
+    var strings = STRINGS[lang];
     container.textContent = strings.loading;
 
-    fetch("https://api.github.com/repos/" + REPO + "/releases/latest")
+    // The list endpoint, not /releases/latest -- one call gives both the
+    // latest release (releases[0], same one /latest would return) and every
+    // other release's assets, which the total-downloads count needs. This
+    // repo has 8 releases, well under the 30-per-page default, so no
+    // pagination is needed to have every one of them.
+    fetch("https://api.github.com/repos/" + REPO + "/releases")
       .then(function (res) {
         if (!res.ok) throw new Error("GitHub API responded " + res.status);
         return res.json();
       })
-      .then(function (release) {
-        render(container, strings, release);
+      .then(function (releases) {
+        if (!releases.length) throw new Error("no releases returned");
+        render(container, strings, lang, releases);
       })
       .catch(function () {
         renderError(container, strings);
