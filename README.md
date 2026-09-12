@@ -1,6 +1,6 @@
 # Argos
 
-Argos is a free-software tool for creating bootable installer USB drives, in
+[Argos](https://jp-guimaraes.github.io/argos/) is a free-software tool for creating bootable installer USB drives, in
 the spirit of [Rufus](https://github.com/pbatard/rufus) but built to run
 cross-platform.
 
