@@ -42,6 +42,10 @@ pub enum Phase {
     /// Copying the extracted Windows installer files onto the FAT32
     /// partition (phase 3 M3, backlog #43).
     CopyingFiles,
+    /// Zeroing the start and end of a device before `argos format` lays a
+    /// fresh partition table on it, so nothing a previous image left behind
+    /// (a GPT, an ISO9660 superblock, a bootloader) is still recognisable.
+    Wiping,
 }
 
 /// Implemented by whatever wants to observe an operation's progress. `argos-core`

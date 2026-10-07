@@ -387,6 +387,17 @@ fn stream_helper_events(
                 sink.on_finished(&settled);
                 outcome = Some(Ok(settled));
             }
+            Event::FormatDone {
+                partition_bytes,
+                label,
+            } => {
+                let settled = Outcome::Format {
+                    partition_bytes,
+                    label,
+                };
+                sink.on_finished(&settled);
+                outcome = Some(Ok(settled));
+            }
             Event::Ejected { device_path, error } => {
                 sink.on_event(SessionEvent::Ejected { device_path, error })
             }
@@ -637,6 +648,24 @@ mod tests {
                 files_copied: 905,
                 ..
             }))
+        ));
+    }
+
+    #[test]
+    fn a_format_outcome_carries_the_partition_size_and_label() {
+        let (sink, outcome) = drain(concat!(
+            r#"{"event":"phase","phase":"wiping"}"#,
+            "\n",
+            r#"{"event":"format_done","partition_bytes":4096,"label":"ARGOS"}"#,
+            "\n",
+        ));
+        assert_eq!(
+            sink.events,
+            vec![SessionEvent::Phase(PhaseWire::Known(Phase::Wiping))]
+        );
+        assert!(matches!(
+            outcome,
+            Some(Ok(Outcome::Format { partition_bytes: 4096, label })) if label == "ARGOS"
         ));
     }
 

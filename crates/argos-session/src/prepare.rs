@@ -9,11 +9,12 @@
 
 use argos_core::device::Device;
 use argos_core::error::{ArgosError, Result};
+use argos_core::partition::format::{fat_volume_label, whole_device_fat32_region};
 use argos_core::partition::windows::WindowsFat32Plan;
 use argos_core::{image, preflight};
 use argos_platform::PlatformOps;
 use argos_privileged::protocol::{
-    Plan, VerifyPlan, VerifyWindowsPlan, WindowsLayout, WritePlan, WriteWindowsPlan,
+    FormatPlan, Plan, VerifyPlan, VerifyWindowsPlan, WindowsLayout, WritePlan, WriteWindowsPlan,
 };
 use argos_privileged::windows_fat32::{fat32_layout_for, plan_copy_actions, CopyAction};
 use std::path::{Path, PathBuf};
@@ -62,6 +63,31 @@ pub struct PreparedVerify {
 }
 
 impl PreparedVerify {
+    pub fn plan(&self) -> &Plan {
+        &self.plan
+    }
+}
+
+/// `argos format`'s request: no image, just a device and what to call the
+/// new volume.
+pub struct FormatRequest {
+    pub device_id: String,
+    pub label: String,
+    pub eject: bool,
+    pub allow_non_removable: bool,
+}
+
+/// A format that has passed every unprivileged check and is ready to be
+/// confirmed and run. `partition_bytes` is what the confirmation shows; the
+/// helper recomputes it from the device's size at the time it runs.
+pub struct PreparedFormat {
+    pub device: Device,
+    pub label: String,
+    pub partition_bytes: u64,
+    plan: Plan,
+}
+
+impl PreparedFormat {
     pub fn plan(&self) -> &Plan {
         &self.plan
     }
@@ -278,6 +304,46 @@ fn prepare_windows_write(
     })
 }
 
+/// Resolve and refuse the device the same way a write does, check the label
+/// and the device's size fit a whole-device FAT32/MBR layout, and build the
+/// `Plan`. Nothing here is destructive and nothing elevates.
+///
+/// The label is checked before the device, so a typo in it fails before the
+/// user is asked anything about which disk.
+pub fn prepare_format(platform: &dyn PlatformOps, req: &FormatRequest) -> Result<PreparedFormat> {
+    if fat_volume_label(&req.label).is_none() {
+        return Err(ArgosError::InvalidVolumeLabel(req.label.clone()));
+    }
+
+    let device = platform
+        .refresh(&req.device_id, None)?
+        .ok_or_else(|| ArgosError::DeviceNotFound(req.device_id.clone()))?;
+
+    check_device_is_offerable(&device, req.allow_non_removable)?;
+
+    let region = whole_device_fat32_region(device.size_bytes).ok_or_else(|| {
+        ArgosError::DeviceSizeUnsupportedForFormat {
+            device: device.platform_id.clone(),
+            size_bytes: device.size_bytes,
+        }
+    })?;
+
+    let plan = Plan::Format(FormatPlan {
+        device_path: device.platform_id.clone(),
+        expected_serial: device.serial.clone(),
+        expected_size_bytes: device.size_bytes,
+        label: req.label.clone(),
+        eject: req.eject,
+    });
+
+    Ok(PreparedFormat {
+        label: req.label.to_ascii_uppercase(),
+        partition_bytes: region.size_bytes,
+        device,
+        plan,
+    })
+}
+
 /// `argos verify`'s counterpart. Read-only, so there is no capacity check, no
 /// collision check and no confirmation -- and no `expected_serial`/
 /// `expected_size_bytes` on the plans, since a read has no destructive TOCTOU
@@ -483,5 +549,67 @@ mod tests {
             image_size_bytes: 1234,
         };
         assert!(preview.split_notes().is_empty());
+    }
+
+    fn format_request(label: &str) -> FormatRequest {
+        FormatRequest {
+            device_id: "/dev/sdz".into(),
+            label: label.into(),
+            eject: true,
+            allow_non_removable: false,
+        }
+    }
+
+    #[test]
+    fn a_format_plan_carries_the_toctou_guard_and_the_label() {
+        let platform = argos_platform::fake::FakePlatform::new(vec![usb_stick()]);
+        let prepared = prepare_format(&platform, &format_request("lab3")).unwrap();
+        assert_eq!(prepared.label, "LAB3");
+        assert!(prepared.partition_bytes > 7_000_000_000);
+        match prepared.plan() {
+            Plan::Format(plan) => {
+                assert_eq!(plan.expected_serial.as_deref(), Some("ABC123"));
+                assert_eq!(plan.expected_size_bytes, 8_000_000_000);
+                assert!(plan.eject);
+            }
+            _ => panic!("expected a format plan"),
+        }
+        assert!(
+            platform.calls().unmounted.is_empty(),
+            "preparing must not touch the device"
+        );
+    }
+
+    #[test]
+    fn formatting_a_system_disk_is_refused_like_writing_one() {
+        let mut device = usb_stick();
+        device.is_system_disk = true;
+        let platform = argos_platform::fake::FakePlatform::new(vec![device]);
+        let mut req = format_request("ARGOS");
+        req.allow_non_removable = true;
+        assert!(matches!(
+            prepare_format(&platform, &req),
+            Err(ArgosError::DeviceIsSystemDisk(_))
+        ));
+    }
+
+    #[test]
+    fn a_bad_label_is_refused_before_the_device_is_looked_at() {
+        let platform = argos_platform::fake::FakePlatform::new(vec![]);
+        assert!(matches!(
+            prepare_format(&platform, &format_request("no.dots")),
+            Err(ArgosError::InvalidVolumeLabel(_))
+        ));
+    }
+
+    #[test]
+    fn a_device_too_small_to_format_is_refused() {
+        let mut device = usb_stick();
+        device.size_bytes = 128 * 1024 * 1024;
+        let platform = argos_platform::fake::FakePlatform::new(vec![device]);
+        assert!(matches!(
+            prepare_format(&platform, &format_request("ARGOS")),
+            Err(ArgosError::DeviceSizeUnsupportedForFormat { .. })
+        ));
     }
 }

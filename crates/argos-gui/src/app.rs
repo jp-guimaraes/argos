@@ -6,7 +6,7 @@
 //! rather than one per interface.
 
 use crate::devices::{offerable, reconcile, Selection, SelectionOutcome};
-use crate::state::{confirmation_matches, AppState, RunState, WorkerMsg};
+use crate::state::{confirmation_matches, AppState, Prepared, RunState, WorkerMsg};
 use crate::theme::{self, metric};
 use argos_core::device::Device;
 use argos_platform::PlatformOps;
@@ -55,6 +55,9 @@ pub struct ArgosApp {
 
     /// The layout checkbox: unchecked is GPT/UEFI, the CLI's default.
     bios_layout: bool,
+
+    /// The volume name "Restore drive…" gives the new FAT32 volume.
+    format_label: String,
 
     /// Which theme is currently applied, so the palette is rebuilt only when
     /// the system actually switches rather than every frame.
@@ -110,6 +113,7 @@ impl ArgosApp {
             iso_error: None,
             classifying: false,
             bios_layout: false,
+            format_label: argos_core::partition::format::DEFAULT_FORMAT_LABEL.to_string(),
             applied_dark: None,
             system_dark_preference: None,
             #[cfg(target_os = "linux")]
@@ -249,7 +253,32 @@ impl ArgosApp {
             layout: self.layout(),
         };
         std::thread::spawn(move || {
-            let result = session::prepare_write(&*platform, &request).map(Box::new);
+            let result = session::prepare_write(&*platform, &request)
+                .map(|prepared| Prepared::Write(Box::new(prepared)));
+            let _ = tx.send(WorkerMsg::Prepared(result));
+            ctx.request_repaint();
+        });
+    }
+
+    /// "Restore drive…": the same prepare-then-confirm round trip as a
+    /// write, minus the image. Needs only a selected device.
+    fn begin_format_preparation(&mut self, ctx: &egui::Context) {
+        let Some(selection) = self.selection.clone() else {
+            return;
+        };
+        self.state = AppState::Preparing;
+        let platform = Arc::clone(&self.platform);
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        let request = session::FormatRequest {
+            device_id: selection.platform_id,
+            label: self.format_label.trim().to_string(),
+            eject: true,
+            allow_non_removable: self.show_all_devices,
+        };
+        std::thread::spawn(move || {
+            let result = session::prepare_format(&*platform, &request)
+                .map(|prepared| Prepared::Format(Box::new(prepared)));
             let _ = tx.send(WorkerMsg::Prepared(result));
             ctx.request_repaint();
         });
@@ -731,6 +760,36 @@ impl ArgosApp {
             &mut self.show_all_devices,
             egui::RichText::new(s.show_all_devices_checkbox).small(),
         );
+
+        // Restore sits with the device rather than with Write: it needs no
+        // image, and what it acts on is the drive chosen right above it.
+        ui.add_space(metric::GAP_NOTICES);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(s.volume_label_label).small());
+            ui.add(
+                egui::TextEdit::singleline(&mut self.format_label)
+                    .char_limit(argos_core::partition::format::FAT_LABEL_MAX_BYTES)
+                    .desired_width(110.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let label_ok =
+                argos_core::partition::format::fat_volume_label(self.format_label.trim()).is_some();
+            let ready =
+                self.selection.is_some() && label_ok && matches!(self.state, AppState::Idle);
+            let hint = if label_ok {
+                s.format_disabled_hint
+            } else {
+                s.volume_label_invalid
+            };
+            if ui
+                .add_enabled(ready, egui::Button::new(s.format_button))
+                .on_hover_text(s.format_button_tooltip)
+                .on_disabled_hover_text(hint)
+                .clicked()
+            {
+                self.begin_format_preparation(ctx);
+            }
+        });
     }
 
     /// The layout control. Always visible, never behind an advanced menu:
@@ -779,7 +838,11 @@ impl ArgosApp {
                 ui.visuals().error_fg_color,
             );
         }
-        if let AppState::AwaitingConfirmation { prepared, .. } = &self.state {
+        if let AppState::AwaitingConfirmation {
+            prepared: Prepared::Write(prepared),
+            ..
+        } = &self.state
+        {
             for note in prepared.preview.split_notes() {
                 let text = (s.split_note)(&note.source_path, note.part_paths.len());
                 ui.label(egui::RichText::new(text).small().weak());
@@ -833,6 +896,11 @@ impl ArgosApp {
         // same false promise a live one during a write's uncancellable phase
         // would (#104). Nothing to click is more honest than something that
         // looks permanently stuck.
+        // A restore takes seconds and listens for no cancel either; it gets
+        // no button and nothing to say about one.
+        if run.is_format {
+            return;
+        }
         if run.is_verify {
             ui.label(
                 egui::RichText::new(s.verification_not_interruptible)
@@ -933,21 +1001,36 @@ impl ArgosApp {
         let AppState::AwaitingConfirmation { prepared, typed } = &mut self.state else {
             return;
         };
-        let device = prepared.device.clone();
-        let iso = prepared.iso.clone();
-        let preview_line = describe_preview(&prepared.preview, s, lang);
-        let notes: Vec<String> = prepared
-            .preview
-            .split_notes()
-            .into_iter()
-            .map(|n| {
-                (s.split_note_confirmation)(
-                    &n.source_path,
-                    n.part_paths.len(),
-                    &n.part_paths.join(", "),
-                )
-            })
-            .collect();
+        let device = prepared.device().clone();
+        let is_format = matches!(prepared, Prepared::Format(_));
+        // What the dialog says about the result: the image and its layout for
+        // a write, the new volume for a restore.
+        let (iso, preview_line, notes): (Option<PathBuf>, String, Vec<String>) = match &*prepared {
+            Prepared::Write(write) => (
+                Some(write.iso.clone()),
+                describe_preview(&write.preview, s, lang),
+                write
+                    .preview
+                    .split_notes()
+                    .into_iter()
+                    .map(|n| {
+                        (s.split_note_confirmation)(
+                            &n.source_path,
+                            n.part_paths.len(),
+                            &n.part_paths.join(", "),
+                        )
+                    })
+                    .collect(),
+            ),
+            Prepared::Format(format) => (
+                None,
+                (s.format_layout_preview)(
+                    &human_size_localized(format.partition_bytes, lang),
+                    &format.label,
+                ),
+                vec![s.format_explanation.to_string()],
+            ),
+        };
 
         let mut confirmed = false;
         let mut cancelled = false;
@@ -975,8 +1058,10 @@ impl ArgosApp {
                     device.serial.as_deref().unwrap_or(s.serial_unknown),
                 ));
                 // The one place the whole path is shown, rather than elided.
-                ui.label(s.image_label);
-                ui.monospace(iso.display().to_string());
+                if let Some(iso) = &iso {
+                    ui.label(s.image_label);
+                    ui.monospace(iso.display().to_string());
+                }
                 ui.label(preview_line);
                 for note in &notes {
                     ui.label(egui::RichText::new(note).small().weak());
@@ -993,8 +1078,13 @@ impl ArgosApp {
                         cancelled = true;
                     }
                     let matches = confirmation_matches(&typed_now, &device.platform_id);
+                    let confirm_text = if is_format {
+                        s.format_confirm_button
+                    } else {
+                        s.write_confirm_button
+                    };
                     if ui
-                        .add_enabled(matches, egui::Button::new(s.write_confirm_button))
+                        .add_enabled(matches, egui::Button::new(confirm_text))
                         .on_disabled_hover_text(s.retype_hint)
                         .clicked()
                     {
@@ -1009,7 +1099,11 @@ impl ArgosApp {
         } else if confirmed {
             let tx = self.tx.clone();
             let ctx = ctx.clone();
-            self.state = AppState::Running(RunState::new(device.platform_id, 0));
+            self.state = AppState::Running(if is_format {
+                RunState::for_format(device.platform_id)
+            } else {
+                RunState::new(device.platform_id, 0)
+            });
             Self::spawn_run(tx, ctx, plan);
         }
     }
@@ -1083,6 +1177,7 @@ fn phase_label(phase: Option<argos_core::progress::Phase>, fallback: &str, s: &S
         Some(Phase::Writing) => s.phase_writing.into(),
         Some(Phase::Flushing) => s.phase_flushing.into(),
         Some(Phase::Verifying) => s.phase_verifying.into(),
+        Some(Phase::Wiping) => s.phase_wiping.into(),
         // A helper new enough to send a phase this build does not know: show
         // what it sent rather than nothing.
         None if fallback.is_empty() => s.phase_starting.into(),
@@ -1129,6 +1224,10 @@ fn describe_outcome(outcome: &argos_session::Outcome, s: &Strings, lang: Lang) -
             bytes_copied,
         } => (s.files_copied)(*files_copied, &human_size_localized(*bytes_copied, lang)),
         Outcome::WindowsVerify { files_verified } => (s.files_checked)(*files_verified),
+        Outcome::Format {
+            partition_bytes,
+            label,
+        } => (s.format_done)(&human_size_localized(*partition_bytes, lang), label),
     }
 }
 
@@ -1151,6 +1250,7 @@ mod tests {
             Phase::Partitioning,
             Phase::FormattingFat32,
             Phase::CopyingFiles,
+            Phase::Wiping,
         ] {
             assert!(
                 !phase_label(Some(phase), "", strings_for(Lang::En)).is_empty(),

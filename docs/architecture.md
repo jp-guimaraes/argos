@@ -526,6 +526,30 @@ still no mount -- and hashes every file `WindowsIso` lists against a fresh
 read of the source ISO (`argos_core::verify::verify_windows_file_hash`, one
 call per file).
 
+`format::execute_format` is the `Plan::Format` handler behind `argos
+format` and the GUI's "Restore drive...": it returns a stick to ordinary use
+rather than writing an image. The same TOCTOU guard as a write
+(`validate_refreshed_device_for_format`), then, over the same
+`BufferedDevice`/`SizedDevice` stack on one exclusively-opened fd: zero the
+first and last MiB (`Phase::Wiping` -- old boot code, GPT headers at either
+end, an ISO9660 descriptor), write an MBR with one inactive FAT32 (LBA)
+partition from 1 MiB to the device's last whole sector
+(`windows_fat32::write_single_mbr_partition`, which the BIOS Windows path now
+also goes through), format it (`windows_fat32::format_fat32_volume`, likewise
+shared, so volume IDs and the 255x63 geometry can't drift between the two),
+record the partition start in the BPB, and read the result back. The layout
+(`argos_core::partition::format::whole_device_fat32_region`) and the label
+are re-derived in the helper from the device's refreshed size and the plan's
+raw label, never trusted from the caller. MBR only, by design: the point is
+a stick every OS, camera, TV and old BIOS reads, and a partition spanning a
+USB stick never needs what GPT adds. Bounded to 512 MiB--2 TiB, the forced
+FAT32 floor and the MBR's 32-bit sector fields; exFAT (for files over 4 GiB)
+needs its own formatter, since `fatfs` has none, and is a follow-up.
+Exercised in-process by `format`'s unit tests and, against a real macOS block
+device dirtied with a DD'd hybrid ISO, by
+`crates/argos-privileged/tests/hdiutil_format.rs`, which re-attaches the
+image afterwards and runs `fsck_msdos` on it.
+
 **`fatfs`'s directory-entry defects, and why the repair pass stays**
 (phase 3 L4, backlog #56). `fatfs` 0.3.6 writes two things the FAT
 specification forbids: long-filename entries in front of `.` and `..`, which
