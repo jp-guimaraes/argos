@@ -49,6 +49,17 @@ pub enum ArgosError {
     #[error("'{path}' is {size_bytes} bytes, over FAT32's 4GiB-1 file limit, and cannot be split to fit (only a WIM can be, and a solid .esd cannot)")]
     WindowsFileTooLargeForFat32 { path: String, size_bytes: u64 },
 
+    /// `argos format` lays out one FAT32 partition across the whole device,
+    /// described by an MBR. That bounds the device from both sides: below
+    /// [`crate::partition::windows::FAT32_MIN_PARTITION_BYTES`] a forced
+    /// FAT32 volume would have too few clusters, and past 2 TiB an MBR entry's
+    /// 32-bit sector fields can no longer describe the partition.
+    #[error("device '{device}' ({size_bytes} bytes) cannot be formatted: a single FAT32 partition under an MBR needs a device between 512 MiB and 2 TiB")]
+    DeviceSizeUnsupportedForFormat { device: String, size_bytes: u64 },
+
+    #[error("'{0}' cannot be a FAT volume label: use 1 to 11 printable ASCII characters, none of \" * + , . / : ; < = > ? [ \\ ] |")]
+    InvalidVolumeLabel(String),
+
     #[error("operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use")]
     Cancelled,
 
@@ -128,6 +139,8 @@ impl ArgosError {
             // declined before anything was touched, and nothing scripting
             // argos has a reason to tell them apart.
             ArgosError::NotConfirmed | ArgosError::ElevationDeclined => 27,
+            ArgosError::DeviceSizeUnsupportedForFormat { .. } => 28,
+            ArgosError::InvalidVolumeLabel(_) => 29,
         }
     }
 }

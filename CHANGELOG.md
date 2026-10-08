@@ -3,6 +3,29 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`argos format` and "Restore drive..." in the GUI: turn an installer
+  stick back into an ordinary one.** A stick Argos wrote was hard to reuse
+  with a desktop's own formatter. Windows media carries a partition sized to
+  its contents, and a Linux ISO written byte for byte carries the image's own
+  partition table (with a backup GPT where the *image* ended, not the
+  device), so a file manager's "Format" reformatted one small volume and left
+  the rest of the stick unreachable -- or refused the partition map outright.
+  The new operation rewrites the partition table itself: it zeroes the first
+  and last MiB of the device (old MBR and boot code, GPT headers, the
+  ISO9660 descriptor that made Linux see the whole stick as a read-only
+  `iso9660`), writes an MBR with one inactive FAT32 partition spanning the
+  whole device, and formats it -- the same pure-Rust, one-file-descriptor
+  path as Windows media, so it works identically on Linux and macOS. Takes
+  seconds. Same safety as a write: system disks are refused, the helper
+  re-validates the device's serial and size before touching it, and the
+  device path has to be typed back to confirm. Devices from 512 MiB to
+  2 TiB; `--label` (or the field beside the GUI button) names the volume.
+  Writing ISOs is unchanged.
+
 ## [1.6.0] - 2026-09-09
 
 ### Added

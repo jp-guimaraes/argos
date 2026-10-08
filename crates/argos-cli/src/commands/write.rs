@@ -156,7 +156,7 @@ fn confirm_or_abort(prepared: &PreparedWrite) -> Result<()> {
 
 /// Requires the user to retype the exact device path -- not just "y/N" -- so a
 /// hasty Enter can't confirm the wrong drive.
-fn require_retyped_device_path(platform_id: &str) -> Result<()> {
+pub(super) fn require_retyped_device_path(platform_id: &str) -> Result<()> {
     println!("This will PERMANENTLY ERASE all data on {platform_id}.");
     print!("Type the device path ({platform_id}) to confirm: ");
     std::io::stdout().flush().ok();

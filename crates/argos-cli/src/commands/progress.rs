@@ -231,6 +231,7 @@ mod tests {
             (Phase::Partitioning, "Partitioning"),
             (Phase::FormattingFat32, "FormattingFat32"),
             (Phase::CopyingFiles, "CopyingFiles"),
+            (Phase::Wiping, "Wiping"),
         ] {
             assert_eq!(phase_label(&PhaseWire::Known(phase)), expected);
         }

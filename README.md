@@ -217,6 +217,22 @@ with `--no-verify`. Unlike `write`, the device here is always positional
 and the ISO is always `--iso` -- `write` accepts the ISO either way
 precisely so a habit formed on one command doesn't break on the other.
 
+```sh
+argos format /dev/sdb
+```
+
+Turns an installer stick back into an ordinary one. A file manager's
+"Format" can't do this on its own: media written for Windows has a
+partition sized to its contents, and a Linux ISO written byte for byte
+carries the image's own partition table, so reformatting from the desktop
+only touches one small volume and leaves the rest of the stick unreachable.
+`argos format` rewrites the partition table instead -- it clears what the
+old image left at both ends of the device, writes an MBR with one FAT32
+partition spanning all of it, and formats that, ready for Windows, macOS,
+Linux, TVs and cameras. It takes seconds, and asks for the device path to
+be typed back exactly like `write` does. `--label` names the volume
+(default `ARGOS`). FAT32 cannot hold a single file over 4 GiB.
+
 Run `argos <command> --help` for every flag (`--no-verify`, `--no-eject`,
 `--i-know-what-im-doing` for a disk Argos doesn't recognize as removable
 but you're sure about), or see the man page (`argos man`, or installed
@@ -271,6 +287,12 @@ macOS, a polkit prompt on Linux); once running, progress, cancel, and any
 error are reported in the window itself, translated into whichever language
 is active. "Verify..." re-checks a device against an image without writing
 anything, same as `argos verify`.
+
+**Restore drive**: under the target dropdown, "Restore drive..." is
+`argos format` from the CLI -- it needs only a device, not an image, and
+turns the stick back into a single FAT32 volume across its whole capacity,
+with the name typed next to the button. It goes through the same
+retype-the-device-path confirmation as a write.
 
 ## Inspiration
 

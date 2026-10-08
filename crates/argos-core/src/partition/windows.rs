@@ -80,7 +80,7 @@ pub const FAT32_MIN_PARTITION_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Rounds `value` up to the next multiple of `boundary` (`value` itself if
 /// already a multiple).
-fn align_up(value: u64, boundary: u64) -> u64 {
+pub(crate) fn align_up(value: u64, boundary: u64) -> u64 {
     let remainder = value % boundary;
     if remainder == 0 {
         value

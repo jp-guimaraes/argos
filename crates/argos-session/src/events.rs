@@ -49,6 +49,12 @@ pub enum Outcome {
     WindowsVerify {
         files_verified: u64,
     },
+    /// `argos format`: one FAT32 partition of `partition_bytes` spanning the
+    /// device, labelled `label`.
+    Format {
+        partition_bytes: u64,
+        label: String,
+    },
 }
 
 impl Outcome {

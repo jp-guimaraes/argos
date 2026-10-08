@@ -69,6 +69,7 @@ pub enum Plan {
     Verify(VerifyPlan),
     WriteWindowsImage(WriteWindowsPlan),
     VerifyWindowsImage(VerifyWindowsPlan),
+    Format(FormatPlan),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +141,29 @@ pub enum WindowsLayout {
     /// this media also boots UEFI firmware that accepts MBR-partitioned
     /// removable disks -- which is most of it.
     Fat32Bios,
+}
+
+/// `argos format`: return a stick to ordinary use -- one FAT32 partition
+/// spanning the whole device under an MBR, whatever was on it before.
+///
+/// Carries the same `expected_serial`/`expected_size_bytes` TOCTOU guard as a
+/// write, because it destroys just as much. The layout is not in the plan:
+/// the helper derives it from the device's refreshed size itself
+/// (`argos_core::partition::format::whole_device_fat32_region`), the same
+/// never-trust-the-caller posture the Windows path takes with the ISO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatPlan {
+    pub device_path: String,
+    pub expected_serial: Option<String>,
+    pub expected_size_bytes: u64,
+    /// The volume label as the user typed it; the helper re-validates it
+    /// with `argos_core::partition::format::fat_volume_label`.
+    pub label: String,
+    /// See [`WritePlan::eject`]. Matters more here than for a write: until
+    /// the stick is reinserted, the OS may keep describing it by the
+    /// partition table it read before the format.
+    #[serde(default)]
+    pub eject: bool,
 }
 
 /// Unlike [`WritePlan`], carries no `expected_serial`/`expected_size_bytes`:
@@ -214,6 +238,10 @@ pub enum Event {
     WindowsVerifyOk {
         files_verified: u64,
     },
+    FormatDone {
+        partition_bytes: u64,
+        label: String,
+    },
     /// The outcome of the post-write eject, emitted after the terminal
     /// event (so the CLI's progress bar is already finished and printing is
     /// safe) and only when the plan asked for one. `error` carries the
@@ -255,6 +283,19 @@ pub fn validate_refreshed_device(
 /// path's plan shape instead of [`WritePlan`]'s.
 pub fn validate_refreshed_device_for_windows_write(
     plan: &WriteWindowsPlan,
+    refreshed: Option<&Device>,
+) -> Result<(), ArgosError> {
+    validate_refreshed_device_common(
+        &plan.device_path,
+        plan.expected_size_bytes,
+        plan.expected_serial.as_deref(),
+        refreshed,
+    )
+}
+
+/// The [`FormatPlan`] counterpart to [`validate_refreshed_device`].
+pub fn validate_refreshed_device_for_format(
+    plan: &FormatPlan,
     refreshed: Option<&Device>,
 ) -> Result<(), ArgosError> {
     validate_refreshed_device_common(
@@ -501,6 +542,7 @@ mod tests {
             Phase::Partitioning,
             Phase::FormattingFat32,
             Phase::CopyingFiles,
+            Phase::Wiping,
         ] {
             let json = serde_json::to_string(&Event::Phase {
                 phase: PhaseWire::Known(phase),
@@ -512,6 +554,61 @@ mod tests {
                 "{phase:?} did not survive {json}"
             );
         }
+    }
+
+    #[test]
+    fn format_plan_round_trips_through_json_as_a_tagged_plan() {
+        let original = Plan::Format(FormatPlan {
+            device_path: "/dev/sdz".into(),
+            expected_serial: Some("ABC123".into()),
+            expected_size_bytes: 8_000_000_000,
+            label: "ARGOS".into(),
+            eject: true,
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains(r#""kind":"format""#));
+        let parsed: Plan = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(parsed, Plan::Format(p) if p.device_path == "/dev/sdz" && p.label == "ARGOS" && p.eject)
+        );
+    }
+
+    #[test]
+    fn a_format_plan_is_refused_on_a_device_that_changed() {
+        let plan = FormatPlan {
+            device_path: "/dev/sdz".into(),
+            expected_serial: Some("ABC123".into()),
+            expected_size_bytes: 8_000_000_000,
+            label: "ARGOS".into(),
+            eject: false,
+        };
+        assert!(validate_refreshed_device_for_format(&plan, Some(&matching_device())).is_ok());
+        let mut system = matching_device();
+        system.is_system_disk = true;
+        assert!(matches!(
+            validate_refreshed_device_for_format(&plan, Some(&system)),
+            Err(ArgosError::DeviceIsSystemDisk(_))
+        ));
+        let mut other = matching_device();
+        other.serial = Some("DIFFERENT".into());
+        assert!(validate_refreshed_device_for_format(&plan, Some(&other)).is_err());
+    }
+
+    #[test]
+    fn a_format_outcome_round_trips() {
+        let json = serde_json::to_string(&Event::FormatDone {
+            partition_bytes: 7_999_000_000,
+            label: "ARGOS".into(),
+        })
+        .unwrap();
+        let parsed: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            Event::FormatDone {
+                partition_bytes: 7_999_000_000,
+                ..
+            }
+        ));
     }
 
     #[test]

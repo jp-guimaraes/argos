@@ -4,4 +4,5 @@
 //! `gptman`, formatting, mounting) lives in `argos-privileged` instead,
 //! which turns a plan computed here into real bytes on a real device.
 
+pub mod format;
 pub mod windows;

@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: Argos\n"
-"POT-Creation-Date: 2026-09-12T08:52:15-03:00\n"
+"POT-Creation-Date: 2026-10-07T09:01:08-03:00\n"
 "PO-Revision-Date: 2026-09-06T20:55:40-03:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -41,11 +41,11 @@ msgstr "Argos"
 
 #: src/overview.md:3
 msgid ""
-"Argos is a free-software tool for creating bootable installer USB drives, in "
-"the spirit of [Rufus](https://github.com/pbatard/rufus) but built to run "
-"cross-platform."
+"[Argos](https://jp-guimaraes.github.io/argos/) is a free-software tool for "
+"creating bootable installer USB drives, in the spirit of [Rufus](https://"
+"github.com/pbatard/rufus) but built to run cross-platform."
 msgstr ""
-"Argos é uma ferramenta de software livre para criar pen drives de instalação "
+"[Argos](https://jp-guimaraes.github.io/argos/) é uma ferramenta de software livre para criar pen drives de instalação "
 "inicializáveis, no espírito do [Rufus](https://github.com/pbatard/rufus), "
 "mas construída para rodar multiplataforma."
 
@@ -73,7 +73,7 @@ msgstr ""
 "O software deve ser confiável e rápido, e deve ser instalável numa ampla "
 "gama de distribuições Linux e, idealmente, também no macOS."
 
-#: src/overview.md:17 src/architecture.md:665 src/architecture.md:667
+#: src/overview.md:17 src/architecture.md:689 src/architecture.md:691
 msgid "Status"
 msgstr "Status"
 
@@ -433,7 +433,22 @@ msgstr ""
 "ISO é sempre `--iso` -- `write` aceita a ISO das duas formas justamente para "
 "que um hábito formado num comando não quebre no outro."
 
-#: src/overview.md:220
+#: src/overview.md:224
+msgid ""
+"Turns an installer stick back into an ordinary one. A file manager's "
+"\"Format\" can't do this on its own: media written for Windows has a "
+"partition sized to its contents, and a Linux ISO written byte for byte "
+"carries the image's own partition table, so reformatting from the desktop "
+"only touches one small volume and leaves the rest of the stick unreachable. "
+"`argos format` rewrites the partition table instead -- it clears what the "
+"old image left at both ends of the device, writes an MBR with one FAT32 "
+"partition spanning all of it, and formats that, ready for Windows, macOS, "
+"Linux, TVs and cameras. It takes seconds, and asks for the device path to be "
+"typed back exactly like `write` does. `--label` names the volume (default "
+"`ARGOS`). FAT32 cannot hold a single file over 4 GiB."
+msgstr "Transforma um pendrive de instalação de volta num pendrive comum. O \"Formatar\" do gerenciador de arquivos não dá conta disso sozinho: a mídia gravada para Windows tem uma partição do tamanho do seu conteúdo, e uma ISO Linux gravada byte a byte carrega a tabela de partição da própria imagem, então formatar pela área de trabalho mexe só num volume pequeno e deixa o resto do pendrive inacessível. O `argos format` reescreve a própria tabela de partição -- limpa o que a imagem antiga deixou nas duas pontas do dispositivo, grava um MBR com uma única partição FAT32 ocupando o dispositivo inteiro e a formata, pronta para Windows, macOS, Linux, TVs e câmeras. Leva segundos, e pede que o caminho do dispositivo seja digitado de volta exatamente como o `write`. `--label` dá nome ao volume (padrão `ARGOS`). O FAT32 não guarda um arquivo maior que 4 GiB."
+
+#: src/overview.md:236
 msgid ""
 "Run `argos <command> --help` for every flag (`--no-verify`, `--no-eject`, `--"
 "i-know-what-im-doing` for a disk Argos doesn't recognize as removable but "
@@ -447,11 +462,11 @@ msgstr ""
 "man`, ou instalada automaticamente pelos pacotes `.deb`/Homebrew/AUR acima) "
 "e `argos completions <shell>` para autocompletar no shell."
 
-#: src/overview.md:226
+#: src/overview.md:242
 msgid "Graphical interface"
 msgstr "Interface gráfica"
 
-#: src/overview.md:228
+#: src/overview.md:244
 msgid ""
 "`argos-gui` is a single window over the exact same safety checks as the CLI "
 "above -- there is no separate, weaker path through it. See [Installation]"
@@ -464,7 +479,7 @@ msgstr ""
 "Homebrew no macOS, `.deb`/AUR no Linux); ela vem junto com `argos` e `argos-"
 "helper` em todo pacote."
 
-#: src/overview.md:236
+#: src/overview.md:252
 msgid ""
 "On first launch it detects the system language automatically (`LANG`/ "
 "`LC_ALL` on Linux, `AppleLanguages` on macOS) -- no setup needed for a "
@@ -479,7 +494,7 @@ msgstr ""
 "escolhidos à mão no menu no canto superior direito, e valem imediatamente, "
 "sem reiniciar:"
 
-#: src/overview.md:244
+#: src/overview.md:260
 msgid ""
 "**Image**: click \"Choose...\" or drag an ISO onto the window. Argos "
 "identifies it as a Linux image or a Windows installer the same way `argos "
@@ -489,7 +504,7 @@ msgstr ""
 "Argos identifica se é uma imagem Linux ou um instalador do Windows do mesmo "
 "jeito que o `argos write` faz, e mostra qual dos dois:"
 
-#: src/overview.md:250
+#: src/overview.md:266
 msgid ""
 "For a Windows installer, an \"Old machine -- legacy BIOS (MBR)\" checkbox "
 "appears (disabled, with an explanatory line, until a Windows image is "
@@ -503,7 +518,7 @@ msgstr ""
 "máquinas pré-UEFI; desmarcada, a mídia é gravada para UEFI (`--layout "
 "fat32`). Imagens Linux não têm essa escolha: são sempre gravadas byte a byte."
 
-#: src/overview.md:256
+#: src/overview.md:272
 msgid ""
 "**Target**: the dropdown lists only disks Argos considers safe to write to "
 "(removable, on a USB bus, not the system disk) -- a device it refuses is a "
@@ -522,7 +537,7 @@ msgstr ""
 "libera nada, só amplia o que é listado. Sem nada conectado, a lista avisa "
 "isso claramente em vez de aparecer vazia:"
 
-#: src/overview.md:266
+#: src/overview.md:282
 msgid ""
 "**Write / Verify**: both stay disabled until an image and a target are "
 "picked. \"Write...\" opens the same confirmation as the CLI's \"type the "
@@ -543,11 +558,20 @@ msgstr ""
 "\" reconfere um dispositivo contra uma imagem sem gravar nada, assim como o "
 "`argos verify`."
 
-#: src/overview.md:275
+#: src/overview.md:291
+msgid ""
+"**Restore drive**: under the target dropdown, \"Restore drive...\" is `argos "
+"format` from the CLI -- it needs only a device, not an image, and turns the "
+"stick back into a single FAT32 volume across its whole capacity, with the "
+"name typed next to the button. It goes through the same retype-the-device-"
+"path confirmation as a write."
+msgstr "**Restaurar pendrive**: abaixo da lista de destino, \"Restaurar pendrive...\" é o `argos format` da linha de comando -- precisa só de um dispositivo, não de uma imagem, e transforma o pendrive de volta num único volume FAT32 ocupando toda a sua capacidade, com o nome digitado ao lado do botão. Passa pela mesma confirmação de redigitar o caminho do dispositivo que uma gravação."
+
+#: src/overview.md:297
 msgid "Inspiration"
 msgstr "Inspiração"
 
-#: src/overview.md:277
+#: src/overview.md:299
 msgid ""
 "At this point, it is clear that Rufus is the primary inspiration for this "
 "software. Argos aims to bring that same rock-solid reliability to a cross-"
@@ -568,7 +592,7 @@ msgstr ""
 "backronimo veio depois, e é deliberadamente em português: **A**ssistente de "
 "**R**ebolar **G**ueri-gueris em **O**utros **S**istemas"
 
-#: src/overview.md:282
+#: src/overview.md:304
 msgid ""
 "This is Brazilian Portuguese—specifically, regional slang from the Brazilian "
 "Northeast. Two words won't survive a standard dictionary lookup: rebolar "
@@ -586,7 +610,7 @@ msgstr ""
 "Jogar Trecos em Outros Sistemas\", uma descrição bem honesta de gravar uma "
 "ISO num pen drive."
 
-#: src/overview.md:284
+#: src/overview.md:306
 msgid ""
 "Argos was also planned as an experiment to test the current state of AI-"
 "assisted software development using agent harnesses. Rust was deliberately "
@@ -1801,6 +1825,33 @@ msgstr ""
 
 #: src/architecture.md:529
 msgid ""
+"`format::execute_format` is the `Plan::Format` handler behind `argos format` "
+"and the GUI's \"Restore drive...\": it returns a stick to ordinary use "
+"rather than writing an image. The same TOCTOU guard as a write "
+"(`validate_refreshed_device_for_format`), then, over the same "
+"`BufferedDevice`/`SizedDevice` stack on one exclusively-opened fd: zero the "
+"first and last MiB (`Phase::Wiping` -- old boot code, GPT headers at either "
+"end, an ISO9660 descriptor), write an MBR with one inactive FAT32 (LBA) "
+"partition from 1 MiB to the device's last whole sector "
+"(`windows_fat32::write_single_mbr_partition`, which the BIOS Windows path "
+"now also goes through), format it (`windows_fat32::format_fat32_volume`, "
+"likewise shared, so volume IDs and the 255x63 geometry can't drift between "
+"the two), record the partition start in the BPB, and read the result back. "
+"The layout (`argos_core::partition::format::whole_device_fat32_region`) and "
+"the label are re-derived in the helper from the device's refreshed size and "
+"the plan's raw label, never trusted from the caller. MBR only, by design: "
+"the point is a stick every OS, camera, TV and old BIOS reads, and a "
+"partition spanning a USB stick never needs what GPT adds. Bounded to 512 "
+"MiB--2 TiB, the forced FAT32 floor and the MBR's 32-bit sector fields; exFAT "
+"(for files over 4 GiB) needs its own formatter, since `fatfs` has none, and "
+"is a follow-up. Exercised in-process by `format`'s unit tests and, against a "
+"real macOS block device dirtied with a DD'd hybrid ISO, by `crates/argos-"
+"privileged/tests/hdiutil_format.rs`, which re-attaches the image afterwards "
+"and runs `fsck_msdos` on it."
+msgstr "`format::execute_format` é o tratador de `Plan::Format` por trás do `argos format` e do \"Restaurar pendrive...\" da GUI: devolve um pendrive ao uso comum em vez de gravar uma imagem. A mesma proteção contra TOCTOU de uma gravação (`validate_refreshed_device_for_format`) e então, sobre a mesma pilha `BufferedDevice`/`SizedDevice` em um único fd aberto com exclusividade: zera o primeiro e o último MiB (`Phase::Wiping` -- código de boot antigo, cabeçalhos GPT nas duas pontas, um descritor ISO9660), grava um MBR com uma única partição FAT32 (LBA) inativa de 1 MiB até o último setor inteiro do dispositivo (`windows_fat32::write_single_mbr_partition`, pela qual o caminho Windows para BIOS agora também passa), a formata (`windows_fat32::format_fat32_volume`, também compartilhada, para que IDs de volume e a geometria 255x63 não divirjam entre os dois), registra o início da partição no BPB e relê o resultado. O layout (`argos_core::partition::format::whole_device_fat32_region`) e o rótulo são recalculados no helper a partir do tamanho atualizado do dispositivo e do rótulo cru do plano, nunca confiados ao chamador. Só MBR, de propósito: o objetivo é um pendrive que todo SO, câmera, TV e BIOS antigo leia, e uma partição ocupando um pendrive USB nunca precisa do que o GPT acrescenta. Limitado a 512 MiB--2 TiB, o piso do FAT32 forçado e os campos de setor de 32 bits do MBR; exFAT (para arquivos acima de 4 GiB) precisa de um formatador próprio, já que o `fatfs` não tem um, e fica para depois. Exercitado em processo pelos testes unitários de `format` e, contra um dispositivo de bloco real do macOS sujo com uma ISO híbrida gravada por DD, por `crates/argos-privileged/tests/hdiutil_format.rs`, que reanexa a imagem depois e roda `fsck_msdos` nela."
+
+#: src/architecture.md:553
+msgid ""
 "**`fatfs`'s directory-entry defects, and why the repair pass stays** (phase "
 "3 L4, backlog #56). `fatfs` 0.3.6 writes two things the FAT specification "
 "forbids: long-filename entries in front of `.` and `..`, which must be a "
@@ -1817,7 +1868,7 @@ msgstr ""
 "zero quando o pai é a raiz. Os dois são reparados depois da cópia por "
 "`windows_fat32::repair_directory_entries` em vez de evitados na origem."
 
-#: src/architecture.md:537
+#: src/architecture.md:561
 msgid ""
 "The decision was between tracking an upstream fix, vendoring a patch, and "
 "keeping that repair pass. **The repair pass stays**, for now, because the "
@@ -1850,7 +1901,7 @@ msgstr ""
 "que é por isso que nossa mídia ainda apresenta essa nota restante (legal "
 "pela spec, neutra em status) do `fsck`."
 
-#: src/architecture.md:551
+#: src/architecture.md:575
 msgid ""
 "So there is nothing to contribute upstream and nothing to vendor -- only a "
 "release to wait for. Adopting master early is not a version bump: it "
@@ -1868,11 +1919,11 @@ msgstr ""
 "`repair_directory_entries` e a nota de FSINFO devem sair junto, e os testes "
 "de conformidade FAT nos dois hosts são o que vai dizer se podem."
 
-#: src/architecture.md:558
+#: src/architecture.md:582
 msgid "`argos-session`"
 msgstr "`argos-session`"
 
-#: src/architecture.md:560
+#: src/architecture.md:584
 msgid ""
 "Everything that happens between a user asking for a write and `argos-helper` "
 "doing one, with no opinion about how the asking looked. `prepare_write` "
@@ -1894,7 +1945,7 @@ msgstr ""
 "formatado. `spawn` então eleva e entrega o `Plan`, e `Running::stream` drena "
 "os eventos do helper para um `EventSink`."
 
-#: src/architecture.md:570
+#: src/architecture.md:594
 msgid ""
 "Two shape decisions worth naming. `spawn` and `stream` are separate calls, "
 "so the caller holds a `Canceller` _before_ it blocks on the event stream; "
@@ -1911,7 +1962,7 @@ msgstr ""
 "aqui: cada interface é dona da sua própria, por isso o prompt de redigitar o "
 "caminho do dispositivo ainda mora na `argos-cli`."
 
-#: src/architecture.md:577
+#: src/architecture.md:601
 msgid ""
 "The safety argument for the crate is that there is now one implementation of "
 "\"may I write to this disk?\" rather than one per interface. A front end "
@@ -1923,7 +1974,7 @@ msgstr ""
 "Uma interface não pode enfraquecê-la esquecendo um passo, e o `argos-helper` "
 "revalida tudo de qualquer forma (`protocol::validate_refreshed_device`)."
 
-#: src/architecture.md:582
+#: src/architecture.md:606
 msgid ""
 "`ElevationUi` picks how the user is asked to authorize. `Terminal` is what "
 "`argos` has always done -- `pkexec` where it exists on Linux, `sudo` "
@@ -1945,7 +1996,7 @@ msgstr ""
 "esse diálogo uma mensagem sobre apagar um disco em vez da genérica do "
 "polkit, em inglês e português brasileiro."
 
-#: src/architecture.md:592
+#: src/architecture.md:616
 msgid ""
 "macOS has no equivalent, so the graphical route runs `osascript`'s `do shell "
 "script ... with administrator privileges`, which puts up the system's own "
@@ -1974,7 +2025,7 @@ msgstr ""
 "através disso: saída idêntica byte a byte à rota de terminal, e um hash de "
 "mídia batendo com a origem."
 
-#: src/architecture.md:605
+#: src/architecture.md:629
 msgid ""
 "Both FIFOs are opened `O_RDWR`, which never blocks, and that is load-bearing "
 "rather than tidy. Opening each end blocking looks like a clean handshake "
@@ -1996,7 +2047,7 @@ msgstr ""
 "EOF-na-morte-do-pai da qual `watch_for_cancel` depende, já que o que faz o "
 "`read()` do helper retornar 0 é a última ponta de _escrita_ fechando."
 
-#: src/architecture.md:614
+#: src/architecture.md:638
 msgid ""
 "A signed, launchd-managed privileged helper (`SMJobBless`/`SMAppService`) is "
 "Apple's own answer and was declined: it costs a paid Developer ID and "
@@ -2014,11 +2065,11 @@ msgstr ""
 "fallback documentado, e rejeitado como padrão porque a senha então "
 "transitaria pelo processo do Argos."
 
-#: src/architecture.md:622
+#: src/architecture.md:646
 msgid "`argos-cli`"
 msgstr "`argos-cli`"
 
-#: src/architecture.md:624
+#: src/architecture.md:648
 msgid ""
 "`argos list` lists every physical disk visible to the current platform "
 "backend and marks whether each is safe to write to."
@@ -2026,7 +2077,7 @@ msgstr ""
 "`argos list` lista todo disco físico visível ao backend de plataforma atual "
 "e marca se cada um é seguro para gravação."
 
-#: src/architecture.md:627
+#: src/architecture.md:651
 msgid ""
 "`argos write` runs the full flow: refresh the target device, apply the non-"
 "negotiable safety gate (a system disk is refused unconditionally; a non-"
@@ -2056,7 +2107,7 @@ msgstr ""
 "`argos write` ainda _não_ chama `unmount` antes de abrir o dispositivo -- "
 "veja a tabela de Status abaixo."
 
-#: src/architecture.md:640
+#: src/architecture.md:664
 msgid ""
 "`argos verify` re-runs post-write verification against a device without "
 "writing again, hashing the ISO (the `Checksumming` phase) and comparing it "
@@ -2074,7 +2125,7 @@ msgstr ""
 "`argos`<->`argos-helper` é um `Plan` marcado (`Write`/`Verify`/"
 "`WriteWindowsImage`/`VerifyWindowsImage`) em vez de sempre um `WritePlan`."
 
-#: src/architecture.md:648
+#: src/architecture.md:672
 msgid ""
 "Both commands classify the image DD-mode-first (backlog #27, W5): if "
 "`image::classify` doesn't recognize a hybrid Linux image, they try "
@@ -2114,11 +2165,11 @@ msgstr ""
 "`WindowsImageRequiresLinux` em vez de só descobrir `NotImplemented` no fundo "
 "do `argos-helper` depois de um prompt de elevação."
 
-#: src/architecture.md:667
+#: src/architecture.md:691
 msgid "Area"
 msgstr "Área"
 
-#: src/architecture.md:669
+#: src/architecture.md:693
 msgid ""
 "Domain model, errors, progress/cancellation, ISO classification, checksum, "
 "preflight checks"
@@ -2126,19 +2177,19 @@ msgstr ""
 "Modelo de domínio, erros, progresso/cancelamento, classificação de ISO, "
 "checksum, checagens de pré-voo"
 
-#: src/architecture.md:669 src/architecture.md:670
+#: src/architecture.md:693 src/architecture.md:694
 msgid "Implemented, unit-tested"
 msgstr "Implementado, testado por unidade"
 
-#: src/architecture.md:670
+#: src/architecture.md:694
 msgid "DD-mode write engine, post-write verification"
 msgstr "Motor de escrita em modo DD, verificação pós-gravação"
 
-#: src/architecture.md:671
+#: src/architecture.md:695
 msgid "Linux disk enumeration"
 msgstr "Enumeração de disco no Linux"
 
-#: src/architecture.md:671
+#: src/architecture.md:695
 msgid ""
 "Implemented (sysfs + udev database, cross-checked against UDisks2/D-Bus when "
 "reachable) and LVM/RAID/dm-crypt-aware system-disk detection; pure parsing/"
@@ -2151,11 +2202,11 @@ msgstr ""
 "Bus e device-mapper cada uma confirmada contra o `udisksd` real desta "
 "máquina e uma pilha `dmsetup` real"
 
-#: src/architecture.md:672
+#: src/architecture.md:696
 msgid "macOS disk enumeration (`diskutil -plist`)"
 msgstr "Enumeração de disco no macOS (`diskutil -plist`)"
 
-#: src/architecture.md:672
+#: src/architecture.md:696
 msgid ""
 "Implemented, unit-tested; manually verified end-to-end (list/refresh/unmount/"
 "eject/backing_device_of) against a real Mac, both its internal disk and a "
@@ -2165,11 +2216,11 @@ msgstr ""
 "(list/refresh/unmount/eject/backing_device_of) contra um Mac real, tanto seu "
 "disco interno quanto um pendrive USB conectado"
 
-#: src/architecture.md:673
+#: src/architecture.md:697
 msgid "Privileged helper (`argos-helper`)"
 msgstr "Helper privilegiado (`argos-helper`)"
 
-#: src/architecture.md:673
+#: src/architecture.md:697
 msgid ""
 "Implemented; end-to-end write+verify passes against a real file-backed Linux "
 "loop device, a real macOS `hdiutil`\\-attached disk image, and real physical "
@@ -2181,11 +2232,11 @@ msgstr ""
 "anexada via `hdiutil`, e pendrives USB físicos reais tanto no Linux quanto "
 "no macOS, incluindo a proteção de revalidação TOCTOU em cada caso"
 
-#: src/architecture.md:674
+#: src/architecture.md:698
 msgid "`argos list` / `argos write`"
 msgstr "`argos list` / `argos write`"
 
-#: src/architecture.md:674
+#: src/architecture.md:698
 msgid ""
 "Implemented and manually verified against real physical USB hardware on "
 "**both platforms**. Linux: first with a synthetic isohybrid-signed image, "
@@ -2250,11 +2301,11 @@ msgstr ""
 "invisível quando o stdout não é um terminal de verdade -- acompanhado "
 "separadamente."
 
-#: src/architecture.md:675
+#: src/architecture.md:699
 msgid "`argos verify` (standalone)"
 msgstr "`argos verify` (isolado)"
 
-#: src/architecture.md:675
+#: src/architecture.md:699
 msgid ""
 "Implemented. `execute_verify`'s core logic is confirmed for real against "
 "both a matching write and a mismatched device/ISO pair (`ChecksumMismatch`), "
@@ -2276,11 +2327,11 @@ msgstr ""
 "reportaram o mesmo SHA-256 (`e73a6241...`), batendo com o checksum publicado "
 "do Alpine."
 
-#: src/architecture.md:676
+#: src/architecture.md:700
 msgid "Windows ISO support (backlog #27)"
 msgstr "Suporte a ISO do Windows (backlog #27)"
 
-#: src/architecture.md:676
+#: src/architecture.md:700
 msgid ""
 "W1-W5 implemented: W1 (`image::windows`: UDF-first/ISO9660-fallback "
 "detection + read-only file-tree wrapper -- corrected mid-implementation "
@@ -2354,11 +2405,11 @@ msgstr ""
 "arquivo. A fase 3 M3 (#43) adicionou o layout de partição única FAT32 em "
 "Rust puro por trás de `--layout fat32"
 
-#: src/architecture.md:677
+#: src/architecture.md:701
 msgid "Packaging/distribution"
 msgstr "Empacotamento/distribuição"
 
-#: src/architecture.md:677
+#: src/architecture.md:701
 msgid ""
 "GitHub Releases binaries (`x86_64-unknown-linux-gnu`, `aarch64-apple-"
 "darwin`, `x86_64-apple-darwin`) implemented via `.github/workflows/"
@@ -2397,11 +2448,11 @@ msgstr ""
 "assim que uma contiver. Publicação no crates.io não começou -- precisa de "
 "uma decisão/credenciais que só o dono do projeto tem."
 
-#: src/architecture.md:678
+#: src/architecture.md:702
 msgid "Phase 4: graphical interface (`argos-gui`, backlog #97)"
 msgstr "Fase 4: interface gráfica (`argos-gui`, backlog #97)"
 
-#: src/architecture.md:678
+#: src/architecture.md:702
 msgid ""
 "G0-G8 implemented; G9 (real-hardware validation) in progress. One window "
 "sharing every safety check with the CLI through `argos-session` (extracted "
@@ -2486,11 +2537,11 @@ msgstr ""
 "uma recompilação do `argos-helper` (#107) -- relevante porque toda release o "
 "recompila."
 
-#: src/architecture.md:680
+#: src/architecture.md:704
 msgid "Prior art consulted"
 msgstr "Trabalhos anteriores consultados"
 
-#: src/architecture.md:682
+#: src/architecture.md:706
 msgid ""
 "[Popsicle](https://github.com/pop-os/popsicle) (Rust, PopOS) -- closest "
 "prior art in the same language; confirmed D-Bus/UDisks2 as a viable Linux "
@@ -2500,7 +2551,7 @@ msgstr ""
 "anterior mais próximo na mesma linguagem; confirmou D-Bus/UDisks2 como um "
 "caminho de enumeração Linux viável e a divisão de workspace CLI/core."
 
-#: src/architecture.md:685
+#: src/architecture.md:709
 msgid ""
 "[balenaEtcher](https://etcher.balena.io/) -- confirmed the privileged-"
 "sidecar pattern (`argos-helper`) and the pre-write capacity/source-target-"
@@ -2510,7 +2561,7 @@ msgstr ""
 "privilegiado (`argos-helper`) e as checagens de capacidade/colisão origem-"
 "destino pré-gravação hoje em `argos_core::preflight`."
 
-#: src/architecture.md:688
+#: src/architecture.md:712
 msgid ""
 "[Ventoy](https://www.ventoy.net/) -- reference disk layout (protective MBR + "
 "GPT + separate ESP) for a possible future multi-ISO / persistent partition "
@@ -2760,15 +2811,41 @@ msgstr ""
 "o [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)."
 
 #: src/changelog.md:6
-msgid "\\[1.6.0\\] - 2026-09-09"
-msgstr "\\[1.6.0\\] - 2026-09-09"
+msgid "\\[Unreleased\\]"
+msgstr "\\[Não lançado\\]"
 
-#: src/changelog.md:8 src/changelog.md:194 src/changelog.md:259
-#: src/changelog.md:294 src/changelog.md:335 src/changelog.md:459
+#: src/changelog.md:8 src/changelog.md:31 src/changelog.md:217
+#: src/changelog.md:282 src/changelog.md:317 src/changelog.md:358
+#: src/changelog.md:482
 msgid "Added"
 msgstr "Adicionado"
 
 #: src/changelog.md:10
+msgid ""
+"**`argos format` and \"Restore drive...\" in the GUI: turn an installer "
+"stick back into an ordinary one.** A stick Argos wrote was hard to reuse "
+"with a desktop's own formatter. Windows media carries a partition sized to "
+"its contents, and a Linux ISO written byte for byte carries the image's own "
+"partition table (with a backup GPT where the _image_ ended, not the device), "
+"so a file manager's \"Format\" reformatted one small volume and left the "
+"rest of the stick unreachable -- or refused the partition map outright. The "
+"new operation rewrites the partition table itself: it zeroes the first and "
+"last MiB of the device (old MBR and boot code, GPT headers, the ISO9660 "
+"descriptor that made Linux see the whole stick as a read-only `iso9660`), "
+"writes an MBR with one inactive FAT32 partition spanning the whole device, "
+"and formats it -- the same pure-Rust, one-file-descriptor path as Windows "
+"media, so it works identically on Linux and macOS. Takes seconds. Same "
+"safety as a write: system disks are refused, the helper re-validates the "
+"device's serial and size before touching it, and the device path has to be "
+"typed back to confirm. Devices from 512 MiB to 2 TiB; `--label` (or the "
+"field beside the GUI button) names the volume. Writing ISOs is unchanged."
+msgstr "**`argos format` e \"Restaurar pendrive...\" na GUI: transforma um pendrive de instalação de volta num pendrive comum.** Um pendrive gravado pelo Argos era difícil de reaproveitar com o formatador da própria área de trabalho. A mídia Windows tem uma partição do tamanho do seu conteúdo, e uma ISO Linux gravada byte a byte carrega a tabela de partição da própria imagem (com um GPT de backup onde a _imagem_ terminava, não o dispositivo), então o \"Formatar\" do gerenciador de arquivos reformatava um volume pequeno e deixava o resto do pendrive inacessível -- ou recusava o mapa de partições de vez. A nova operação reescreve a própria tabela de partição: zera o primeiro e o último MiB do dispositivo (MBR e código de boot antigos, cabeçalhos GPT, o descritor ISO9660 que fazia o Linux enxergar o pendrive inteiro como um `iso9660` somente leitura), grava um MBR com uma única partição FAT32 inativa ocupando o dispositivo inteiro e a formata -- o mesmo caminho em Rust puro, num único descritor de arquivo, da mídia Windows, então funciona igual no Linux e no macOS. Leva segundos. A mesma segurança de uma gravação: discos de sistema são recusados, o helper revalida o número de série e o tamanho do dispositivo antes de tocá-lo, e o caminho do dispositivo precisa ser digitado de volta para confirmar. Dispositivos de 512 MiB a 2 TiB; `--label` (ou o campo ao lado do botão na GUI) dá nome ao volume. A gravação de ISOs não muda."
+
+#: src/changelog.md:29
+msgid "\\[1.6.0\\] - 2026-09-09"
+msgstr "\\[1.6.0\\] - 2026-09-09"
+
+#: src/changelog.md:33
 msgid ""
 "**A graphical interface: `argos-gui`.** One window, in the spirit of Rufus "
 "-- pick an image, pick a device, write. It shares every safety check with "
@@ -2792,7 +2869,7 @@ msgstr ""
 "`argos-gui`, `argos-helper`) juntos, nunca separados -- porque um par "
 "descasado convida \"a GUI não acha o helper\" como um modo de falha confuso."
 
-#: src/changelog.md:21
+#: src/changelog.md:44
 msgid ""
 "Elevating from a window with no controlling terminal needed its own route on "
 "each host: macOS uses the system's own authorization dialog (`osascript ... "
@@ -2813,7 +2890,7 @@ msgstr ""
 "a mensagem genérica do polkit. As duas rotas deixam o próprio `argos-helper` "
 "intocado."
 
-#: src/changelog.md:30
+#: src/changelog.md:53
 msgid ""
 "Cancelling is honest about what it can actually do: measured on real "
 "hardware, the `CancelToken` reaches the copy loop and nothing after it -- "
@@ -2830,7 +2907,7 @@ msgstr ""
 "quê, em vez de continuar ativo para um clique que silenciosamente não faria "
 "nada."
 
-#: src/changelog.md:37
+#: src/changelog.md:60
 msgid ""
 "**The GUI speaks English and Brazilian Portuguese, in one binary, switchable "
 "without a restart.** Detected from the desktop (`LC_ALL`/`LC_MESSAGES`/"
@@ -2859,7 +2936,7 @@ msgstr ""
 "tempo de build, e um `argos man` dependente de locale sairia no idioma que o "
 "runner do CI tivesse por acaso."
 
-#: src/changelog.md:51
+#: src/changelog.md:74
 msgid ""
 "**Linux packaging now installs the GUI's desktop integration.** The `.deb` "
 "and the AUR package (once a tagged release contains `argos-gui`; see the AUR "
@@ -2874,7 +2951,7 @@ msgstr ""
 "tanto o prompt de autorização gráfico quanto a própria janela ficam "
 "alcançáveis sem terminal."
 
-#: src/changelog.md:58
+#: src/changelog.md:81
 msgid ""
 "**macOS packaging now produces a universal `Argos.app` and `.dmg`, "
 "unsigned.** `lipo`'d from both Apple Silicon and Intel builds, so nobody "
@@ -2898,12 +2975,12 @@ msgstr ""
 "Rust, com `xattr -dr com.apple.quarantine` documentado para quem baixar pelo "
 "navegador em vez disso."
 
-#: src/changelog.md:69 src/changelog.md:160 src/changelog.md:205
-#: src/changelog.md:236 src/changelog.md:316 src/changelog.md:375
+#: src/changelog.md:92 src/changelog.md:183 src/changelog.md:228
+#: src/changelog.md:259 src/changelog.md:339 src/changelog.md:398
 msgid "Fixed"
 msgstr "Corrigido"
 
-#: src/changelog.md:71
+#: src/changelog.md:94
 msgid ""
 "**`argos` now exits with the code the privileged helper actually reported.** "
 "Every failure that happened inside `argos-helper` -- a device that turned "
@@ -2926,7 +3003,7 @@ msgstr ""
 "não mudaram; só o código agora é o verdadeiro. Encontrado ao extrair a "
 "`argos-session`."
 
-#: src/changelog.md:81
+#: src/changelog.md:104
 msgid ""
 "**Dismissing the graphical authorization dialog now reports itself "
 "correctly.** On Linux, cancelling the `pkexec` prompt used to come back as a "
@@ -2947,7 +3024,7 @@ msgstr ""
 "executing command as another user: Request dismissed` é o que uma recusa "
 "real no GNOME de fato produz."
 
-#: src/changelog.md:91
+#: src/changelog.md:114
 msgid ""
 "**A translated helper error no longer glues the raw English message onto its "
 "own category, on the same un-collapsible line.** Found on real hardware "
@@ -2966,7 +3043,7 @@ msgstr ""
 "vezes; agora ele fica no painel \"Detalhes\", igual a toda outra categoria "
 "de erro já fazia."
 
-#: src/changelog.md:100
+#: src/changelog.md:123
 msgid ""
 "**The language selector reads as one now.** The combo box in the header "
 "showed only its current value (\"Automatic\", \"English\"...) with nothing "
@@ -2979,12 +3056,12 @@ msgstr ""
 "não um seletor de idioma. Agora ele carrega um rótulo \"Language\"/"
 "\"Idioma\"."
 
-#: src/changelog.md:106 src/changelog.md:133 src/changelog.md:222
-#: src/changelog.md:280 src/changelog.md:302
+#: src/changelog.md:129 src/changelog.md:156 src/changelog.md:245
+#: src/changelog.md:303 src/changelog.md:325
 msgid "Changed"
 msgstr "Alterado"
 
-#: src/changelog.md:108
+#: src/changelog.md:131
 msgid ""
 "**The write phase now crosses the privilege boundary as a value rather than "
 "as a `Debug`\\-formatted string.** No visible difference -- every phase "
@@ -3005,11 +3082,11 @@ msgstr ""
 "é interpretada, então um par descasado degrada para um rótulo de aparência "
 "estranha em vez de um evento perdido."
 
-#: src/changelog.md:117 src/changelog.md:435 src/changelog.md:522
+#: src/changelog.md:140 src/changelog.md:458 src/changelog.md:545
 msgid "Known limitations"
 msgstr "Limitações conhecidas"
 
-#: src/changelog.md:119
+#: src/changelog.md:142
 msgid ""
 "**On macOS, Full Disk Access does not survive an update.** `argos-helper` is "
 "unsigned and carries an ad-hoc code signature -- a hash of its own contents "
@@ -3035,11 +3112,11 @@ msgstr ""
 "reais. Uma identidade de assinatura estável resolveria isso; não feito nesta "
 "fase (veja `packaging/README.md`)."
 
-#: src/changelog.md:131
+#: src/changelog.md:154
 msgid "\\[1.5.5\\] - 2026-09-04"
 msgstr "\\[1.5.5\\] - 2026-09-04"
 
-#: src/changelog.md:135
+#: src/changelog.md:158
 msgid ""
 "**The write progress bar now tracks bytes the device has actually taken, not "
 "bytes merely handed to the OS -- without slowing the write down.** Reported "
@@ -3058,7 +3135,7 @@ msgstr ""
 "`Flushing` da 1.5.4 nomeava essa espera, mas não tinha nada para mostrar "
 "durante ela."
 
-#: src/changelog.md:143
+#: src/changelog.md:166
 msgid ""
 "Progress now comes from the kernel's own per-device counter (field 7 of `/"
 "sys/block/<dev>/stat`, completed sectors written), sampled during the copy "
@@ -3075,7 +3152,7 @@ msgstr ""
 "bufferizada simples, que é o que permite ao kernel mesclá-las em requisições "
 "sequenciais grandes ao dispositivo."
 
-#: src/changelog.md:151
+#: src/changelog.md:174
 msgid ""
 "The first attempt at this instead _forced_ the answer to be true, with an "
 "`fsync` every 64MiB. Measured on the same stick, that dropped a write the "
@@ -3090,7 +3167,7 @@ msgstr ""
 "cache interno do dispositivo. Observar um contador não custa nada; forçar "
 "uma barreira custa quase tudo."
 
-#: src/changelog.md:157
+#: src/changelog.md:180
 msgid ""
 "Platforms with no such counter (macOS, for now) fall back to the previous "
 "behavior rather than losing progress reporting."
@@ -3098,7 +3175,7 @@ msgstr ""
 "Plataformas sem esse contador (macOS, por enquanto) caem de volta no "
 "comportamento anterior em vez de perder o relato de progresso."
 
-#: src/changelog.md:162
+#: src/changelog.md:185
 msgid ""
 "**`eject` failing silently claimed \"Safe to unplug\" anyway.** Reported "
 "from real hardware: `eject: cannot open /dev/sdX: Permission denied` printed "
@@ -3129,7 +3206,7 @@ msgstr ""
 "forma -- o descarregamento físico já aconteceu antes, no `argos-helper`, "
 "antes de a ejeção sequer ser tentada."
 
-#: src/changelog.md:176
+#: src/changelog.md:199
 msgid ""
 "**The post-write eject then failed for a much simpler reason: it had no "
 "privilege.** With the message above finally telling the truth, what it told "
@@ -3162,11 +3239,11 @@ msgstr ""
 "não o `EBUSY` que uma gravação em andamento daria: os dados já tinham sido "
 "descarregados e verificados quando a ejeção rodou."
 
-#: src/changelog.md:192
+#: src/changelog.md:215
 msgid "\\[1.5.4\\] - 2026-09-04"
 msgstr "\\[1.5.4\\] - 2026-09-04"
 
-#: src/changelog.md:196
+#: src/changelog.md:219
 msgid ""
 "**`argos write` now also accepts `--iso <path>`**, in addition to the "
 "existing positional form. Reported from real use, within hours of the README/"
@@ -3185,7 +3262,7 @@ msgstr ""
 "A forma posicional continua sendo o que todo exemplo usa primeiro -- isso só "
 "impede que a outra forma seja um erro rígido."
 
-#: src/changelog.md:207
+#: src/changelog.md:230
 msgid ""
 "**The DD-mode write path never forced a real flush to the device.** Reported "
 "from real hardware: a 5.8GB Ubuntu ISO write to a USB stick looked done "
@@ -3214,11 +3291,11 @@ msgstr ""
 "progresso `Flushing` para que a espera seja visível em vez de parecer uma "
 "barra travada."
 
-#: src/changelog.md:220
+#: src/changelog.md:243
 msgid "\\[1.5.3\\] - 2026-09-04"
 msgstr "\\[1.5.3\\] - 2026-09-04"
 
-#: src/changelog.md:224
+#: src/changelog.md:247
 msgid ""
 "**`argos man` now documents every subcommand's own flags on one page**, "
 "instead of `clap_mangen`'s default: a thin top-level page whose SUBCOMMANDS "
@@ -3243,7 +3320,7 @@ msgstr ""
 "por subcomando) um texto mais completo, incluindo um bloco EXAMPLES cobrindo "
 "o mesmo fluxo de três comandos da nova seção Usage do README."
 
-#: src/changelog.md:238
+#: src/changelog.md:261
 msgid ""
 "**`argos write`/`argos verify` failed on a relative ISO path, elevating via "
 "`pkexec`.** Reported from real hardware: `argos write some.iso --device /dev/"
@@ -3272,11 +3349,11 @@ msgstr ""
 "um caminho ruim falhe imediatamente e pelo nome, em vez de bem depois de o "
 "usuário já ter confirmado uma gravação."
 
-#: src/changelog.md:251
+#: src/changelog.md:274
 msgid "\\[1.5.2\\] - 2026-09-04"
 msgstr "\\[1.5.2\\] - 2026-09-04"
 
-#: src/changelog.md:253
+#: src/changelog.md:276
 msgid ""
 "Also the first tag to actually exercise the `.deb`\\-building step "
 "`release.yml` gained in this release -- it was added and merged _after_ "
@@ -3290,7 +3367,7 @@ msgstr ""
 "construído pelo workflow antigo e não carrega `.deb`, apesar de o changelog "
 "abaixo descrevê-lo como feito. Esta tag é o que torna isso real."
 
-#: src/changelog.md:261
+#: src/changelog.md:284
 msgid ""
 "**A Debian/Ubuntu `.deb` package** (backlog #46). `packaging/build-deb.sh` "
 "builds `argos` and `argos-helper` together, generates shell completions and "
@@ -3311,7 +3388,7 @@ msgstr ""
 "construído e duas coisas não óbvias que o `cargo-deb` precisou de correção "
 "para."
 
-#: src/changelog.md:270
+#: src/changelog.md:293
 msgid ""
 "**A Homebrew tap** (macOS): `brew install jp-guimaraes/argos/argos`. See "
 "[`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/homebrew-"
@@ -3321,7 +3398,7 @@ msgstr ""
 "Veja [`jp-guimaraes/homebrew-argos`](https://github.com/jp-guimaraes/"
 "homebrew-argos)."
 
-#: src/changelog.md:272
+#: src/changelog.md:295
 msgid ""
 "**An AUR `PKGBUILD`** for pacman-based distros (Arch, and derivatives like "
 "Omarchy), same shape as the `.deb`: both binaries, completions and man page "
@@ -3338,7 +3415,7 @@ msgstr ""
 "conta AUR do mantenedor -- então, por enquanto, construa localmente a partir "
 "de `packaging/aur/`. Veja `packaging/README.md`."
 
-#: src/changelog.md:282
+#: src/changelog.md:305
 msgid ""
 "**Release binaries are now stripped** (`[profile.release] strip = true`). "
 "Found missing while packaging the `.deb`: Debian's `lintian` flags an "
@@ -3361,11 +3438,11 @@ msgstr ""
 "crates.io -- esse constrói cada crate fora do workspace, então a "
 "configuração de profile em nível de workspace não se aplica ali."
 
-#: src/changelog.md:292
+#: src/changelog.md:315
 msgid "\\[1.5.1\\] - 2026-09-04"
 msgstr "\\[1.5.1\\] - 2026-09-04"
 
-#: src/changelog.md:296
+#: src/changelog.md:319
 msgid ""
 "**`argos completions <shell>` and a hidden `argos man`** (#46). Both are "
 "generated from the same `clap` definition the CLI already carries, so a "
@@ -3379,7 +3456,7 @@ msgstr ""
 "à mão sincronizada com as flags reais. O `argos man` é oculto porque seu "
 "público é o empacotamento, não pessoas num terminal."
 
-#: src/changelog.md:304
+#: src/changelog.md:327
 msgid ""
 "**Unmounting uses `umount2(2)` instead of shelling out to `umount(8)`** "
 "(M7.1, #46). One fewer runtime dependency for a distribution package to "
@@ -3394,11 +3471,11 @@ msgstr ""
 "tanto o dispositivo de origem quanto o ponto de montagem, a syscall só "
 "aceita o ponto de montagem."
 
-#: src/changelog.md:310 src/changelog.md:398
+#: src/changelog.md:333 src/changelog.md:421
 msgid "Removed"
 msgstr "Removido"
 
-#: src/changelog.md:312
+#: src/changelog.md:335
 msgid ""
 "The `xtask` crate. Its only task rebuilt `crates/argos-privileged/assets/"
 "uefi-ntfs.img`, which was deleted along with the NTFS write path, and its "
@@ -3408,7 +3485,7 @@ msgstr ""
 "assets/uefi-ntfs.img`, que foi apagado junto com o caminho de escrita NTFS, "
 "e sua única dependência existia para servir essa tarefa."
 
-#: src/changelog.md:318
+#: src/changelog.md:341
 msgid ""
 "**A USB stick whose label contains a space could not be unmounted.** `/proc/"
 "mounts` escapes space, tab, newline and backslash as `\\040`, `\\011`, "
@@ -3425,11 +3502,11 @@ msgstr ""
 "a invocação por shell do `umount`, que passa o ponto de montagem direto para "
 "o kernel e por isso não tem tolerância para isso."
 
-#: src/changelog.md:325
+#: src/changelog.md:348
 msgid "\\[1.5.0\\] - 2026-09-03"
 msgstr "\\[1.5.0\\] - 2026-09-03"
 
-#: src/changelog.md:327
+#: src/changelog.md:350
 msgid ""
 "Phase 3: **self-contained Windows installer media**, on Linux _and_ macOS, "
 "for **UEFI _and_ legacy BIOS** machines. See [`docs/plan-phase3-self-"
@@ -3441,7 +3518,7 @@ msgstr ""
 "contained.md`](docs/plan-phase3-self-contained.md) para o plano contra o "
 "qual isso entrega."
 
-#: src/changelog.md:332
+#: src/changelog.md:355
 msgid ""
 "The headline: producing Windows install media no longer requires a Windows "
 "machine, an external `mkfs`, a FUSE filesystem, or a vendored binary blob."
@@ -3450,7 +3527,7 @@ msgstr ""
 "máquina Windows, um `mkfs` externo, um sistema de arquivos FUSE, ou um blob "
 "binário vendorizado."
 
-#: src/changelog.md:337
+#: src/changelog.md:360
 msgid ""
 "**`image::udf`** — Argos's own streaming UDF reader (M1, #40). Official "
 "Windows ISOs are UDF bridges, and the previous dependency read whole files "
@@ -3465,7 +3542,7 @@ msgstr ""
 "transmitindo um arquivo de 7,58GB, com um digest idêntico byte a byte ao do "
 "próprio driver UDF do macOS lendo o mesmo arquivo."
 
-#: src/changelog.md:342
+#: src/changelog.md:365
 msgid ""
 "**`image::wim`** — Argos's own WIM reader and splitter (M2, #42). Splits "
 "`install.wim` into `install.swm` parts under FAT32's 4GiB limit by "
@@ -3484,7 +3561,7 @@ msgstr ""
 "reproduzindo uma árvore de origem byte a byte a partir das nossas partes) e, "
 "em última instância, pelo próprio Windows Setup em hardware real."
 
-#: src/changelog.md:349
+#: src/changelog.md:372
 msgid ""
 "**`--layout fat32`** — a single pure-Rust FAT32 partition (M3, #43), written "
 "directly into the partition's byte range of the open device: no `mkfs`, no "
@@ -3497,7 +3574,7 @@ msgstr ""
 "sistema de arquivos do kernel. Particionado em GPT; inicializa firmware UEFI "
 "via o próprio `bootx64.efi` da ISO."
 
-#: src/changelog.md:353
+#: src/changelog.md:376
 msgid ""
 "**`--layout fat32-bios`** — the same media, MBR-partitioned and carrying "
 "**Argos's own boot records** (M6, #45): an MBR bootstrap in 279 of the 440 "
@@ -3512,7 +3589,7 @@ msgstr ""
 "de portar os blobs binários GPL do `ms-sys`. Inicializa máquinas com BIOS "
 "legado."
 
-#: src/changelog.md:358
+#: src/changelog.md:381
 msgid ""
 "**Windows write support on macOS** (M4, #34) — enabled by the FAT32 route, "
 "which superseded the original macFUSE/`ntfs-3g` plan entirely."
@@ -3520,7 +3597,7 @@ msgstr ""
 "**Suporte a escrita do Windows no macOS** (M4, #34) — habilitado pela rota "
 "FAT32, que substituiu por completo o plano original macFUSE/`ntfs-3g`."
 
-#: src/changelog.md:360
+#: src/changelog.md:383
 msgid ""
 "**`tools/mediadiff.py`** — dumps a written device's full structure (MBR, "
 "GPT, BPB, FAT, directory tree) and diffs two dumps, with ~25 conformance "
@@ -3533,7 +3610,7 @@ msgstr ""
 "diferencial contra mídia feita pelo Rufus; foi ele quem encontrou o bug de "
 "GPT obsoleto abaixo."
 
-#: src/changelog.md:365
+#: src/changelog.md:388
 msgid ""
 "**End-to-end write cancellation** (M7.5, #35). Ctrl-C during a write now "
 "reaches the privileged helper: `argos` keeps the helper's stdin open and a "
@@ -3555,7 +3632,7 @@ msgstr ""
 "sobre o cancelamento. O fechamento do pipe também conta como cancelamento, "
 "então um pai que morre de vez ainda assim para a gravação."
 
-#: src/changelog.md:377
+#: src/changelog.md:400
 msgid ""
 "**`argos --version` reported `0.1.0`.** The workspace version was never "
 "bumped, so v1.0.0 shipped — tagged, released and published — announcing "
@@ -3567,7 +3644,7 @@ msgstr ""
 "anunciando como uma build pré-1.0. Definida para `1.5.0` aqui, que também é "
 "a primeira string de versão em que o binário concordou com o changelog."
 
-#: src/changelog.md:382
+#: src/changelog.md:405
 msgid ""
 "A stale GPT surviving underneath the MBR layout (#59). `mbrman` writes "
 "sector 0 and nothing else, so a stick recycled from `--layout fat32` kept "
@@ -3584,7 +3661,7 @@ msgstr ""
 "unidade a um volume num disco nesse estado, enquanto a mídia ainda "
 "inicializa, o que tornou difícil localizar o problema."
 
-#: src/changelog.md:388
+#: src/changelog.md:411
 msgid ""
 "Directory entries `fatfs` writes that violate the FAT specification: long "
 "filename entries placed before `.` and `..`, and `..` pointing at the root's "
@@ -3594,7 +3671,7 @@ msgstr ""
 "entradas de nome longo colocadas antes de `.` e `..`, e `..` apontando para "
 "o cluster da raiz em vez de 0 (#56, confirmado upstream)."
 
-#: src/changelog.md:391
+#: src/changelog.md:414
 msgid ""
 "`BPB_HiddSec` left at 0 on the GPT path, and a BPB CHS geometry (32×64) that "
 "contradicted the 255×63 the MBR partition entries are built from."
@@ -3603,7 +3680,7 @@ msgstr ""
 "(32×64) que contradizia o 255×63 sobre o qual as entradas de partição MBR "
 "são construídas."
 
-#: src/changelog.md:393
+#: src/changelog.md:416
 msgid ""
 "A fixed volume serial number, so every medium Argos wrote claimed the same "
 "identity; and a previous bootloader surviving in sector 0 across a GPT write."
@@ -3612,13 +3689,13 @@ msgstr ""
 "gravava alegava a mesma identidade; e um bootloader anterior sobrevivendo no "
 "setor 0 através de uma gravação GPT."
 
-#: src/changelog.md:396
+#: src/changelog.md:419
 msgid "Media writes now cost roughly **8× fewer I/O operations**."
 msgstr ""
 "Gravações de mídia agora custam aproximadamente **8× menos operações de I/"
 "O**."
 
-#: src/changelog.md:400
+#: src/changelog.md:423
 msgid ""
 "`hadris-udf`, and with it the `check_windows_memory` preflight that existed "
 "only to refuse writes it would have OOMed on."
@@ -3626,7 +3703,7 @@ msgstr ""
 "`hadris-udf`, e junto com ele o pré-voo `check_windows_memory` que existia "
 "só para recusar gravações nas quais causaria OOM."
 
-#: src/changelog.md:402
+#: src/changelog.md:425
 msgid ""
 "**The NTFS/UEFI:NTFS Windows write path** (`--layout ntfs`), retired at "
 "decision point M4.3 once `--layout fat32`/`fat32-bios` was validated on real "
@@ -3648,11 +3725,11 @@ msgstr ""
 "(`reread_partition_table`, `mount_ntfs_partition`, `unmount_path`). `--"
 "layout` agora tem `fat32` como padrão; `ntfs` não é mais um valor válido."
 
-#: src/changelog.md:412 src/changelog.md:507
+#: src/changelog.md:435 src/changelog.md:530
 msgid "Verified against real hardware"
 msgstr "Verificado contra hardware real"
 
-#: src/changelog.md:414
+#: src/changelog.md:437
 msgid ""
 "The acceptance criterion throughout was **Windows Setup reaching disk "
 "selection** — not the language screen, which proves only that the firmware "
@@ -3664,7 +3741,7 @@ msgstr ""
 "bootloader. Chegar à seleção de disco é o que prova que o Setup achou e "
 "aceitou sua fonte de instalação, partes `.swm` divididas incluídas."
 
-#: src/changelog.md:419
+#: src/changelog.md:442
 msgid ""
 "Media written **from macOS**: a UEFI machine (with an unsplit `install.esd` "
 "and with a split `install.wim`) and a legacy-BIOS machine (Intel Atom N455 "
@@ -3675,7 +3752,7 @@ msgstr ""
 "(netbook Intel Atom N455, BIOS AMI datada de 2011), através do MBR e VBR "
 "próprios do Argos."
 
-#: src/changelog.md:422
+#: src/changelog.md:445
 msgid ""
 "Media written **from Linux** (M5.1): a real Windows 10 22H2 ISO — 6.14 GB, "
 "`install.wim` 5.18 GB, so the splitter is genuinely exercised — to a "
@@ -3688,7 +3765,7 @@ msgstr ""
 "UEFI com `--layout fat32` e uma máquina BIOS legada com `--layout fat32-"
 "bios`."
 
-#: src/changelog.md:426
+#: src/changelog.md:449
 msgid ""
 "Both hosts, both firmwares, with no Windows machine, no `mkfs.ntfs`, no "
 "`ntfs-3g`, no FUSE and no vendored binary blob anywhere in the path."
@@ -3697,7 +3774,7 @@ msgstr ""
 "`mkfs.ntfs`, sem `ntfs-3g`, sem FUSE e sem nenhum blob binário vendorizado "
 "em qualquer ponto do caminho."
 
-#: src/changelog.md:428
+#: src/changelog.md:451
 msgid ""
 "The stale-GPT scenario (#59) on real hardware: one stick written with the "
 "GPT layout and then the MBR layout still reached its installation source, "
@@ -3707,7 +3784,7 @@ msgstr ""
 "layout GPT e depois com o layout MBR ainda chegou à sua fonte de instalação, "
 "o que um GPT sobrevivente teria impedido."
 
-#: src/changelog.md:432
+#: src/changelog.md:455
 msgid ""
 "Still open: an installation carried through to completion rather than "
 "stopping at disk selection, and Secure Boot (M5.3)."
@@ -3715,7 +3792,7 @@ msgstr ""
 "Ainda em aberto: uma instalação levada até o fim em vez de parar na seleção "
 "de disco, e Secure Boot (M5.3)."
 
-#: src/changelog.md:437
+#: src/changelog.md:460
 msgid ""
 "No GUI yet. Planned for 2.0; the CLI is architected so one can sit on the "
 "same `argos-core`/`argos-platform` crates without a rewrite."
@@ -3723,7 +3800,7 @@ msgstr ""
 "Ainda sem GUI. Planejada para a 2.0; a CLI é arquitetada para que uma possa "
 "se apoiar nas mesmas crates `argos-core`/`argos-platform` sem uma reescrita."
 
-#: src/changelog.md:439
+#: src/changelog.md:462
 msgid ""
 "Windows as a _host_ OS is still out of scope. Argos writes Windows media "
 "**from** Linux and macOS."
@@ -3731,7 +3808,7 @@ msgstr ""
 "Windows como SO _host_ ainda está fora de escopo. O Argos grava mídia do "
 "Windows **a partir de** Linux e macOS."
 
-#: src/changelog.md:441
+#: src/changelog.md:464
 msgid ""
 "Windows installer media has been carried to Setup's disk selection on real "
 "hardware, on both firmwares and from both hosts, but not through a completed "
@@ -3741,11 +3818,11 @@ msgstr ""
 "em hardware real, nos dois firmwares e a partir dos dois hosts, mas não "
 "através de uma instalação completa."
 
-#: src/changelog.md:444
+#: src/changelog.md:467
 msgid "Secure Boot is untested (M5.3)."
 msgstr "Secure Boot não foi testado (M5.3)."
 
-#: src/changelog.md:445
+#: src/changelog.md:468
 msgid ""
 "A solid `.esd` larger than FAT32's 4GiB file limit cannot be written: only a "
 "WIM can be split, and a solid ESD cannot. Use an ISO edition whose install "
@@ -3755,11 +3832,11 @@ msgstr ""
 "gravado: só um WIM pode ser dividido, e um ESD sólido não pode. Use uma "
 "edição de ISO cuja imagem de instalação seja um WIM."
 
-#: src/changelog.md:448 src/changelog.md:528
+#: src/changelog.md:471 src/changelog.md:551
 msgid "Non-hybrid ISOs are refused rather than partially supported."
 msgstr "ISOs não híbridas são recusadas em vez de parcialmente suportadas."
 
-#: src/changelog.md:449 src/changelog.md:529
+#: src/changelog.md:472 src/changelog.md:552
 msgid ""
 "A Homebrew tap is not published yet (crates.io and GitHub Releases are both "
 "available today)."
@@ -3767,11 +3844,11 @@ msgstr ""
 "Um tap do Homebrew ainda não está publicado (crates.io e GitHub Releases já "
 "estão disponíveis hoje)."
 
-#: src/changelog.md:452
+#: src/changelog.md:475
 msgid "\\[1.0.0\\] - 2026-08-30"
 msgstr "\\[1.0.0\\] - 2026-08-30"
 
-#: src/changelog.md:454
+#: src/changelog.md:477
 msgid ""
 "Initial release. Argos creates bootable Linux installer USB drives on Linux "
 "and macOS hosts, in the spirit of [Rufus](https://github.com/pbatard/rufus). "
@@ -3782,7 +3859,7 @@ msgstr ""
 "github.com/pbatard/rufus). Veja [`docs/architecture.md`](docs/"
 "architecture.md) para o design completo."
 
-#: src/changelog.md:461
+#: src/changelog.md:484
 msgid ""
 "**`argos list`** — lists every disk the platform backend can see, and "
 "whether each looks safe to write to."
@@ -3790,7 +3867,7 @@ msgstr ""
 "**`argos list`** — lista todo disco que o backend de plataforma consegue "
 "ver, e se cada um parece seguro para gravação."
 
-#: src/changelog.md:463
+#: src/changelog.md:486
 msgid ""
 "**`argos write <iso> --device <id>`** — the core destructive flow: refreshes "
 "the target device, applies the non-negotiable safety gate (a system disk is "
@@ -3816,7 +3893,7 @@ msgstr ""
 "simples quando o stdout não é um terminal de verdade (um pipe, um arquivo de "
 "log, CI)."
 
-#: src/changelog.md:474
+#: src/changelog.md:497
 msgid ""
 "**`argos verify <device> --iso <iso>`** — re-runs post-write verification "
 "against a device without writing again."
@@ -3824,7 +3901,7 @@ msgstr ""
 "**`argos verify <device> --iso <iso>`** — roda de novo a verificação pós-"
 "gravação contra um dispositivo sem gravar de novo."
 
-#: src/changelog.md:476
+#: src/changelog.md:499
 msgid ""
 "**Safety model**: a disk is only ever offered for writing when three "
 "independent signals agree — not a detected system disk, OS-reported "
@@ -3840,7 +3917,7 @@ msgstr ""
 "reconfere a identidade imediatamente antes de abrir o dispositivo, "
 "independentemente do que foi confirmado antes (a proteção TOCTOU)."
 
-#: src/changelog.md:482
+#: src/changelog.md:505
 msgid ""
 "**Linux backend**: disk enumeration via `/sys/block/*` and the udev "
 "database, cross-checked against UDisks2 over D-Bus when reachable. System-"
@@ -3852,7 +3929,7 @@ msgstr ""
 "detecção de disco de sistema resolve pilhas device-mapper de LVM/RAID/dm-"
 "crypt até o disco físico por baixo."
 
-#: src/changelog.md:486
+#: src/changelog.md:509
 msgid ""
 "**macOS backend**: disk enumeration via `diskutil list`/`info -plist`, "
 "parsed defensively against schema drift across macOS versions. System-disk "
@@ -3866,7 +3943,7 @@ msgstr ""
 "Silicon, onde o pai imediato do volume de boot é um contêiner virtual, não o "
 "disco interno real) até o disco físico por baixo."
 
-#: src/changelog.md:491
+#: src/changelog.md:514
 msgid ""
 "**Privilege separation**: `argos-helper`, a small binary deliberately kept "
 "\"dumb\", is the only thing that ever opens a raw device, and runs as root "
@@ -3879,7 +3956,7 @@ msgstr ""
 "nenhuma e não conversa com nenhuma API de D-Bus/plist/UDisks2 por conta "
 "própria."
 
-#: src/changelog.md:495
+#: src/changelog.md:518
 msgid ""
 "**ISO classification**: distinguishes hybrid ISOs (byte-for-byte writable) "
 "from El-Torito-only or plain-data images (refused) by inspecting the "
@@ -3893,7 +3970,7 @@ msgstr ""
 "modifica uma tabela de partição por conta própria, só verifica que uma já "
 "está lá antes de confiar numa cópia bruta."
 
-#: src/changelog.md:500
+#: src/changelog.md:523
 msgid ""
 "Pre-built binaries on GitHub Releases for `x86_64-unknown-linux-gnu`, "
 "`aarch64-apple-darwin`, and `x86_64-apple-darwin`."
@@ -3901,7 +3978,7 @@ msgstr ""
 "Binários pré-compilados no GitHub Releases para `x86_64-unknown-linux-gnu`, "
 "`aarch64-apple-darwin`, e `x86_64-apple-darwin`."
 
-#: src/changelog.md:502
+#: src/changelog.md:525
 msgid ""
 "Published on crates.io — install with `cargo install argos-cli argos-"
 "privileged` (both crates are needed: `argos-cli` alone installs `argos` but "
@@ -3913,7 +3990,7 @@ msgstr ""
 "`argos` mas não o binário separado `argos-helper` que ele procura ao seu "
 "lado em tempo de execução)."
 
-#: src/changelog.md:509
+#: src/changelog.md:532
 msgid ""
 "Real, official Linux distro ISOs (Ubuntu 26.04.1, 22.04.5, and 18.04.5; "
 "Alpine Linux 3.24.1) written to real physical USB drives on both Linux and "
@@ -3925,7 +4002,7 @@ msgstr ""
 "macOS, verificadas por checksum contra as somas publicadas de cada distro "
 "antes de gravar e re-hasheadas de forma independente fora do Argos depois."
 
-#: src/changelog.md:514
+#: src/changelog.md:537
 msgid ""
 "Real boot confirmation on both **UEFI** and **BIOS/legacy (MBR)** hardware, "
 "including one genuinely old BIOS-only machine."
@@ -3933,7 +4010,7 @@ msgstr ""
 "Confirmação real de boot tanto em hardware **UEFI** quanto **BIOS/legado "
 "(MBR)**, incluindo uma máquina genuinamente antiga só-BIOS."
 
-#: src/changelog.md:516
+#: src/changelog.md:539
 msgid ""
 "A write to a real system disk is refused before any privilege escalation, "
 "with and without `--i-know-what-im-doing`."
@@ -3941,7 +4018,7 @@ msgstr ""
 "Uma gravação num disco de sistema real é recusada antes de qualquer "
 "escalonamento de privilégio, com e sem `--i-know-what-im-doing`."
 
-#: src/changelog.md:518
+#: src/changelog.md:541
 msgid ""
 "Real-hardware integration tests for the write/verify path without needing "
 "physical USB media for every run: Linux loop devices, macOS `hdiutil`\\-"
@@ -3951,7 +4028,7 @@ msgstr ""
 "sem precisar de mídia USB física a cada execução: loop devices no Linux, "
 "imagens de disco anexadas via `hdiutil` no macOS."
 
-#: src/changelog.md:524
+#: src/changelog.md:547
 msgid ""
 "Windows image support and Windows as a host OS are both out of scope for v1 "
 "— a future phase."
@@ -3959,7 +4036,7 @@ msgstr ""
 "Suporte a imagem do Windows e Windows como SO host estão ambos fora de "
 "escopo para a v1 — uma fase futura."
 
-#: src/changelog.md:526
+#: src/changelog.md:549
 msgid ""
 "No GUI yet; the CLI is architected so one can sit on top of the same `argos-"
 "core`/`argos-platform` crates later without a rewrite."
@@ -3971,7 +4048,9 @@ msgstr ""
 msgid ""
 "The links below go straight to the files on GitHub — no need to browse the "
 "repository or its Releases page to find them."
-msgstr "Os links abaixo vão direto para os arquivos no GitHub — sem precisar navegar pelo repositório ou pela página de Releases para achá-los."
+msgstr ""
+"Os links abaixo vão direto para os arquivos no GitHub — sem precisar navegar "
+"pelo repositório ou pela página de Releases para achá-los."
 
 #: src/download.md:5
 msgid "Recommended per platform"
@@ -3983,20 +4062,29 @@ msgid ""
 "install path and the only one Gatekeeper never blocks. The `.dmg` below is "
 "the convenience download for anyone who wants the GUI without a Homebrew/"
 "Rust setup."
-msgstr "**macOS**: Homebrew (`brew install jp-guimaraes/argos/argos`) é o caminho de instalação principal e o único que o Gatekeeper nunca bloqueia. O `.dmg` abaixo é o download de conveniência para quem quer a GUI sem configurar Homebrew/Rust."
+msgstr ""
+"**macOS**: Homebrew (`brew install jp-guimaraes/argos/argos`) é o caminho de "
+"instalação principal e o único que o Gatekeeper nunca bloqueia. O `.dmg` "
+"abaixo é o download de conveniência para quem quer a GUI sem configurar "
+"Homebrew/Rust."
 
 #: src/download.md:8
 msgid ""
 "**Debian / Ubuntu**: the `.deb` below (`sudo apt install ./"
 "argos_<version>_amd64.deb`)."
-msgstr "**Debian / Ubuntu**: o `.deb` abaixo (`sudo apt install ./argos_<version>_amd64.deb`)."
+msgstr ""
+"**Debian / Ubuntu**: o `.deb` abaixo (`sudo apt install ./"
+"argos_<version>_amd64.deb`)."
 
 #: src/download.md:9
 msgid ""
 "**Arch / pacman**: not published to the AUR yet — see [`packaging/README.md`]"
 "(https://github.com/jp-guimaraes/argos/blob/main/packaging/README.md) for "
 "building the `PKGBUILD` locally."
-msgstr "**Arch / pacman**: ainda não publicado no AUR — veja [`packaging/README.md`](https://github.com/jp-guimaraes/argos/blob/main/packaging/README.md) para construir o `PKGBUILD` localmente."
+msgstr ""
+"**Arch / pacman**: ainda não publicado no AUR — veja [`packaging/README.md`]"
+"(https://github.com/jp-guimaraes/argos/blob/main/packaging/README.md) para "
+"construir o `PKGBUILD` localmente."
 
 #: src/download.md:10
 msgid "**Anything else**: the plain tarball for your platform below."
@@ -4006,7 +4094,10 @@ msgstr "**Qualquer outro caso**: o tarball simples da sua plataforma abaixo."
 msgid ""
 "Every method's full instructions and caveats (Gatekeeper, Full Disk Access, "
 "`PATH` setup) are in [Overview](./overview.md), under Installation."
-msgstr "As instruções completas e ressalvas de cada método (Gatekeeper, Acesso Total ao Disco, configuração do `PATH`) estão em [Visão geral](./overview.md), na seção Instalação."
+msgstr ""
+"As instruções completas e ressalvas de cada método (Gatekeeper, Acesso Total "
+"ao Disco, configuração do `PATH`) estão em [Visão geral](./overview.md), na "
+"seção Instalação."
 
 #: src/download.md:14
 msgid "Latest release"
@@ -4020,13 +4111,17 @@ msgstr "Todo o resto"
 msgid ""
 "[All releases](https://github.com/jp-guimaraes/argos/releases) — every past "
 "version, with full changelogs."
-msgstr "[Todos os releases](https://github.com/jp-guimaraes/argos/releases) — cada versão anterior, com o changelog completo."
+msgstr ""
+"[Todos os releases](https://github.com/jp-guimaraes/argos/releases) — cada "
+"versão anterior, com o changelog completo."
 
 #: src/download.md:25
 msgid ""
 "[Source code](https://github.com/jp-guimaraes/argos) — to build it yourself, "
 "see [Contributing](./contributing.md)."
-msgstr "[Código-fonte](https://github.com/jp-guimaraes/argos) — para construir você mesmo, veja [Contribuindo](./contributing.md)."
+msgstr ""
+"[Código-fonte](https://github.com/jp-guimaraes/argos) — para construir você "
+"mesmo, veja [Contribuindo](./contributing.md)."
 
 #~ msgid ""
 #~ "**Interface**: a CLI (`argos`), architected so a GUI can be added later "

@@ -407,32 +407,7 @@ fn write_fat32_media<H: Read + Write + Seek>(
 
     progress.on_phase(Phase::FormattingFat32);
     let mut window = PartitionWindow::new(&mut *device, layout.region());
-    fatfs::format_volume(
-        &mut window,
-        fatfs::FormatVolumeOptions::new()
-            // Forced rather than size-derived: FAT16 media (what a small
-            // volume would default to) is far less universally bootable,
-            // and WindowsFat32Plan's size floor guarantees FAT32 is valid.
-            .fat_type(fatfs::FatType::Fat32)
-            // Sized from the volume: large clusters make the write cheap,
-            // but a fixed large value would push a small volume below
-            // FAT32's cluster minimum. See fat32_bytes_per_cluster_for.
-            .bytes_per_cluster(fat32_bytes_per_cluster_for(layout.region().size_bytes))
-            // fatfs writes a fixed 0x12345678 otherwise, so every volume
-            // Argos ever wrote would share one identity. Windows keys
-            // volumes off this serial; two media that claim to be the same
-            // volume is not a state worth handing anyone.
-            .volume_id(random_volume_id()?)
-            // fatfs defaults to 32 sectors/track and 64 heads. Our own MBR
-            // partition entry is built from 255x63 (see chs_for_lba), so
-            // without this the two layers of one medium described the same
-            // disk with two different geometries -- and neither matched the
-            // 63/255 that Windows-made media carries.
-            .sectors_per_track(CHS_SECTORS_PER_TRACK as u16)
-            .heads(CHS_HEADS as u16)
-            .volume_label(*b"ARGOS-WIN  "),
-    )
-    .map_err(ArgosError::Io)?;
+    format_fat32_volume(&mut window, layout.region().size_bytes, *b"ARGOS-WIN  ")?;
 
     window.seek(SeekFrom::Start(0)).map_err(ArgosError::Io)?;
     let fs = fatfs::FileSystem::new(window, fatfs::FsOptions::new()).map_err(ArgosError::Io)?;
@@ -483,6 +458,43 @@ fn write_fat32_media<H: Read + Write + Seek>(
     }
 
     Ok(copied)
+}
+
+/// Formats `window` -- one partition's byte range -- as FAT32, with the
+/// options every volume Argos makes shares. Used by the Windows write path
+/// and by `argos format` alike, so the two cannot drift apart on geometry or
+/// volume identity.
+pub(crate) fn format_fat32_volume<H: Read + Write + Seek>(
+    window: &mut H,
+    volume_bytes: u64,
+    label: [u8; 11],
+) -> Result<()> {
+    fatfs::format_volume(
+        window,
+        fatfs::FormatVolumeOptions::new()
+            // Forced rather than size-derived: FAT16 media (what a small
+            // volume would default to) is far less universally bootable,
+            // and both callers' size floors guarantee FAT32 is valid.
+            .fat_type(fatfs::FatType::Fat32)
+            // Sized from the volume: large clusters make the write cheap,
+            // but a fixed large value would push a small volume below
+            // FAT32's cluster minimum. See fat32_bytes_per_cluster_for.
+            .bytes_per_cluster(fat32_bytes_per_cluster_for(volume_bytes))
+            // fatfs writes a fixed 0x12345678 otherwise, so every volume
+            // Argos ever wrote would share one identity. Windows keys
+            // volumes off this serial; two media that claim to be the same
+            // volume is not a state worth handing anyone.
+            .volume_id(random_volume_id()?)
+            // fatfs defaults to 32 sectors/track and 64 heads. Our own MBR
+            // partition entry is built from 255x63 (see chs_for_lba), so
+            // without this the two layers of one medium described the same
+            // disk with two different geometries -- and neither matched the
+            // 63/255 that Windows-made media carries.
+            .sectors_per_track(CHS_SECTORS_PER_TRACK as u16)
+            .heads(CHS_HEADS as u16)
+            .volume_label(label),
+    )
+    .map_err(ArgosError::Io)
 }
 
 /// FAT32 geometry, read back out of a formatted volume's BPB.
@@ -1066,7 +1078,7 @@ where
 ///   so used to skip the patch entirely, shipping volumes that claimed to
 ///   begin at sector 0 of the disk. A Rufus-written FAT32 stick that WinPE
 ///   mounts without complaint carries the real offset here; ours carried 0.
-fn record_partition_start<H: Read + Write + Seek>(
+pub(crate) fn record_partition_start<H: Read + Write + Seek>(
     window: &mut H,
     partition_start_lba: u32,
 ) -> Result<()> {
@@ -1196,11 +1208,26 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
     device: &mut H,
     layout: &WindowsMbrPlan,
 ) -> Result<()> {
-    let (starting_lba, sectors) = layout.partition_sectors().ok_or_else(|| {
-        ArgosError::Io(std::io::Error::other(
+    write_single_mbr_partition(device, layout.windows_partition, mbrman::BOOT_ACTIVE)
+}
+
+/// Writes an MBR describing exactly one FAT32 (LBA) partition at `region`,
+/// with `boot` as its status byte -- [`mbrman::BOOT_ACTIVE`] for the BIOS
+/// install media, [`mbrman::BOOT_INACTIVE`] for a plain data stick from
+/// `argos format`. Erases any GPT first, and leaves the 440-byte bootstrap
+/// area alone; see [`write_mbr_partition_table`] for both.
+pub(crate) fn write_single_mbr_partition<H: Read + Write + Seek>(
+    device: &mut H,
+    region: argos_core::partition::windows::PartitionRegion,
+    boot: u8,
+) -> Result<()> {
+    let start = u32::try_from(region.start_offset_bytes / SECTOR_SIZE);
+    let count = u32::try_from(region.size_bytes / SECTOR_SIZE);
+    let (Ok(starting_lba), Ok(sectors)) = (start, count) else {
+        return Err(ArgosError::Io(std::io::Error::other(
             "the partition is larger than an MBR entry's 32-bit LBA fields can describe (>2TiB)",
-        ))
-    })?;
+        )));
+    };
 
     erase_any_gpt(device)?;
 
@@ -1225,7 +1252,7 @@ fn write_mbr_partition_table<H: Read + Write + Seek>(
     let (start_c, start_h, start_s) = chs_for_lba(starting_lba);
     let (end_c, end_h, end_s) = chs_for_lba(starting_lba.saturating_add(sectors).saturating_sub(1));
     mbr[1] = mbrman::MBRPartitionEntry {
-        boot: mbrman::BOOT_ACTIVE,
+        boot,
         first_chs: mbrman::CHS::new(start_c, start_h, start_s),
         sys: MBR_FAT32_LBA_PARTITION_TYPE,
         last_chs: mbrman::CHS::new(end_c, end_h, end_s),

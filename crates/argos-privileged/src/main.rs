@@ -86,6 +86,17 @@ fn run() -> i32 {
                 files_verified: outcome.files_verified,
             })
         }
+        Plan::Format(format_plan) => {
+            if format_plan.eject {
+                eject_after = Some(format_plan.device_path.clone());
+            }
+            argos_privileged::format::execute_format(&format_plan, &JsonlProgress).map(|outcome| {
+                Event::FormatDone {
+                    partition_bytes: outcome.partition_bytes,
+                    label: outcome.label,
+                }
+            })
+        }
     };
 
     match result {

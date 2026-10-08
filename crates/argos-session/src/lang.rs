@@ -125,6 +125,15 @@ pub struct Strings {
     pub verify_button: &'static str,
     pub write_disabled_hint: &'static str,
 
+    // ---- Restore (format) ------------------------------------------------
+    pub format_button: &'static str,
+    pub format_button_tooltip: &'static str,
+    pub format_disabled_hint: &'static str,
+    pub format_explanation: &'static str,
+    pub volume_label_label: &'static str,
+    pub volume_label_invalid: &'static str,
+    pub format_confirm_button: &'static str,
+
     // ---- Progress -----------------------------------------------------------
     pub working_out_total: &'static str,
     pub do_not_unplug: &'static str,
@@ -143,6 +152,7 @@ pub struct Strings {
     pub phase_writing: &'static str,
     pub phase_flushing: &'static str,
     pub phase_verifying: &'static str,
+    pub phase_wiping: &'static str,
     pub phase_starting: &'static str,
 
     // ---- Result screen ------------------------------------------------------
@@ -176,6 +186,8 @@ pub struct Strings {
     pub files_checked: fn(u64) -> String,
     pub device_description: fn(&str, &str) -> String,
     pub device_description_long: fn(&str, &str, &str) -> String,
+    pub format_layout_preview: fn(&str, &str) -> String,
+    pub format_done: fn(&str, &str) -> String,
 
     // ---- Error localization (G6.5) ------------------------------------------
     /// Shown ahead of the raw English text for anything below with no
@@ -195,6 +207,8 @@ pub struct Strings {
     pub error_not_windows_installer_iso: fn(&str) -> String,
     pub error_checksum_mismatch: fn(&str, &str) -> String,
     pub error_windows_partition_layout_mismatch: fn(&str) -> String,
+    pub error_device_size_unsupported_for_format: fn(&str, &str) -> String,
+    pub error_invalid_volume_label: fn(&str) -> String,
     pub error_cancelled: &'static str,
     pub error_not_confirmed: &'static str,
     pub error_elevation_declined: &'static str,
@@ -219,6 +233,8 @@ pub struct Strings {
     pub helper_category_windows_file_mismatch: &'static str,
     pub helper_category_windows_file_too_large_for_fat32: &'static str,
     pub helper_category_not_confirmed: &'static str,
+    pub helper_category_device_size_unsupported_for_format: &'static str,
+    pub helper_category_invalid_volume_label: &'static str,
 }
 
 pub static EN: Strings = Strings {
@@ -256,6 +272,16 @@ pub static EN: Strings = Strings {
     verify_button: "Verify…",
     write_disabled_hint: "Choose an image Argos recognises and a target device",
 
+    format_button: "Restore drive…",
+    format_button_tooltip: "Erase the whole device and leave it as one FAT32 volume any computer can use",
+    format_disabled_hint: "Choose a target device",
+    format_explanation: "The partition table is rewritten from scratch: one FAT32 partition across \
+        the whole device, readable by Windows, macOS, Linux, TVs and cameras. FAT32 cannot hold a \
+        single file larger than 4 GiB.",
+    volume_label_label: "Volume name:",
+    volume_label_invalid: "Use 1 to 11 letters, digits or spaces, without . / : * ? and similar.",
+    format_confirm_button: "Format",
+
     working_out_total: "Working out the total…",
     do_not_unplug: "Do not unplug the device.",
     cancel_button: "Cancel",
@@ -272,6 +298,7 @@ pub static EN: Strings = Strings {
     phase_writing: "Writing",
     phase_flushing: "Flushing",
     phase_verifying: "Verifying",
+    phase_wiping: "Clearing old signatures",
     phase_starting: "Starting…",
 
     cancelled_message: "Cancelled. The device is unusable and needs to be written again.",
@@ -306,6 +333,12 @@ pub static EN: Strings = Strings {
     files_checked: |count| format!("{count} files checked"),
     device_description: |id, size| format!("{id} — {size}"),
     device_description_long: |id, name, size| format!("{id} — {name} ({size})"),
+    format_layout_preview: |size, label| {
+        format!("Will become: one {size} FAT32 volume named {label} (MBR)")
+    },
+    format_done: |size, label| {
+        format!("One {size} FAT32 volume named {label}. Remove and reinsert the drive to use it.")
+    },
 
     error_generic_prefix: "the privileged process reported an error",
     error_device_not_found: |id| format!("no device matches '{id}'"),
@@ -331,6 +364,12 @@ pub static EN: Strings = Strings {
     error_windows_partition_layout_mismatch: |detail| {
         format!("partition table does not match the expected Windows write layout: {detail}")
     },
+    error_device_size_unsupported_for_format: |id, size| {
+        format!("device '{id}' ({size}) cannot be formatted: it must be between 512 MiB and 2 TiB")
+    },
+    error_invalid_volume_label: |label| {
+        format!("'{label}' cannot be a volume name: use 1 to 11 letters, digits or spaces")
+    },
     error_cancelled: "operation cancelled by user; the device is left in an inconsistent state and must be rewritten before use",
     error_not_confirmed: "confirmation did not match; nothing was written and the device is untouched",
     error_elevation_declined: "authorization was declined; nothing was written and the device is untouched",
@@ -351,6 +390,8 @@ pub static EN: Strings = Strings {
     helper_category_windows_file_mismatch: "a file does not match after writing",
     helper_category_windows_file_too_large_for_fat32: "a file is too large to fit on FAT32",
     helper_category_not_confirmed: "confirmation was not given",
+    helper_category_device_size_unsupported_for_format: "the device must be between 512 MiB and 2 TiB to be formatted",
+    helper_category_invalid_volume_label: "the volume name is not valid",
 };
 
 pub static PT_BR: Strings = Strings {
@@ -388,6 +429,16 @@ pub static PT_BR: Strings = Strings {
     verify_button: "Verificar…",
     write_disabled_hint: "Escolha uma imagem que o Argos reconheça e um dispositivo de destino",
 
+    format_button: "Restaurar pendrive…",
+    format_button_tooltip: "Apaga o dispositivo inteiro e deixa um único volume FAT32 que qualquer computador usa",
+    format_disabled_hint: "Escolha um dispositivo de destino",
+    format_explanation: "A tabela de partição é reescrita do zero: uma única partição FAT32 ocupando \
+        o dispositivo inteiro, legível no Windows, macOS, Linux, TVs e câmeras. O FAT32 não guarda \
+        um arquivo maior que 4 GiB.",
+    volume_label_label: "Nome do volume:",
+    volume_label_invalid: "Use de 1 a 11 letras, dígitos ou espaços, sem . / : * ? e semelhantes.",
+    format_confirm_button: "Formatar",
+
     working_out_total: "Calculando o total…",
     do_not_unplug: "Não desconecte o dispositivo.",
     cancel_button: "Cancelar",
@@ -404,6 +455,7 @@ pub static PT_BR: Strings = Strings {
     phase_writing: "Gravando",
     phase_flushing: "Descarregando",
     phase_verifying: "Verificando",
+    phase_wiping: "Limpando assinaturas antigas",
     phase_starting: "Iniciando…",
 
     cancelled_message: "Cancelado. O dispositivo ficou inutilizável e precisa ser gravado novamente.",
@@ -438,6 +490,12 @@ pub static PT_BR: Strings = Strings {
     files_checked: |count| format!("{count} arquivos verificados"),
     device_description: |id, size| format!("{id} — {size}"),
     device_description_long: |id, name, size| format!("{id} — {name} ({size})"),
+    format_layout_preview: |size, label| {
+        format!("Vai ficar: um volume FAT32 de {size} chamado {label} (MBR)")
+    },
+    format_done: |size, label| {
+        format!("Um volume FAT32 de {size} chamado {label}. Remova e reinsira o pendrive para usá-lo.")
+    },
 
     error_generic_prefix: "o processo privilegiado relatou um erro",
     error_device_not_found: |id| format!("nenhum dispositivo corresponde a '{id}'"),
@@ -463,6 +521,12 @@ pub static PT_BR: Strings = Strings {
     error_windows_partition_layout_mismatch: |detail| {
         format!("a tabela de partição não corresponde ao layout de gravação do Windows esperado: {detail}")
     },
+    error_device_size_unsupported_for_format: |id, size| {
+        format!("o dispositivo '{id}' ({size}) não pode ser formatado: precisa ter entre 512 MiB e 2 TiB")
+    },
+    error_invalid_volume_label: |label| {
+        format!("'{label}' não pode ser nome de volume: use de 1 a 11 letras, dígitos ou espaços")
+    },
     error_cancelled: "operação cancelada pelo usuário; o dispositivo ficou em estado inconsistente e precisa ser regravado antes de usar",
     error_not_confirmed: "a confirmação não correspondeu; nada foi gravado e o dispositivo está intacto",
     error_elevation_declined: "a autorização foi recusada; nada foi gravado e o dispositivo está intacto",
@@ -483,6 +547,8 @@ pub static PT_BR: Strings = Strings {
     helper_category_windows_file_mismatch: "um arquivo não confere após a gravação",
     helper_category_windows_file_too_large_for_fat32: "um arquivo é grande demais para caber em FAT32",
     helper_category_not_confirmed: "a confirmação não foi dada",
+    helper_category_device_size_unsupported_for_format: "o dispositivo precisa ter entre 512 MiB e 2 TiB para ser formatado",
+    helper_category_invalid_volume_label: "o nome do volume não é válido",
 };
 
 /// Translates an [`ArgosError`] for display, in the spirit G6.5 asks for:
@@ -517,6 +583,12 @@ pub fn localize_error(err: &ArgosError, lang: Lang) -> String {
         ArgosError::WindowsPartitionLayoutMismatch(detail) => {
             (s.error_windows_partition_layout_mismatch)(detail)
         }
+        ArgosError::DeviceSizeUnsupportedForFormat { device, size_bytes } => (s
+            .error_device_size_unsupported_for_format)(
+            device,
+            &crate::format::human_size_localized(*size_bytes, lang),
+        ),
+        ArgosError::InvalidVolumeLabel(label) => (s.error_invalid_volume_label)(label),
         ArgosError::Cancelled => s.error_cancelled.to_string(),
         ArgosError::NotConfirmed => s.error_not_confirmed.to_string(),
         ArgosError::ElevationDeclined => s.error_elevation_declined.to_string(),
@@ -589,6 +661,13 @@ pub fn sample_all_messages(lang: Lang) -> Vec<String> {
         s.write_button.to_string(),
         s.verify_button.to_string(),
         s.write_disabled_hint.to_string(),
+        s.format_button.to_string(),
+        s.format_button_tooltip.to_string(),
+        s.format_disabled_hint.to_string(),
+        s.format_explanation.to_string(),
+        s.volume_label_label.to_string(),
+        s.volume_label_invalid.to_string(),
+        s.format_confirm_button.to_string(),
         s.working_out_total.to_string(),
         s.do_not_unplug.to_string(),
         s.cancel_button.to_string(),
@@ -604,6 +683,7 @@ pub fn sample_all_messages(lang: Lang) -> Vec<String> {
         s.phase_writing.to_string(),
         s.phase_flushing.to_string(),
         s.phase_verifying.to_string(),
+        s.phase_wiping.to_string(),
         s.phase_starting.to_string(),
         s.cancelled_message.to_string(),
         s.details_label.to_string(),
@@ -635,6 +715,9 @@ pub fn sample_all_messages(lang: Lang) -> Vec<String> {
         s.helper_category_windows_file_too_large_for_fat32
             .to_string(),
         s.helper_category_not_confirmed.to_string(),
+        s.helper_category_device_size_unsupported_for_format
+            .to_string(),
+        s.helper_category_invalid_volume_label.to_string(),
         (s.selection_gone)("/dev/sdb"),
         (s.selection_replaced)("/dev/sdb"),
         (s.ejected)("/dev/sdb"),
@@ -662,6 +745,10 @@ pub fn sample_all_messages(lang: Lang) -> Vec<String> {
         (s.error_not_windows_installer_iso)("/tmp/x.iso"),
         (s.error_checksum_mismatch)("aaa", "bbb"),
         (s.error_windows_partition_layout_mismatch)("detail"),
+        (s.error_device_size_unsupported_for_format)("/dev/sdb", "128.0MiB"),
+        (s.error_invalid_volume_label)("a.b"),
+        (s.format_layout_preview)("7.4GiB", "ARGOS"),
+        (s.format_done)("7.4GiB", "ARGOS"),
     ]
 }
 
@@ -670,7 +757,8 @@ pub fn sample_all_messages(lang: Lang) -> Vec<String> {
 /// Order matches `ArgosError::exit_code`'s own match arms in
 /// `argos-core/src/error.rs`; 24 and 25 are retired codes with nothing to
 /// map (see that file's own comment), and 27 covers both `NotConfirmed` and
-/// `ElevationDeclined`, same as it does there.
+/// `ElevationDeclined`, same as it does there. 28 and 29 come from `argos
+/// format`.
 fn helper_category(exit_code: i32, s: &'static Strings) -> Option<&'static str> {
     Some(match exit_code {
         10 => s.helper_category_device_not_found,
@@ -689,6 +777,8 @@ fn helper_category(exit_code: i32, s: &'static Strings) -> Option<&'static str> 
         23 => s.helper_category_windows_file_mismatch,
         26 => s.helper_category_windows_file_too_large_for_fat32,
         27 => s.helper_category_not_confirmed,
+        28 => s.helper_category_device_size_unsupported_for_format,
+        29 => s.helper_category_invalid_volume_label,
         _ => return None,
     })
 }
@@ -861,7 +951,7 @@ mod tests {
         for lang in [Lang::En, Lang::PtBr] {
             let s = strings_for(lang);
             for code in [
-                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 26, 27,
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 28, 29,
             ] {
                 assert!(
                     helper_category(code, s).is_some(),

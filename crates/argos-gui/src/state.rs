@@ -9,7 +9,7 @@
 use argos_core::device::Device;
 use argos_core::error::ArgosError;
 use argos_core::progress::Phase;
-use argos_session::{Canceller, Outcome, PhaseWire, PreparedWrite, SessionEvent};
+use argos_session::{Canceller, Outcome, PhaseWire, PreparedFormat, PreparedWrite, SessionEvent};
 
 #[derive(Default)]
 pub enum AppState {
@@ -21,7 +21,7 @@ pub enum AppState {
     /// Everything checked out; the user is being asked to retype the device
     /// path. Nothing destructive has happened yet.
     AwaitingConfirmation {
-        prepared: Box<PreparedWrite>,
+        prepared: Prepared,
         typed: String,
     },
     /// A write or a verify is under way through the elevated helper.
@@ -34,6 +34,30 @@ pub enum AppState {
         error: ArgosError,
     },
     Cancelled,
+}
+
+/// What is waiting to be confirmed: a write, or a restore. Both go through
+/// the same retype-the-device-path guard; only what the dialog describes
+/// differs.
+pub enum Prepared {
+    Write(Box<PreparedWrite>),
+    Format(Box<PreparedFormat>),
+}
+
+impl Prepared {
+    pub fn device(&self) -> &Device {
+        match self {
+            Prepared::Write(p) => &p.device,
+            Prepared::Format(p) => &p.device,
+        }
+    }
+
+    pub fn plan(&self) -> &argos_privileged::protocol::Plan {
+        match self {
+            Prepared::Write(p) => p.plan(),
+            Prepared::Format(p) => p.plan(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -60,6 +84,9 @@ pub struct RunState {
     /// mode #104 exists to avoid. So verify shows no button at all, rather
     /// than a permanently-disabled one.
     pub is_verify: bool,
+    /// A restore (`argos format`): takes seconds and never consults a
+    /// `CancelToken`, so, like verify, it offers no Cancel button.
+    pub is_format: bool,
 }
 
 /// What a worker thread sends back to the UI thread.
@@ -84,7 +111,7 @@ pub enum WorkerMsg {
     /// app rather than the reducer: it describes the *inputs*, not what the
     /// app is doing.
     Classified(Result<Option<argos_session::ImageKind>, ArgosError>),
-    Prepared(Result<Box<PreparedWrite>, ArgosError>),
+    Prepared(Result<Prepared, ArgosError>),
     /// The elevated helper is up; this is the handle a Cancel press drives.
     Started(Canceller),
     Event(SessionEvent),
@@ -118,7 +145,8 @@ pub fn is_cancellable(phase: Option<Phase>) -> bool {
             | Phase::Flushing
             | Phase::Verifying
             | Phase::Partitioning
-            | Phase::FormattingFat32,
+            | Phase::FormattingFat32
+            | Phase::Wiping,
         ) => false,
     }
 }
@@ -242,6 +270,14 @@ impl RunState {
         }
     }
 
+    /// A restore run: never cancellable. See [`Self::is_format`].
+    pub fn for_format(device_id: String) -> Self {
+        RunState {
+            is_format: true,
+            ..Self::new(device_id, 0)
+        }
+    }
+
     fn device_id_hint(&self) -> String {
         self.device_id.clone()
     }
@@ -254,7 +290,7 @@ impl RunState {
     }
 
     pub fn is_cancellable(&self) -> bool {
-        !self.is_verify && !self.cancel_requested && is_cancellable(self.phase)
+        !self.is_verify && !self.is_format && !self.cancel_requested && is_cancellable(self.phase)
     }
 }
 
@@ -325,6 +361,7 @@ mod tests {
             Phase::Verifying,
             Phase::Partitioning,
             Phase::FormattingFat32,
+            Phase::Wiping,
         ] {
             assert!(
                 !is_cancellable(Some(phase)),
@@ -408,15 +445,53 @@ mod tests {
 
         let state = reduce(
             AppState::Preparing,
-            WorkerMsg::Prepared(Ok(Box::new(prepared))),
+            WorkerMsg::Prepared(Ok(Prepared::Write(Box::new(prepared)))),
         );
         let AppState::AwaitingConfirmation { prepared, typed } = state else {
             panic!("expected the confirmation step")
         };
         // The box starts empty: the guard is only satisfied by typing.
         assert!(typed.is_empty());
-        assert!(!confirmation_matches(&typed, &prepared.device.platform_id));
-        assert_eq!(prepared.device.platform_id, "/dev/sdz");
+        assert!(!confirmation_matches(
+            &typed,
+            &prepared.device().platform_id
+        ));
+        assert_eq!(prepared.device().platform_id, "/dev/sdz");
+    }
+
+    /// A restore goes through the very same confirmation step as a write:
+    /// it destroys just as much.
+    #[test]
+    fn a_prepared_restore_asks_for_the_same_confirmation() {
+        let platform = argos_platform::fake::FakePlatform::new(vec![usb_stick()]);
+        let prepared = argos_session::prepare_format(
+            &platform,
+            &argos_session::FormatRequest {
+                device_id: "/dev/sdz".into(),
+                label: "ARGOS".into(),
+                eject: true,
+                allow_non_removable: false,
+            },
+        )
+        .unwrap();
+        let state = reduce(
+            AppState::Preparing,
+            WorkerMsg::Prepared(Ok(Prepared::Format(Box::new(prepared)))),
+        );
+        let AppState::AwaitingConfirmation { prepared, typed } = state else {
+            panic!("expected the confirmation step")
+        };
+        assert!(typed.is_empty());
+        assert!(matches!(
+            prepared.plan(),
+            argos_privileged::protocol::Plan::Format(_)
+        ));
+    }
+
+    #[test]
+    fn a_restore_run_is_never_cancellable() {
+        let run = RunState::for_format("/dev/sdz".into());
+        assert!(!run.is_cancellable(), "not even before the first phase");
     }
 
     /// A refused device must not reach the confirmation step at all -- the

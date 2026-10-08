@@ -76,7 +76,10 @@ volume (add --layout fat32-bios for legacy BIOS/MBR).\n\n    \
 argos verify /dev/sdb --iso some.iso\n        \
 Re-check a device against the image it was written from, without writing \
 anything. Note the argument order flips relative to `write`: the device is \
-positional here, the ISO is --iso.\n\n\
+positional here, the ISO is --iso.\n\n    \
+argos format /dev/sdb\n        \
+Turn an installer stick back into an ordinary one: a single FAT32 volume \
+across the whole device.\n\n\
 Run `argos <command> --help` for that command's full set of flags."
 )]
 struct Cli {
@@ -170,6 +173,38 @@ enum Command {
         #[arg(long, value_enum, default_value_t = ElevationArg::Terminal, hide = true)]
         elevation: ElevationArg,
     },
+    /// Turn a stick back into an ordinary one: a single FAT32 volume across
+    /// the whole device.
+    ///
+    /// Media written for Windows has a partition sized to its contents, and
+    /// a Linux ISO written byte for byte carries the image's own partition
+    /// table, so a file manager's "Format" only reformats one small volume
+    /// and leaves the rest of the stick unreachable. This rewrites the
+    /// partition table itself: it clears what the old image left at both
+    /// ends of the device, writes an MBR with one FAT32 partition spanning
+    /// all of it, and formats that -- readable by Windows, macOS, Linux,
+    /// TVs and cameras. Takes seconds. Same confirmation as `write`: the
+    /// device path has to be typed back first.
+    Format {
+        /// Target device, e.g. /dev/sdb.
+        device: String,
+        /// Volume label: 1 to 11 printable ASCII characters, stored in
+        /// upper case.
+        #[arg(long, default_value = argos_core::partition::format::DEFAULT_FORMAT_LABEL)]
+        label: String,
+        /// Don't eject the device afterwards. Until it is reinserted, the
+        /// system may keep showing the old partitions.
+        #[arg(long)]
+        no_eject: bool,
+        /// Allow formatting a disk the OS doesn't report as removable.
+        /// Still refuses disks Argos detects as holding a system mount.
+        #[arg(long)]
+        i_know_what_im_doing: bool,
+        /// Which authorization prompt to use (see `write --help`'s hidden
+        /// twin of this flag).
+        #[arg(long, value_enum, default_value_t = ElevationArg::Terminal, hide = true)]
+        elevation: ElevationArg,
+    },
     /// Print a shell completion script to stdout.
     ///
     /// Generated from the same definition the CLI itself uses, so it cannot
@@ -223,6 +258,19 @@ fn main() {
             device,
             iso,
             layout: layout.into(),
+            elevation: elevation.into(),
+        }),
+        Command::Format {
+            device,
+            label,
+            no_eject,
+            i_know_what_im_doing,
+            elevation,
+        } => commands::format::run(commands::format::Args {
+            device,
+            label,
+            no_eject,
+            i_know_what_im_doing,
             elevation: elevation.into(),
         }),
         Command::Completions { shell } => {
