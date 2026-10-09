@@ -155,7 +155,9 @@ attempted.
 A write from `Argos.app` fails right after unmounting with a plain
 `Operation not permitted (os error 1)` unless the app (or `argos-helper`
 inside it) has **Full Disk Access** (System Settings -> Privacy & Security).
-This is unrelated to code signing -- confirmed with `log stream --predicate
+This is a permission, not a signing requirement -- but the binary must still
+carry a *valid* signature, ad-hoc being enough, or TCC refuses the grant
+whatever the toggle says (see the universal-binary note below). Confirmed with `log stream --predicate
 'subsystem == "com.apple.TCC" OR process == "argos-helper"'` while
 reproducing it for real: the same permission macOS requires of Disk Utility
 and similar tools for raw removable-device access, denied
@@ -184,6 +186,33 @@ update, not only on first install. Worth surfacing prominently to users,
 not buried as a troubleshooting footnote -- a stable signing identity (even
 a free, non-Developer-ID one) is the real fix, tracked as a possible future
 item rather than blocking this release.
+
+**A universal binary needs an explicit signature.** The linker ad-hoc
+signs arm64 output on its own but leaves x86_64 unsigned, so the release
+job's `lipo`'d `argos-helper` had one signed slice and one unsigned. macOS
+validates every slice: tccd logged `SecStaticCodeCheckValidity() fails:
+-67062`, then `authValue=0, authReason=5`, with the helper listed and
+switched on in Full Disk Access -- the 1.7.0 `.dmg` on real hardware.
+`build-macos-app.sh` now ad-hoc signs the three binaries and the bundle and
+checks the result with `codesign --verify --strict --deep
+--all-architectures`.
+
+Signing the bundle also moves the grant. tccd now resolves the helper's
+request to the enclosing bundle -- `responsible=org.argos.argos-helper`, but
+`subject=org.argos.gui` -- so Full Disk Access must go to `Argos.app`, which
+System Settings' "+" picker reaches directly, and a grant left on
+`argos-helper` by path does nothing. An `Argos` entry from an earlier
+signature logs `Failed to match existing code requirement for subject
+org.argos.gui` and is denied until removed and re-added. Watch out for a
+second copy of the bundle: a freshly built `target/macos/Argos.app` shares
+the bundle identifier, LaunchServices may open it instead of
+`/Applications/Argos.app`, and its grant is a separate one. Both confirmed
+on real hardware (1.7.0 `.dmg`, re-signed by hand, then restoring a SanDisk
+stick from the GUI).
+
+The durable fix for re-granting after every update is a stable signing
+identity -- a Developer ID, or even a self-signed certificate kept in CI --
+so the designated requirement stops being a per-build hash. Not done yet.
 
 One thing still not separately confirmed: whether a first-ever run of a
 never-granted `argos-helper` shows an actual consent dialog, or fails

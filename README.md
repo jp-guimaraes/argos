@@ -114,22 +114,33 @@ or, from Finder: System Settings -> Privacy & Security -> scroll to the
 bottom, where an "Open Anyway" button appears after the first blocked
 attempt.
 
-Once running, `Argos.app` needs **Full Disk Access** (System Settings ->
-Privacy & Security -> Full Disk Access) to write to a removable drive -- the
-same permission macOS requires of Disk Utility and similar tools. Without
-it, a write fails right after unmounting with a plain `Operation not
-permitted`. It is specifically `argos-helper` (inside the bundle, at
-`Argos.app/Contents/MacOS/argos-helper`) that needs the grant, not
-`Argos.app` itself -- System Settings' own "+" file picker cannot navigate
-into a `.app` bundle, so add it by dragging that file from a Finder window
-(right-click `Argos.app` -> "Show Package Contents" to reach it) onto the
-Full Disk Access list instead.
+Once running, `Argos.app` needs **Full Disk Access** to write to or
+restore a removable drive -- the same permission macOS requires of Disk
+Utility and similar tools. Without it, a write fails right after unmounting
+with `opening the device: Operation not permitted`. From 1.7.1 on, grant it
+to the app itself: System Settings -> Privacy & Security -> Full Disk
+Access -> "+" -> Applications -> Argos, and make sure its switch is on.
+(Up to 1.7.0 the grant had to go to `argos-helper` inside the bundle, and
+on the universal `.dmg` it could never take effect -- see the 1.7.1
+CHANGELOG entry.)
 
-**This grant does not survive an update.** Each release rebuilds
-`argos-helper` with a new ad-hoc code signature, which macOS treats as a
-different program -- upgrading to a new version of Argos means re-adding it
-to Full Disk Access again, not just on first install. See
-`packaging/README.md` for the full story and the log evidence.
+**After every update, grant it again.** Argos is ad-hoc signed, not signed
+with a developer identity, so each release is a different program to macOS
+and the old grant silently stops matching -- the switch stays on, and
+writes fail with the same `Operation not permitted`. The fix takes a few
+seconds:
+
+1. Quit Argos (Cmd-Q).
+2. In Full Disk Access, select **Argos** and remove it with "-". Remove any
+   leftover **argos-helper** entries from older versions too.
+3. Add `/Applications/Argos.app` again with "+", switch it on, and reopen
+   Argos.
+
+If a stale build of Argos exists elsewhere on the disk (a `target/macos/`
+from building it yourself, an old copy in Downloads), delete it: it carries
+the same app identifier, and macOS may open that copy instead of the one in
+Applications. See `packaging/README.md` for the full story and the log
+evidence.
 
 Not yet available as a Homebrew cask -- see `packaging/README.md`.
 

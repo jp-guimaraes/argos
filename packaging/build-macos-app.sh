@@ -126,6 +126,24 @@ cat >"$contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+echo "==> signing (ad-hoc)"
+# Not optional, even unsigned-for-distribution. The linker ad-hoc signs an
+# arm64 binary by itself but leaves an x86_64 one unsigned, so the lipo'd
+# universal argos-helper the release job feeds this script carried one
+# signed slice and one unsigned one -- and macOS validates every slice.
+# TCC then refused Full Disk Access outright, toggle on or not:
+# `SecStaticCodeCheckValidity() fails: -67062` followed by
+# `authValue=0, authReason=5` in tccd's log, surfacing as "opening the
+# device: Operation not permitted" on the 1.7.0 .dmg. A local arm64-only
+# build never showed it, which is why 1.6.0's validation (done on one)
+# passed. Helpers first, then the bundle, which seals them and signs the
+# main executable (argos-gui).
+for bin in argos argos-helper; do
+    codesign --force --sign - --identifier "org.argos.$bin" "$contents/MacOS/$bin"
+done
+codesign --force --sign - "$app"
+codesign --verify --strict --deep --all-architectures "$app"
+
 echo "==> Argos.app built at $app"
 
 echo "==> building the .dmg"

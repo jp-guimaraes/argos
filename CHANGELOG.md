@@ -3,6 +3,30 @@
 All notable changes to Argos are documented here. Loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.1] - 2026-10-09
+
+### Fixed
+
+- **The macOS `.dmg` could never be granted Full Disk Access.** Its
+  universal binaries are built by `lipo`-ing an arm64 and an x86_64 build
+  together, and only the arm64 half carried a signature: the linker ad-hoc
+  signs arm64 output by itself, not x86_64. macOS validates every slice, so
+  `argos-helper` failed code validation and TCC denied Full Disk Access with
+  the toggle switched on, surfacing as "opening the device: Operation not
+  permitted" on every write and restore from `Argos.app`. The app and its
+  three binaries are now ad-hoc signed as a whole when the bundle is built.
+  Local arm64-only builds were never affected, which is why 1.6.0's
+  validation, done on one, passed.
+
+  **Full Disk Access now goes to `Argos.app` itself,** added with the
+  ordinary "+" button, rather than to `argos-helper` dragged out of the
+  bundle: with the bundle signed, macOS attributes the helper's disk access
+  to the app it lives in. Upgrading from an earlier version: remove the old
+  **Argos** and **argos-helper** entries from Full Disk Access and add
+  `/Applications/Argos.app` again. That re-grant is still needed after every
+  update, because an ad-hoc signature changes with every build; the README
+  walks through it.
+
 ## [1.7.0] - 2026-10-08
 
 ### Added
